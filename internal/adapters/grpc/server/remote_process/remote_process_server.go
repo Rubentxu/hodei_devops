@@ -100,6 +100,7 @@ func (s *server) MonitorHealth(stream pb.RemoteProcessService_MonitorHealthServe
 		if err != nil {
 			return status.Errorf(codes.Internal, "failed to send health status: %v", err)
 		}
+		log.Printf("Health status: %v", healthStatus) // Log the health status
 	}
 
 	return nil

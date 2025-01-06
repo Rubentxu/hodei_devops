@@ -33,7 +33,7 @@ func New(serverAddress string) (*Client, error) {
 }
 
 // StartProcess sends a request to start a process on the server and receives the output via a channel
-func (c *Client) StartProcess(ctx context.Context, processID string, command []string, env map[string]string, outputChan chan<- *pb.ProcessOutput) error {
+func (c *Client) StartProcess(ctx context.Context, processID string, command []string, env map[string]string, workingDir string, outputChan chan<- *pb.ProcessOutput) error {
 	// Create the stream
 	stream, err := c.client.StartProcess(ctx)
 	if err != nil {
@@ -45,7 +45,7 @@ func (c *Client) StartProcess(ctx context.Context, processID string, command []s
 		ProcessId:        processID,
 		Command:          command,
 		Environment:      env,
-		WorkingDirectory: ".",
+		WorkingDirectory: workingDir,
 	})
 	if err != nil {
 		return fmt.Errorf("error sending request: %v", err)
@@ -99,14 +99,14 @@ func (c *Client) StopProcess(ctx context.Context, processID string) (bool, strin
 	return response.Success, response.Message, nil
 }
 
-// MonitorHealth starts monitoring the health of a process
+// MonitorHealth inicia el monitoreo de la salud de un proceso
 func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInterval int64, healthChan chan<- *pb.HealthStatus) error {
 	stream, err := c.client.MonitorHealth(ctx)
 	if err != nil {
 		return fmt.Errorf("error creating stream: %v", err)
 	}
 
-	// Send the initial request
+	// Enviar la solicitud inicial
 	err = stream.Send(&pb.HealthCheckRequest{
 		ProcessId:     processID,
 		CheckInterval: checkInterval,
@@ -115,21 +115,49 @@ func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInter
 		return fmt.Errorf("error sending request: %v", err)
 	}
 
-	// Process responses in a goroutine
+	// Procesar respuestas en una goroutine
 	go func() {
-		defer close(healthChan)
-		for {
-			resp, err := stream.Recv()
-			if err == io.EOF {
-				return // End of stream
+		// Usar un defer recover para manejar posibles pánicos
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Recovered in MonitorHealth: %v", r)
 			}
-			if err != nil {
-				log.Printf("Error receiving response: %v", err)
-				return
-			}
+		}()
 
-			// Send the health status to the channel
-			healthChan <- resp
+		for {
+			select {
+			case <-ctx.Done():
+				// El contexto fue cancelado, salir limpiamente
+				return
+			default:
+				resp, err := stream.Recv()
+				if err == io.EOF {
+					return
+				}
+				if err != nil {
+					if ctx.Err() == context.Canceled {
+						// Contexto cancelado, salir silenciosamente
+						return
+					}
+					log.Printf("Error receiving response: %v", err)
+					select {
+					case healthChan <- &pb.HealthStatus{
+						ProcessId: processID,
+						IsRunning: false,
+						Status:    fmt.Sprintf("Error receiving response: %v", err),
+					}:
+					case <-ctx.Done():
+					}
+					return
+				}
+
+				// Enviar el estado de salud al canal
+				select {
+				case healthChan <- resp:
+				case <-ctx.Done():
+					return
+				}
+			}
 		}
 	}()
 

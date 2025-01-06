@@ -13,12 +13,38 @@ proto:
 	          $(PROTO_FILE)
 
 .PHONY: test
-test:
+test: proto build run-server run-client
+	@sleep 2 # Espera a que el servidor y el cliente se inicien
 	@echo "🧪 Ejecutando pruebas..."
-	go test ./...
+	@echo "🧪 Ejecutando pruebas shell..."
+	@bash $(TEST_SCRIPT)
+	@echo "🧪 Ejecutando pruebas Go..."
+	@go run cmd/test/main.go
+	@echo "✅ Pruebas completadas."
+	@$(MAKE) stop-server
+	@$(MAKE) stop-client
+
+.PHONY: test-go
+test-go: clean build run-server run-client
+	@sleep 2
+	@echo "🧪 Ejecutando pruebas Go..."
+	@go run cmd/test/main.go
+	@echo "✅ Pruebas Go completadas."
+	@$(MAKE) stop-server
+	@$(MAKE) stop-client
+
+.PHONY: test-integration
+test-integration:
+	@echo "🧪 Ejecutando tests de integración..."
+	cd tests && go test -v ./integration/...
+
+.PHONY: test-all
+test-all: test test-integration
 
 .PHONY: clean
-clean:
+clean: stop-server stop-client
+	@echo "🧹 Limpiando binarios..."
+	rm -f bin/server bin/client
 	@echo "🧹 Limpiando archivos generados..."
 	find $(PROTO_DIR) -name "*.pb.go" -delete
 
@@ -33,35 +59,26 @@ run-server:
 	@echo "Stopping any existing server on port 50051..."
 	@fuser -k 50051/tcp || true
 	@echo "🚀 Iniciando servidor..."
-	@nohup ./bin/server > server.log 2>&1 & echo $$! > server.pid
+	@nohup ./bin/server > ./bin/server.log 2>&1 & echo $$! > ./bin/server.pid
 
 .PHONY: run-client
 run-client:
 	@echo "🚀 Iniciando cliente..."
-	@nohup ./bin/client > client.log 2>&1 & echo $$! > client.pid
+	@nohup ./bin/client > ./bin/client.log 2>&1 & echo $$! > ./bin/client.pid
 
 .PHONY: stop-server
 stop-server:
 	@echo "🛑 Deteniendo servidor..."
-	@kill `cat server.pid` || true
-	@rm -f server.pid
+	@kill `cat ./bin/server.pid` || true
+	@rm -f ./bin/server.pid
 
 .PHONY: stop-client
 stop-client:
 	@echo "🛑 Deteniendo cliente..."
-	@kill `cat client.pid` || true
-	@rm -f client.pid
+	@kill `cat ./bin/client.pid` || true
+	@rm -f ./bin/client.pid
 
-.PHONY: test
-test: proto build run-server run-client
-	@sleep 2 # Espera a que el servidor y el cliente se inicien
-	@echo "🧪 Ejecutando pruebas..."
-	@bash $(TEST_SCRIPT) # Ejecuta el script de pruebas
-	@echo "✅ Pruebas completadas."
-	@$(MAKE) stop-server
-	@$(MAKE) stop-client
-
-.PHONY: clean
-clean:
-	@echo "🧹 Limpiando binarios..."
-	rm -f bin/server bin/client
+.PHONY: kill-8080
+kill-8080:
+	@echo "🔍 Encontrando y matando el proceso que usa el puerto 8080..."
+	@sudo kill -9 $$(sudo lsof -t -i :8080) || true

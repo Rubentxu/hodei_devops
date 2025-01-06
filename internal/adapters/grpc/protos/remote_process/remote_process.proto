@@ -52,5 +52,6 @@ message HealthCheckRequest {
 message HealthStatus {
   string process_id = 1; // Identificador del proceso
   bool is_running = 2;  // Indica si el proceso está en ejecución
-  string status = 3;     // Información adicional sobre el estado
+  string status = 3;
+  bool is_healthy = 4; // Indica si el proceso está saludable
 }

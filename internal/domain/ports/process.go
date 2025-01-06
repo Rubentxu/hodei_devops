@@ -23,4 +23,5 @@ type HealthStatus struct {
 	ProcessID string
 	IsRunning bool
 	Status    string
+	IsHealthy bool
 }

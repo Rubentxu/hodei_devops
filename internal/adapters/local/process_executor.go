@@ -3,13 +3,16 @@ package local
 import (
 	"bufio"
 	"context"
-	"dev.rubentxu.devops-platform/domain/ports"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
+
+	"dev.rubentxu.devops-platform/domain/ports"
 )
 
 // LocalProcessExecutor implementa ports.ProcessExecutor para la ejecución local de comandos.
@@ -37,11 +40,32 @@ func (e *LocalProcessExecutor) Start(ctx context.Context, processID string, comm
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 	cmd.Dir = dir
 
-	// Configura las variables de entorno
-	cmd.Env = os.Environ() // Include existing environment variables
-	for k, v := range env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+	// Configurar el proceso para ejecutarse en su propio grupo
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true, // Esto hace que el proceso tenga su propio grupo
 	}
+
+	// Canal para enviar la salida
+	outputChan := make(chan ports.ProcessOutput)
+
+	// Configura las variables de entorno solo con las proporcionadas por el usuario
+	userEnv := []string{}
+	for k, v := range env {
+		userEnv = append(userEnv, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	go func() {
+		// Enviar la configuración del comando y las variables de entorno proporcionadas por el usuario por el canal de salida
+		line := fmt.Sprintf("Starting command: %v with user-provided env: %v with directory: %v", command, userEnv, dir)
+		outputChan <- ports.ProcessOutput{
+			ProcessID: processID,
+			Output:    line,
+			IsError:   false,
+		}
+	}()
+
+	// Configura las variables de entorno incluyendo las del sistema operativo
+	cmd.Env = append(os.Environ(), userEnv...)
 
 	// Captura la salida estándar y de error
 	stdout, err := cmd.StdoutPipe()
@@ -70,9 +94,6 @@ func (e *LocalProcessExecutor) Start(ctx context.Context, processID string, comm
 		Status:    "Process started",
 	}
 	e.healthStatusMu.Unlock()
-
-	// Canal para enviar la salida
-	outputChan := make(chan ports.ProcessOutput)
 
 	// WaitGroup para esperar a que las goroutines terminen
 	var wg sync.WaitGroup
@@ -138,10 +159,51 @@ func (e *LocalProcessExecutor) Stop(ctx context.Context, processID string) error
 		return fmt.Errorf("process not found")
 	}
 
-	// Enviar señal de terminación al proceso
-	if err := cmd.Process.Signal(os.Interrupt); err != nil {
-		return fmt.Errorf("failed to stop process: %v", err)
+	// Actualizar el estado de salud antes de detener
+	e.healthStatusMu.Lock()
+	if status, exists := e.healthStatuses[processID]; exists {
+		status.IsRunning = false
+		status.Status = "Process stopping"
 	}
+	e.healthStatusMu.Unlock()
+
+	// Obtener el Process Group ID para matar todo el árbol de procesos
+	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	if err != nil {
+		return fmt.Errorf("failed to get process group: %v", err)
+	}
+
+	// Intentar primero una terminación suave
+	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil {
+		log.Printf("Warning: Failed to send SIGTERM to process group %d: %v", pgid, err)
+	}
+
+	// Esperar un poco para que el proceso termine suavemente
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case <-time.After(5 * time.Second):
+		// Si no termina después de 5 segundos, forzar la terminación
+		if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil {
+			log.Printf("Warning: Failed to send SIGKILL to process group %d: %v", pgid, err)
+		}
+	case err := <-done:
+		if err != nil {
+			log.Printf("Process %s exited with error: %v", processID, err)
+		}
+	}
+
+	// Actualizar el estado final
+	e.healthStatusMu.Lock()
+	if status, exists := e.healthStatuses[processID]; exists {
+		status.IsRunning = false
+		status.Status = "Process stopped"
+		status.IsHealthy = false
+	}
+	e.healthStatusMu.Unlock()
 
 	// Eliminar el proceso del mapa
 	delete(e.processes, processID)
