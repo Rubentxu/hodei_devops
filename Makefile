@@ -45,8 +45,8 @@ test-all: test test-integration
 clean: stop-server stop-client
 	@echo "🧹 Limpiando binarios..."
 	rm -f bin/server bin/client
-	@echo "🧹 Limpiando archivos generados..."
-	find $(PROTO_DIR) -name "*.pb.go" -delete
+#	@echo "🧹 Limpiando archivos generados..."
+#	find $(PROTO_DIR) -name "*.pb.go" -delete
 
 .PHONY: build
 build:
