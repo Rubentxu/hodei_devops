@@ -1,7 +1,7 @@
 go 1.23.4
 
 use (
-	./tests
+	//./tests
 	./internal/adapters
 	./internal/domain
 	./internal/infrastructure

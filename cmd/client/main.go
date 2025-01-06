@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -27,11 +26,12 @@ type Config struct {
 // RequestBody define la estructura del JSON que se recibirá
 type RequestBody struct {
 	RemoteProcessServerAddress string            `json:"remote_process_server_address"`
-	Command                    []string          `json:"command"`
+	Command                    []string          `json:"command,omitempty"`
 	ProcessID                  string            `json:"process_id"`
 	CheckInterval              int64             `json:"check_interval"`
-	Env                        map[string]string `json:"env"`
-	WorkingDirectory           string            `json:"working_directory"`
+	Env                        map[string]string `json:"env,omitempty"`
+	WorkingDirectory           string            `json:"working_directory,omitempty"`
+	Timeout                    time.Duration     `json:"timeout,omitempty"`
 }
 
 var client *remote_process_client.Client
@@ -53,55 +53,42 @@ func main() {
 func runHandler(w http.ResponseWriter, r *http.Request) {
 	var reqBody RequestBody
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		sendJSONError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request body: %v", err))
 		return
 	}
 
-	config := Config{
-		RemoteProcessServerAddress: reqBody.RemoteProcessServerAddress,
-		Command:                    reqBody.Command,
-		ProcessID:                  reqBody.ProcessID,
-		CheckInterval:              reqBody.CheckInterval,
-	}
-
 	var err error
-	client, err = remote_process_client.New(config.RemoteProcessServerAddress)
+	client, err = remote_process_client.New(reqBody.RemoteProcessServerAddress)
 	if err != nil {
-		http.Error(w, "Failed to create gRPC client", http.StatusInternalServerError)
+		sendJSONError(w, http.StatusInternalServerError, "Failed to create gRPC client")
 		return
 	}
 	defer client.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Configurar contexto con timeout si se especifica
+	ctx := r.Context()
+	if reqBody.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, reqBody.Timeout)
+		defer cancel()
+	}
 
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go runProcess(ctx, client, config, reqBody.Env, reqBody.WorkingDirectory, w, &wg)
-
-	wg.Wait()
-}
-
-func runProcess(ctx context.Context, client *remote_process_client.Client, config Config, env map[string]string, workingDir string, w http.ResponseWriter, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	// Create a channel to capture the output
-	outputChan := make(chan *pb.ProcessOutput)
-
-	// Start the process and redirect its output to the channel
-	go func() {
-		if err := client.StartProcess(ctx, config.ProcessID, config.Command, env, workingDir, outputChan); err != nil {
-			log.Printf("Error in StartProcess: %v", err)
-		}
-	}()
-
-	// Set headers for SSE
+	// Configurar headers para SSE
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	// Stream the output to the HTTP response
+	// Crear canal para la salida del proceso
+	outputChan := make(chan *pb.ProcessOutput)
+
+	// Iniciar el proceso
+	go func() {
+		if err := client.StartProcess(ctx, reqBody.ProcessID, reqBody.Command, reqBody.Env, reqBody.WorkingDirectory, outputChan); err != nil {
+			log.Printf("Error in StartProcess: %v", err)
+		}
+	}()
+
+	// Stream de la salida
 	for output := range outputChan {
 		if _, err := fmt.Fprintf(w, "data: %s\n", output.Output); err != nil {
 			log.Printf("Error writing to response: %v", err)
@@ -114,82 +101,75 @@ func runProcess(ctx context.Context, client *remote_process_client.Client, confi
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	var reqBody RequestBody
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		sendJSONError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request body: %v", err))
 		return
 	}
 
-	config := Config{
-		RemoteProcessServerAddress: reqBody.RemoteProcessServerAddress,
-		ProcessID:                  reqBody.ProcessID,
-		CheckInterval:              reqBody.CheckInterval,
-	}
-
 	var err error
-	client, err = remote_process_client.New(config.RemoteProcessServerAddress)
+	client, err = remote_process_client.New(reqBody.RemoteProcessServerAddress)
 	if err != nil {
-		http.Error(w, "Failed to create gRPC client", http.StatusInternalServerError)
+		sendJSONError(w, http.StatusInternalServerError, "Failed to create gRPC client")
 		return
 	}
 	defer client.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Configurar contexto con timeout si se especifica
+	ctx := r.Context()
+	if reqBody.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, reqBody.Timeout)
+		defer cancel()
+	}
 
 	// Crear el canal con buffer para evitar bloqueos
 	healthChan := make(chan *pb.HealthStatus, 1)
 
-	if err := client.MonitorHealth(ctx, config.ProcessID, config.CheckInterval, healthChan); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to start health monitoring: %v", err), http.StatusInternalServerError)
+	if err := client.MonitorHealth(ctx, reqBody.ProcessID, reqBody.CheckInterval, healthChan); err != nil {
+		sendJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to start health monitoring: %v", err))
 		return
 	}
 
 	// Configurar headers para SSE
-	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
 	// Detectar si el cliente cierra la conexión
 	notify := w.(http.CloseNotifier).CloseNotify()
 
-	// Stream del estado de salud a la respuesta HTTP
+	// Crear un encoder JSON para cada línea
+	encoder := json.NewEncoder(w)
+
+	// Stream del estado de salud
 	for {
 		select {
 		case <-notify:
-			// Cliente cerró la conexión
-			if _, err := fmt.Fprintf(w, "healthCheck status: Connection closed by client\n"); err != nil {
-				log.Printf("Error writing final message: %v", err)
-			}
-			w.(http.Flusher).Flush()
-			cancel()
 			return
 		case healthStatus, ok := <-healthChan:
 			if !ok {
-				if _, err := fmt.Fprintf(w, "healthCheck status: Monitoring completed successfully\n"); err != nil {
-					log.Printf("Error writing final message: %v", err)
-				}
-				w.(http.Flusher).Flush()
 				return
 			}
-			if _, err := fmt.Fprintf(w, "healthCheck status: %s, isRunning: %t\n",
-				healthStatus.Status, healthStatus.IsRunning); err != nil {
-				log.Printf("Error writing to response: %v", err)
+			response := HealthResponse{
+				ProcessID: healthStatus.ProcessId,
+				IsRunning: healthStatus.IsRunning,
+				Status:    healthStatus.Status,
+				IsHealthy: healthStatus.IsHealthy,
+				Timestamp: time.Now().Format(time.RFC3339),
+			}
+
+			if err := encoder.Encode(response); err != nil {
+				log.Printf("Error encoding health response: %v", err)
 				return
 			}
-			w.(http.Flusher).Flush()
+
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
 
 			if !healthStatus.IsRunning {
-				if _, err := fmt.Fprintf(w, "healthCheck status: Process finished successfully\n"); err != nil {
-					log.Printf("Error writing final message: %v", err)
-				}
-				w.(http.Flusher).Flush()
-				cancel()
 				return
 			}
 		case <-ctx.Done():
-			if _, err := fmt.Fprintf(w, "healthCheck status: Monitoring cancelled\n"); err != nil {
-				log.Printf("Error writing final message: %v", err)
-			}
-			w.(http.Flusher).Flush()
 			return
 		}
 	}
@@ -212,35 +192,67 @@ func handleSignals() {
 func stopHandler(w http.ResponseWriter, r *http.Request) {
 	var reqBody RequestBody
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		sendJSONError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request body: %v", err))
 		return
+	}
+
+	// Usar timeout del request o valor por defecto
+	timeout := reqBody.Timeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
 	}
 
 	var err error
 	client, err = remote_process_client.New(reqBody.RemoteProcessServerAddress)
 	if err != nil {
-		http.Error(w, "Failed to create gRPC client", http.StatusInternalServerError)
+		sendJSONError(w, http.StatusInternalServerError, "Failed to create gRPC client")
 		return
 	}
 	defer client.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
 	success, message, err := client.StopProcess(ctx, reqBody.ProcessID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to stop process: %v", err), http.StatusInternalServerError)
+		sendJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to stop process: %v", err))
 		return
 	}
 
-	response := struct {
-		Success bool   `json:"success"`
-		Message string `json:"message"`
-	}{
+	response := StopResponse{
 		Success: success,
 		Message: message,
 	}
+	sendJSONResponse(w, http.StatusOK, response)
+}
 
+// Estructuras de respuesta
+type HealthResponse struct {
+	ProcessID string `json:"process_id"`
+	IsRunning bool   `json:"is_running"`
+	Status    string `json:"status"`
+	IsHealthy bool   `json:"is_healthy"`
+	Timestamp string `json:"timestamp"`
+}
+
+type StopResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+// Funciones helper para respuestas JSON
+func sendJSONResponse(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Printf("Error encoding response: %v", err)
+	}
+}
+
+func sendJSONError(w http.ResponseWriter, status int, message string) {
+	response := StopResponse{
+		Success: false,
+		Message: message,
+	}
+	sendJSONResponse(w, status, response)
 }

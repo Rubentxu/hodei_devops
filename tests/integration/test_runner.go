@@ -3,10 +3,10 @@ package integration
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"testing"
@@ -53,12 +53,25 @@ func (tr *TestRunner) startProcess(url string, tc TestCase) (*http.Response, err
 
 func (tr *TestRunner) monitorOutput(t *testing.T, reader io.Reader, tc TestCase) {
 	scanner := bufio.NewScanner(reader)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
 	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
-			log.Printf("[%s] Output: %s", tc.ProcessID, data)
+		select {
+		case <-time.After(5 * time.Second):
+			t.Logf("[%s] Timeout reading output", tc.ProcessID)
+			return
+		default:
+			line := scanner.Text()
+			if strings.HasPrefix(line, "data: ") {
+				data := strings.TrimPrefix(line, "data: ")
+				t.Logf("[%s] Output: %s", tc.ProcessID, data)
+			}
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		t.Logf("[%s] Error reading output: %v", tc.ProcessID, err)
 	}
 }
 
@@ -72,13 +85,13 @@ func (tr *TestRunner) monitorHealth(t *testing.T, tc TestCase) {
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		t.Errorf("Error marshaling health request: %v", err)
+		t.Errorf("[%s] Error marshaling health request: %v", tc.ProcessID, err)
 		return
 	}
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		t.Errorf("Error creating health request: %v", err)
+		t.Errorf("[%s] Error creating health request: %v", tc.ProcessID, err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -86,17 +99,30 @@ func (tr *TestRunner) monitorHealth(t *testing.T, tc TestCase) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Errorf("Error executing health request: %v", err)
+		t.Errorf("[%s] Error executing health request: %v", tc.ProcessID, err)
 		return
 	}
 	defer resp.Body.Close()
 
 	scanner := bufio.NewScanner(resp.Body)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
 	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "healthCheck") {
-			log.Printf("[%s] Health: %s", tc.ProcessID, line)
+		select {
+		case <-time.After(5 * time.Second):
+			t.Logf("[%s] Timeout reading health status", tc.ProcessID)
+			return
+		default:
+			line := scanner.Text()
+			if strings.HasPrefix(line, "healthCheck") {
+				t.Logf("[%s] Health: %s", tc.ProcessID, line)
+			}
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		t.Logf("[%s] Error reading health status: %v", tc.ProcessID, err)
 	}
 }
 
@@ -135,8 +161,11 @@ func (tr *TestRunner) stopProcess(processID string) error {
 
 func (tr *TestRunner) RunTests(t *testing.T, testCases []TestCase) {
 	for _, tc := range testCases {
+		tc := tc
 		t.Run(tc.Name, func(t *testing.T) {
-			// Iniciar el proceso
+			ctx, cancel := context.WithTimeout(context.Background(), tc.Duration+10*time.Second)
+			defer cancel()
+
 			processURL := fmt.Sprintf("%s/run", tr.BaseURL)
 			resp, err := tr.startProcess(processURL, tc)
 			if err != nil {
@@ -144,17 +173,43 @@ func (tr *TestRunner) RunTests(t *testing.T, testCases []TestCase) {
 			}
 			defer resp.Body.Close()
 
-			// Monitorear la salida y el estado de salud
-			go tr.monitorOutput(t, resp.Body, tc)
-			go tr.monitorHealth(t, tc)
+			outputDone := make(chan struct{})
+			healthDone := make(chan struct{})
 
-			// Esperar el tiempo especificado
-			time.Sleep(tc.Duration)
+			go func() {
+				defer close(outputDone)
+				tr.monitorOutput(t, resp.Body, tc)
+			}()
 
-			// Detener el proceso
+			go func() {
+				defer close(healthDone)
+				tr.monitorHealth(t, tc)
+			}()
+
+			select {
+			case <-ctx.Done():
+				t.Logf("[%s] Context cancelled or timeout reached", tc.ProcessID)
+			case <-outputDone:
+				t.Logf("[%s] Output monitoring finished", tc.ProcessID)
+			case <-healthDone:
+				t.Logf("[%s] Health monitoring finished", tc.ProcessID)
+			}
+
 			err = tr.stopProcess(tc.ProcessID)
 			if err != nil {
 				t.Errorf("Failed to stop process: %v", err)
+			}
+
+			select {
+			case <-outputDone:
+			case <-time.After(5 * time.Second):
+				t.Logf("[%s] Timeout waiting for output monitoring to finish", tc.ProcessID)
+			}
+
+			select {
+			case <-healthDone:
+			case <-time.After(5 * time.Second):
+				t.Logf("[%s] Timeout waiting for health monitoring to finish", tc.ProcessID)
 			}
 		})
 	}

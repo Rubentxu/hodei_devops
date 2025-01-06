@@ -42,7 +42,8 @@ func (e *LocalProcessExecutor) Start(ctx context.Context, processID string, comm
 
 	// Configurar el proceso para ejecutarse en su propio grupo
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true, // Esto hace que el proceso tenga su propio grupo
+		Setpgid:   true,
+		Pdeathsig: syscall.SIGTERM, // Señal a enviar cuando el padre muere
 	}
 
 	// Canal para enviar la salida
@@ -156,24 +157,25 @@ func (e *LocalProcessExecutor) Stop(ctx context.Context, processID string) error
 
 	cmd, ok := e.processes[processID]
 	if !ok {
-		return fmt.Errorf("process not found")
+		return fmt.Errorf("process not found: %s", processID)
 	}
 
-	// Actualizar el estado de salud antes de detener
+	// Actualizar el estado antes de intentar detener
 	e.healthStatusMu.Lock()
 	if status, exists := e.healthStatuses[processID]; exists {
 		status.IsRunning = false
 		status.Status = "Process stopping"
+		status.IsHealthy = false
 	}
 	e.healthStatusMu.Unlock()
 
-	// Obtener el Process Group ID para matar todo el árbol de procesos
+	// Obtener el Process Group ID
 	pgid, err := syscall.Getpgid(cmd.Process.Pid)
 	if err != nil {
 		return fmt.Errorf("failed to get process group: %v", err)
 	}
 
-	// Intentar primero una terminación suave
+	// Primero intentar una terminación suave con SIGTERM
 	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil {
 		log.Printf("Warning: Failed to send SIGTERM to process group %d: %v", pgid, err)
 	}
@@ -184,19 +186,24 @@ func (e *LocalProcessExecutor) Stop(ctx context.Context, processID string) error
 		done <- cmd.Wait()
 	}()
 
+	// Esperar hasta 5 segundos para que termine suavemente
 	select {
-	case <-time.After(5 * time.Second):
-		// Si no termina después de 5 segundos, forzar la terminación
-		if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil {
-			log.Printf("Warning: Failed to send SIGKILL to process group %d: %v", pgid, err)
-		}
 	case err := <-done:
 		if err != nil {
 			log.Printf("Process %s exited with error: %v", processID, err)
 		}
+	case <-time.After(5 * time.Second):
+		// Si no termina después de 5 segundos, usar SIGKILL
+		log.Printf("Process %s did not terminate after SIGTERM, sending SIGKILL", processID)
+		if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil {
+			log.Printf("Warning: Failed to send SIGKILL to process group %d: %v", pgid, err)
+		}
+		// Esperar a que termine después del SIGKILL
+		<-done
 	}
 
-	// Actualizar el estado final
+	// Limpiar recursos
+	delete(e.processes, processID)
 	e.healthStatusMu.Lock()
 	if status, exists := e.healthStatuses[processID]; exists {
 		status.IsRunning = false
@@ -205,8 +212,12 @@ func (e *LocalProcessExecutor) Stop(ctx context.Context, processID string) error
 	}
 	e.healthStatusMu.Unlock()
 
-	// Eliminar el proceso del mapa
-	delete(e.processes, processID)
+	// Cerrar cualquier pipe o descriptor de archivo abierto
+	if cmd.ProcessState == nil {
+		if err := cmd.Process.Release(); err != nil {
+			log.Printf("Warning: Failed to release process resources: %v", err)
+		}
+	}
 
 	return nil
 }

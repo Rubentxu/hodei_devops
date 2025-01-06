@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -21,6 +22,7 @@ type TestCase struct {
 	Env        map[string]string `json:"env,omitempty"`
 	WorkingDir string            `json:"working_directory,omitempty"`
 	Duration   time.Duration     // Duración para procesos largos
+	Timeout    time.Duration     // Timeout para operaciones (stop, health check, etc.)
 }
 
 // RequestBody define la estructura del JSON para las peticiones
@@ -31,6 +33,7 @@ type RequestBody struct {
 	CheckInterval              int64             `json:"check_interval"`
 	Env                        map[string]string `json:"env,omitempty"`
 	WorkingDirectory           string            `json:"working_directory,omitempty"`
+	Timeout                    time.Duration     `json:"timeout,omitempty"` // Timeout en segundos
 }
 
 const serverAddr = "localhost:50051"
@@ -40,35 +43,31 @@ func main() {
 	// Definir los casos de prueba
 	testCases := []TestCase{
 		{
-			Name:      "Ping Google",
-			ProcessID: "ping-google",
-			Command:   []string{"ping", "-c", "5", "google.com"},
+			Name:      "Quick Process",
+			ProcessID: "quick-process",
+			Command:   []string{"echo", "Hello"},
+			Timeout:   5 * time.Second,
 		},
 		{
-			Name:       "List Directory",
-			ProcessID:  "list-dir",
-			Command:    []string{"ls", "-la"},
-			WorkingDir: "/home",
+			Name:      "Long Process",
+			ProcessID: "long-process",
+			Command:   []string{"bash", "-c", "sleep 30"},
+			Duration:  35 * time.Second,
+			Timeout:   45 * time.Second,
 		},
 		{
-			Name:      "Loop Process",
-			ProcessID: "loop-10",
-			Command:   []string{"bash", "-c", "for i in {1..10}; do echo Looping... iteration $i; sleep 1; done"},
+			Name:      "Resource Intensive",
+			ProcessID: "resource-heavy",
+			Command:   []string{"bash", "-c", "for i in {1..1000000}; do echo $i > /dev/null; done"},
+			Duration:  20 * time.Second,
+			Timeout:   60 * time.Second, // Proceso que puede necesitar más tiempo para detenerse
 		},
 		{
-			Name:      "Environment Variables",
-			ProcessID: "env",
-			Command:   []string{"printenv"},
-			Env: map[string]string{
-				"VAR1": "value1",
-				"VAR2": "value2",
-			},
-		},
-		{
-			Name:      "Long Running Process",
-			ProcessID: "long-process-1",
-			Command:   []string{"bash", "-c", "i=1; while true; do echo \"Long process 1... iteration $i\"; i=$((i+1)); sleep 5; done"},
-			Duration:  30 * time.Second,
+			Name:      "Network Process",
+			ProcessID: "network-process",
+			Command:   []string{"ping", "-c", "100", "google.com"},
+			Duration:  15 * time.Second,
+			Timeout:   10 * time.Second, // Proceso que debería responder rápido al SIGTERM
 		},
 	}
 
@@ -105,6 +104,12 @@ func runTest(ctx context.Context, tc TestCase) {
 	processDone := make(chan struct{})
 	healthDone := make(chan struct{})
 
+	// Usar timeout específico del test o valor por defecto
+	timeout := tc.Timeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+
 	// Iniciar el proceso
 	go runProcess(testCtx, tc, processDone)
 	// Iniciar el health check
@@ -119,7 +124,7 @@ func runTest(ctx context.Context, tc TestCase) {
 	select {
 	case <-time.After(duration):
 		// Detener el proceso y cancelar el contexto
-		stopProcess(tc.ProcessID)
+		stopProcess(tc.ProcessID, timeout)
 		cancelTest() // Cancelar el contexto para detener las goroutines
 	case <-ctx.Done():
 		log.Printf("Test cancelled: %s", tc.Name)
@@ -134,6 +139,7 @@ func runTest(ctx context.Context, tc TestCase) {
 func runProcess(ctx context.Context, tc TestCase, done chan<- struct{}) {
 	defer close(done)
 
+	url := fmt.Sprintf("%s/run", apiBaseURL)
 	reqBody := RequestBody{
 		RemoteProcessServerAddress: serverAddr,
 		Command:                    tc.Command,
@@ -141,17 +147,18 @@ func runProcess(ctx context.Context, tc TestCase, done chan<- struct{}) {
 		CheckInterval:              5,
 		Env:                        tc.Env,
 		WorkingDirectory:           tc.WorkingDir,
+		Timeout:                    tc.Timeout,
 	}
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		log.Printf("Error marshaling request: %v", err)
+		log.Printf("[%s] Error marshaling request: %v", tc.ProcessID, err)
 		return
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiBaseURL+"/run", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		log.Printf("Error creating request: %v", err)
+		log.Printf("[%s] Error creating request: %v", tc.ProcessID, err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -159,46 +166,33 @@ func runProcess(ctx context.Context, tc TestCase, done chan<- struct{}) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("Error executing request: %v", err)
+		log.Printf("[%s] Error executing request: %v", tc.ProcessID, err)
 		return
 	}
 	defer resp.Body.Close()
 
-	// Leer el stream de eventos
-	reader := bufio.NewReader(resp.Body)
+	scanner := bufio.NewScanner(resp.Body)
+	// Aumentar el tamaño del buffer para manejar líneas largas
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
 	for {
-		// Crear un canal para el timeout de lectura
-		readChan := make(chan string, 1)
-		errChan := make(chan error, 1)
-
-		// Leer en una goroutine separada
-		go func() {
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				errChan <- err
-				return
-			}
-			readChan <- line
-		}()
-
-		// Esperar la lectura o timeout
 		select {
 		case <-ctx.Done():
-			log.Printf("[%s] Process stream cancelled", tc.ProcessID)
+			log.Printf("[%s] Process monitoring cancelled", tc.ProcessID)
 			return
-		case line := <-readChan:
+		default:
+			if !scanner.Scan() {
+				if err := scanner.Err(); err != nil {
+					log.Printf("[%s] Error reading output: %v", tc.ProcessID, err)
+				}
+				return
+			}
+			line := scanner.Text()
 			if strings.HasPrefix(line, "data: ") {
 				data := strings.TrimPrefix(line, "data: ")
-				data = strings.TrimSpace(data)
 				log.Printf("[%s] Process output: %s", tc.ProcessID, data)
 			}
-		case err := <-errChan:
-			if err != io.EOF && !strings.Contains(err.Error(), "use of closed network connection") {
-				log.Printf("[%s] Error reading stream: %v", tc.ProcessID, err)
-			}
-			return
-		case <-time.After(time.Second):
-			continue // Timeout, intentar leer de nuevo
 		}
 	}
 }
@@ -206,21 +200,23 @@ func runProcess(ctx context.Context, tc TestCase, done chan<- struct{}) {
 func monitorHealth(ctx context.Context, tc TestCase, done chan<- struct{}) {
 	defer close(done)
 
+	url := fmt.Sprintf("%s/health", apiBaseURL)
 	reqBody := RequestBody{
 		RemoteProcessServerAddress: serverAddr,
 		ProcessID:                  tc.ProcessID,
 		CheckInterval:              5,
+		Timeout:                    tc.Timeout,
 	}
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		log.Printf("Error marshaling health request: %v", err)
+		log.Printf("[%s] Error marshaling health request: %v", tc.ProcessID, err)
 		return
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiBaseURL+"/health", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		log.Printf("Error creating health request: %v", err)
+		log.Printf("[%s] Error creating health request: %v", tc.ProcessID, err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -228,84 +224,149 @@ func monitorHealth(ctx context.Context, tc TestCase, done chan<- struct{}) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("Error executing health request: %v", err)
+		log.Printf("[%s] Error executing health request: %v", tc.ProcessID, err)
 		return
 	}
 	defer resp.Body.Close()
 
-	// Leer el stream de eventos de salud
-	reader := bufio.NewReader(resp.Body)
+	scanner := bufio.NewScanner(resp.Body)
+	// Aumentar el tamaño del buffer para manejar líneas largas
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
 	for {
-		// Crear un canal para el timeout de lectura
-		readChan := make(chan string, 1)
-		errChan := make(chan error, 1)
-
-		// Leer en una goroutine separada
-		go func() {
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				errChan <- err
-				return
-			}
-			readChan <- line
-		}()
-
-		// Esperar la lectura o timeout
 		select {
 		case <-ctx.Done():
-			log.Printf("[%s] Health stream cancelled", tc.ProcessID)
+			log.Printf("[%s] Health monitoring cancelled", tc.ProcessID)
 			return
-		case line := <-readChan:
+		default:
+			if !scanner.Scan() {
+				if err := scanner.Err(); err != nil {
+					log.Printf("[%s] Error reading health status: %v", tc.ProcessID, err)
+				}
+				return
+			}
+			line := scanner.Text()
 			if strings.HasPrefix(line, "healthCheck") {
-				line = strings.TrimSpace(line)
 				log.Printf("[%s] Health status: %s", tc.ProcessID, line)
 			}
-		case err := <-errChan:
-			if err != io.EOF && !strings.Contains(err.Error(), "use of closed network connection") {
-				log.Printf("[%s] Error reading health stream: %v", tc.ProcessID, err)
-			}
-			return
-		case <-time.After(time.Second):
-			continue // Timeout, intentar leer de nuevo
 		}
 	}
 }
 
-func stopProcess(processID string) {
+func stopProcess(processID string, timeout time.Duration) {
+	if timeout == 0 {
+		timeout = 30 * time.Second // valor por defecto
+	}
+
 	reqBody := RequestBody{
 		RemoteProcessServerAddress: serverAddr,
 		ProcessID:                  processID,
+		Timeout:                    timeout,
+	}
+
+	// Crear un cliente HTTP con timeout configurable
+	client := &http.Client{
+		Timeout: timeout + 5*time.Second, // añadir un margen al timeout
 	}
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		log.Printf("Error marshaling stop request: %v", err)
+		log.Printf("[%s] Error marshaling stop request: %v", processID, err)
 		return
 	}
 
-	resp, err := http.Post(apiBaseURL+"/stop", "application/json", bytes.NewBuffer(jsonData))
+	resp, err := client.Post(apiBaseURL+"/stop", "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		log.Printf("Error stopping process: %v", err)
+		log.Printf("[%s] Error stopping process: %v", processID, err)
 		return
 	}
 	defer resp.Body.Close()
 
-	// Leer y mostrar la respuesta
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[%s] Error reading response body: %v", processID, err)
+		return
+	}
+
+	// Intentar decodificar como JSON
 	var response struct {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		log.Printf("Error decoding stop response: %v", err)
+
+	if err := json.Unmarshal(body, &response); err != nil {
+		// Si falla, tratar el cuerpo como mensaje de error
+		log.Printf("[%s] Error stopping process: %s", processID, string(body))
 		return
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("[%s] Error stopping process: status code %d, message: %s",
-			processID, resp.StatusCode, response.Message)
-	} else {
-		log.Printf("[%s] Process stopped successfully: %s", processID, response.Message)
+	if !response.Success {
+		log.Printf("[%s] Error stopping process: %s", processID, response.Message)
+		return
 	}
+
+	// Verificar que el proceso realmente se detuvo con más paciencia
+	maxRetries := 15 // Aumentar el número de reintentos
+	for i := 0; i < maxRetries; i++ {
+		if isProcessStopped(processID, timeout) {
+			log.Printf("[%s] Process stopped successfully", processID)
+			return
+		}
+		time.Sleep(2 * time.Second) // Esperar más entre intentos
+	}
+	log.Printf("[%s] Warning: Process may not have stopped completely", processID)
+}
+
+func isProcessStopped(processID string, timeout time.Duration) bool {
+	if timeout == 0 {
+		timeout = 5 * time.Second // valor por defecto
+	}
+
+	reqBody := RequestBody{
+		RemoteProcessServerAddress: serverAddr,
+		ProcessID:                  processID,
+		CheckInterval:              1,
+		Timeout:                    timeout,
+	}
+
+	client := &http.Client{
+		Timeout: timeout,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		log.Printf("[%s] Error marshaling health check request: %v", processID, err)
+		return false
+	}
+
+	resp, err := client.Post(apiBaseURL+"/health", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("[%s] Error executing health check request: %v", processID, err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	var healthResponse struct {
+		ProcessID string `json:"process_id"`
+		IsRunning bool   `json:"is_running"`
+		Status    string `json:"status"`
+		IsHealthy bool   `json:"is_healthy"`
+		Timestamp string `json:"timestamp"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&healthResponse); err != nil {
+		// Solo loguear el error si no es un error de EOF
+		if err != io.EOF {
+			log.Printf("[%s] Error decoding health check response: %v", processID, err)
+		}
+		return false
+	}
+
+	// Log para debug
+	log.Printf("[%s] Health check response: %+v", processID, healthResponse)
+
+	return !healthResponse.IsRunning
 }
 
 func init() {

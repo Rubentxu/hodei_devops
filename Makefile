@@ -25,7 +25,7 @@ test: proto build run-server run-client
 	@$(MAKE) stop-client
 
 .PHONY: test-go
-test-go: clean build run-server run-client
+test-go: stop-server stop-client clean build run-server run-client
 	@sleep 2
 	@echo "🧪 Ejecutando pruebas Go..."
 	@go run cmd/test/main.go
@@ -45,8 +45,6 @@ test-all: test test-integration
 clean: stop-server stop-client
 	@echo "🧹 Limpiando binarios..."
 	rm -f bin/server bin/client
-	@echo "🧹 Limpiando archivos generados..."
-	find $(PROTO_DIR) -name "*.pb.go" -delete
 
 .PHONY: build
 build:
