@@ -4,7 +4,6 @@ use (
 	//./tests
 	./internal/adapters
 	./internal/domain
-	./internal/infrastructure
 	.
 
 
