@@ -1,20 +1,21 @@
-package remote_process_client
+package grpc
 
 import (
 	"context"
+
+	"dev.rubentxu.devops-platform/protos/remote_process"
 	"fmt"
 	"io"
 	"log"
 	"time"
 
-	pb "dev.rubentxu.devops-platform/adapters/grpc/protos/remote_process"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Client encapsulates the gRPC client functionality for RemoteProcess
 type Client struct {
-	client pb.RemoteProcessServiceClient
+	client remote_process.RemoteProcessServiceClient
 	conn   *grpc.ClientConn
 }
 
@@ -28,12 +29,12 @@ func New(serverAddress string) (*Client, error) {
 		return nil, fmt.Errorf("failed to connect to server: %v", err)
 	}
 
-	client := pb.NewRemoteProcessServiceClient(conn)
+	client := remote_process.NewRemoteProcessServiceClient(conn)
 	return &Client{client: client, conn: conn}, nil
 }
 
 // StartProcess sends a request to start a process on the server and receives the output via a channel
-func (c *Client) StartProcess(ctx context.Context, processID string, command []string, env map[string]string, workingDir string, outputChan chan<- *pb.ProcessOutput) error {
+func (c *Client) StartProcess(ctx context.Context, processID string, command []string, env map[string]string, workingDir string, outputChan chan<- *remote_process.ProcessOutput) error {
 	// Create the stream
 	stream, err := c.client.StartProcess(ctx)
 	if err != nil {
@@ -41,7 +42,7 @@ func (c *Client) StartProcess(ctx context.Context, processID string, command []s
 	}
 
 	// Send the initial request
-	err = stream.Send(&pb.ProcessStartRequest{
+	err = stream.Send(&remote_process.ProcessStartRequest{
 		ProcessId:        processID,
 		Command:          command,
 		Environment:      env,
@@ -84,7 +85,7 @@ func (c *Client) StartProcess(ctx context.Context, processID string, command []s
 
 // StopProcess sends a request to stop a process on the server
 func (c *Client) StopProcess(ctx context.Context, processID string) (bool, string, error) {
-	request := &pb.ProcessStopRequest{
+	request := &remote_process.ProcessStopRequest{
 		ProcessId: processID,
 	}
 
@@ -100,14 +101,14 @@ func (c *Client) StopProcess(ctx context.Context, processID string) (bool, strin
 }
 
 // MonitorHealth inicia el monitoreo de la salud de un proceso
-func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInterval int64, healthChan chan<- *pb.HealthStatus) error {
+func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInterval int64, healthChan chan<- *remote_process.HealthStatus) error {
 	stream, err := c.client.MonitorHealth(ctx)
 	if err != nil {
 		return fmt.Errorf("error creating stream: %v", err)
 	}
 
 	// Enviar la solicitud inicial
-	err = stream.Send(&pb.HealthCheckRequest{
+	err = stream.Send(&remote_process.HealthCheckRequest{
 		ProcessId:     processID,
 		CheckInterval: checkInterval,
 	})
@@ -141,7 +142,7 @@ func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInter
 					}
 					log.Printf("Error receiving response: %v", err)
 					select {
-					case healthChan <- &pb.HealthStatus{
+					case healthChan <- &remote_process.HealthStatus{
 						ProcessId: processID,
 						IsRunning: false,
 						Status:    fmt.Sprintf("Error receiving response: %v", err),

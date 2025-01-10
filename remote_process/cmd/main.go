@@ -1,14 +1,14 @@
 package main
 
 import (
-	remote_process_server "dev.rubentxu.devops-platform/adapters/grpc/server/remote_process"
-	"dev.rubentxu.devops-platform/adapters/local"
+	remote_process_server "dev.rubentxu.devops-platform/remote_process/internal/adapters/grpc"
+	"dev.rubentxu.devops-platform/remote_process/internal/application/api"
 	"log"
 )
 
 func main() {
 	// Crear una instancia de LocalProcessExecutor
-	executor := local.NewLocalProcessExecutor()
+	executor := api.NewLocalProcessExecutor()
 
 	// Iniciar el servidor gRPC en un puerto específico
 	address := ":50051"

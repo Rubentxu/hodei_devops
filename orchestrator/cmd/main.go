@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	pb "dev.rubentxu.devops-platform/protos/remote_process"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,8 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	remote_process_client "dev.rubentxu.devops-platform/adapters/grpc/client/remote_process"
-	pb "dev.rubentxu.devops-platform/adapters/grpc/protos/remote_process"
+	remote_process_client "dev.rubentxu.devops-platform/orchestrator/internal/adapters/grpc"
 )
 
 // Configuración del cliente

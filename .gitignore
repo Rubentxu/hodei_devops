@@ -121,7 +121,7 @@ workerManager/bin
 *.sum
 go.sum
 /go.work.sum
-/internal/adapters/go.sum
+/remote_process/go.sum
 /test/go.sum
 
 bin/

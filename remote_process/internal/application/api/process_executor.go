@@ -1,4 +1,4 @@
-package local
+package api
 
 import (
 	"bufio"
@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"dev.rubentxu.devops-platform/domain/ports"
+	"dev.rubentxu.devops-platform/remote_process/internal/ports"
 )
 
 // LocalProcessExecutor implementa ports.ProcessExecutor para la ejecución local de comandos.

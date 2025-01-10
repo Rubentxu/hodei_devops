@@ -1,6 +1,6 @@
 TEST_SCRIPT=./testProcess.sh
 PROTOC = protoc
-PROTO_DIR = internal/adapters/grpc/protos/remote_process
+PROTO_DIR = protos/remote_process
 PROTO_FILE = $(PROTO_DIR)/remote_process.proto
 GO_OUT = .
 
@@ -18,17 +18,13 @@ test: proto build run-server run-client
 	@echo "🧪 Ejecutando pruebas..."
 	@echo "🧪 Ejecutando pruebas shell..."
 	@bash $(TEST_SCRIPT)
-	@echo "🧪 Ejecutando pruebas Go..."
-	@go run cmd/test/main.go
-	@echo "✅ Pruebas completadas."
-	@$(MAKE) stop-server
-	@$(MAKE) stop-client
+	
 
 .PHONY: test-go
 test-go: stop-server stop-client clean build run-server run-client
 	@sleep 2
 	@echo "🧪 Ejecutando pruebas Go..."
-	@go run cmd/test/main.go
+	@go run tests/main.go
 	@echo "✅ Pruebas Go completadas."
 	@$(MAKE) stop-server
 	@$(MAKE) stop-client
@@ -49,8 +45,8 @@ clean: stop-server stop-client
 .PHONY: build
 build:
 	@echo "🏗️  Construyendo binarios..."
-	go build -o bin/server cmd/server/main.go
-	go build -o bin/client cmd/client/main.go
+	go build -o bin/server remote_process/cmd/main.go
+	go build -o bin/client orchestrator/cmd/main.go
 
 .PHONY: run-server
 run-server:

@@ -2,9 +2,8 @@ go 1.23.4
 
 use (
 	//./tests
-	./internal/adapters
-	./internal/domain
-	.
-
+	./protos
+	./remote_process
+	./orchestrator
 
 )

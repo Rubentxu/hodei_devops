@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package remote_process;
 
-option go_package = "dev.rubentxu.devops-platform/adapters/grpc/protos/remote_process";
+option go_package = "dev.rubentxu.devops-platform/protos/remote_process";
 
 // RemoteProcessService proporciona capacidades para la ejecución remota de procesos
 service RemoteProcessService {

@@ -1,13 +1,14 @@
-package remote_process_server
+package grpc
 
 import (
 	"context"
-	pb "dev.rubentxu.devops-platform/adapters/grpc/protos/remote_process"
-	"dev.rubentxu.devops-platform/domain/ports"
-	"fmt"
+	"dev.rubentxu.devops-platform/protos/remote_process"
+	"dev.rubentxu.devops-platform/remote_process/internal/ports"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"fmt"
 	"log"
 	"net"
 	"sync"
@@ -15,7 +16,7 @@ import (
 
 // server implementa la interfaz RemoteProcessServiceServer generada por protoc
 type server struct {
-	pb.UnimplementedRemoteProcessServiceServer
+	remote_process.UnimplementedRemoteProcessServiceServer
 	executor ports.ProcessExecutor
 	mu       sync.Mutex
 }
@@ -27,12 +28,12 @@ func New(executor ports.ProcessExecutor) *grpc.Server {
 	}
 
 	grpcServer := grpc.NewServer()
-	pb.RegisterRemoteProcessServiceServer(grpcServer, srv)
+	remote_process.RegisterRemoteProcessServiceServer(grpcServer, srv)
 	return grpcServer
 }
 
 // StartProcess implementa la lógica para iniciar un proceso con streaming de salida
-func (s *server) StartProcess(stream pb.RemoteProcessService_StartProcessServer) error {
+func (s *server) StartProcess(stream remote_process.RemoteProcessService_StartProcessServer) error {
 	// Recibir la solicitud inicial
 	in, err := stream.Recv()
 	if err != nil {
@@ -50,7 +51,7 @@ func (s *server) StartProcess(stream pb.RemoteProcessService_StartProcessServer)
 
 	// Transmitir la salida del proceso
 	for output := range outputChan {
-		err := stream.Send(&pb.ProcessOutput{
+		err := stream.Send(&remote_process.ProcessOutput{
 			ProcessId: output.ProcessID,
 			Output:    output.Output,
 			IsError:   output.IsError,
@@ -64,18 +65,18 @@ func (s *server) StartProcess(stream pb.RemoteProcessService_StartProcessServer)
 }
 
 // StopProcess implementa la lógica para detener un proceso
-func (s *server) StopProcess(ctx context.Context, req *pb.ProcessStopRequest) (*pb.ProcessStopResponse, error) {
+func (s *server) StopProcess(ctx context.Context, req *remote_process.ProcessStopRequest) (*remote_process.ProcessStopResponse, error) {
 	err := s.executor.Stop(ctx, req.ProcessId)
 	if err != nil {
 		log.Printf("Error stopping process: %v", err)
 		return nil, status.Errorf(codes.Internal, "failed to stop process: %v", err)
 	}
 
-	return &pb.ProcessStopResponse{Success: true, Message: "Process stopped successfully"}, nil
+	return &remote_process.ProcessStopResponse{Success: true, Message: "Process stopped successfully"}, nil
 }
 
 // MonitorHealth implementa la lógica para monitorizar el estado de un proceso
-func (s *server) MonitorHealth(stream pb.RemoteProcessService_MonitorHealthServer) error {
+func (s *server) MonitorHealth(stream remote_process.RemoteProcessService_MonitorHealthServer) error {
 	// Recibe el primer HealthCheckRequest
 	in, err := stream.Recv()
 	if err != nil {
@@ -92,7 +93,7 @@ func (s *server) MonitorHealth(stream pb.RemoteProcessService_MonitorHealthServe
 
 	// Transmite actualizaciones de HealthStatus al cliente
 	for healthStatus := range healthChan {
-		err := stream.Send(&pb.HealthStatus{
+		err := stream.Send(&remote_process.HealthStatus{
 			ProcessId: healthStatus.ProcessID,
 			IsRunning: healthStatus.IsRunning,
 			Status:    healthStatus.Status,
