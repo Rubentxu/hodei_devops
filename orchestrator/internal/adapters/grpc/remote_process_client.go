@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"google.golang.org/grpc/credentials"
 
 	"dev.rubentxu.devops-platform/protos/remote_process"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Client encapsulates the gRPC client functionality for RemoteProcess
@@ -20,10 +20,10 @@ type Client struct {
 }
 
 // New creates a new instance of the client
-func New(serverAddress string) (*Client, error) {
+func New(serverAddress string, creds credentials.TransportCredentials) (*Client, error) {
 	conn, err := grpc.NewClient(
 		serverAddress,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(creds),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to server: %v", err)

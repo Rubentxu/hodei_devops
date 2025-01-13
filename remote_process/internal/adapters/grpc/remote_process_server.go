@@ -3,37 +3,35 @@ package grpc
 import (
 	"context"
 	"dev.rubentxu.devops-platform/protos/remote_process"
+	"dev.rubentxu.devops-platform/remote_process/config"
 	"dev.rubentxu.devops-platform/remote_process/internal/ports"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
-	"fmt"
 	"log"
 	"net"
-	"sync"
 )
 
-// server implementa la interfaz RemoteProcessServiceServer generada por protoc
-type server struct {
+// ServerAdapter implementa la interfaz RemoteProcessServiceServer generada por protoc
+type ServerAdapter struct {
 	remote_process.UnimplementedRemoteProcessServiceServer
 	executor ports.ProcessExecutor
-	mu       sync.Mutex
+	port     string
+	server   *grpc.Server
 }
 
-// New crea una nueva instancia del servidor gRPC
-func New(executor ports.ProcessExecutor) *grpc.Server {
-	srv := &server{
+func NewAdapter(executor ports.ProcessExecutor, port string) *ServerAdapter {
+	return &ServerAdapter{
 		executor: executor,
+		port:     port,
 	}
-
-	grpcServer := grpc.NewServer()
-	remote_process.RegisterRemoteProcessServiceServer(grpcServer, srv)
-	return grpcServer
 }
 
 // StartProcess implementa la lógica para iniciar un proceso con streaming de salida
-func (s *server) StartProcess(stream remote_process.RemoteProcessService_StartProcessServer) error {
+func (s *ServerAdapter) StartProcess(stream remote_process.RemoteProcessService_StartProcessServer) error {
 	// Recibir la solicitud inicial
 	in, err := stream.Recv()
 	if err != nil {
@@ -65,7 +63,7 @@ func (s *server) StartProcess(stream remote_process.RemoteProcessService_StartPr
 }
 
 // StopProcess implementa la lógica para detener un proceso
-func (s *server) StopProcess(ctx context.Context, req *remote_process.ProcessStopRequest) (*remote_process.ProcessStopResponse, error) {
+func (s *ServerAdapter) StopProcess(ctx context.Context, req *remote_process.ProcessStopRequest) (*remote_process.ProcessStopResponse, error) {
 	err := s.executor.Stop(ctx, req.ProcessId)
 	if err != nil {
 		log.Printf("Error stopping process: %v", err)
@@ -76,7 +74,7 @@ func (s *server) StopProcess(ctx context.Context, req *remote_process.ProcessSto
 }
 
 // MonitorHealth implementa la lógica para monitorizar el estado de un proceso
-func (s *server) MonitorHealth(stream remote_process.RemoteProcessService_MonitorHealthServer) error {
+func (s *ServerAdapter) MonitorHealth(stream remote_process.RemoteProcessService_MonitorHealthServer) error {
 	// Recibe el primer HealthCheckRequest
 	in, err := stream.Recv()
 	if err != nil {
@@ -108,18 +106,32 @@ func (s *server) MonitorHealth(stream remote_process.RemoteProcessService_Monito
 }
 
 // Start inicia el servidor gRPC
-func Start(address string, executor ports.ProcessExecutor) error {
-	lis, err := net.Listen("tcp", address)
+func (s *ServerAdapter) Start(creds credentials.TransportCredentials) {
+	listen, err := net.Listen("tcp", s.port)
 	if err != nil {
-		return fmt.Errorf("failed to listen: %v", err)
+		log.Fatalf("failed to listen on port %d, error: %v", s.port, err)
 	}
 
-	grpcServer := New(executor)
-
-	log.Printf("Starting gRPC server on %s...", address)
-	if err := grpcServer.Serve(lis); err != nil {
-		return fmt.Errorf("failed to serve: %v", err)
+	opts := []grpc.ServerOption{
+		grpc.Creds(creds),
 	}
 
-	return nil
+	grpcServer := grpc.NewServer(opts...)
+	s.server = grpcServer
+
+	remote_process.RegisterRemoteProcessServiceServer(grpcServer, s)
+
+	if config.GetEnv() == "development" {
+		reflection.Register(grpcServer)
+	}
+
+	log.Printf("starting order service on port %s ...", s.port)
+	if err := grpcServer.Serve(listen); err != nil {
+		log.Fatalf("failed to serve grpc on port %s", s.port)
+	}
+
+}
+
+func (a *ServerAdapter) Stop() {
+	a.server.Stop()
 }

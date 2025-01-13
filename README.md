@@ -149,3 +149,10 @@ Cada una de estas capas se comunica con las otras a través de interfaces bien d
 Esta estructura modular permite que cada capa de la arquitectura hexagonal sea un módulo independiente, lo que facilita la gestión de dependencias y el desarrollo colaborativo. Además, el uso de `go.work` permite trabajar con todos los módulos en un solo espacio de trabajo, simplificando el desarrollo y las pruebas.
 
 [Enlace al post original:](https://medium.com/@rubentxu/creando-un-mvp-de-ejecuci%C3%B3n-remota-de-procesos-con-grpc-y-arquitectura-hexagonal-f0daa1e33c17)
+
+
+---
+
+- Incluir configuracion de certificados para gRPC y TLS, creando un certificado autofirmado
+- Incluir dependencias para trazas zap.Logger
+- Incluir fichero config en cada módulo para recoger configuración centralizada
