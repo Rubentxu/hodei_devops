@@ -26,6 +26,9 @@ JWT_PAYLOAD_B64 = $(shell echo -n '{"sub":"test-user","role":"admin","exp":46838
 JWT_SIGNATURE = $(shell echo -n "$(JWT_HEADER_B64).$(JWT_PAYLOAD_B64)" | openssl dgst -binary -sha256 -hmac "$(JWT_SECRET)" | base64 | tr -d '\n' | tr '/+' '_-' | tr -d '=')
 JWT_TOKEN = $(JWT_HEADER_B64).$(JWT_PAYLOAD_B64).$(JWT_SIGNATURE)
 
+# Agregar variable para el socket de Docker
+DOCKER_SOCKET ?= /var/run/docker.sock
+
 .PHONY: proto
 proto:
 	@echo "🔨 Generando código desde archivos proto..."
@@ -75,46 +78,50 @@ certs-dirs:
 	@echo "🔐 Creating certificate directories..."
 	@mkdir -p $(DEV_CERT_DIR) $(PROD_CERT_DIR)
 
+.PHONY: certs-dirs
+certs-dirs:
+	@echo "🔐 Creating certificate directories..."
+	@mkdir -p $(DEV_CERT_DIR) $(PROD_CERT_DIR)
+
 .PHONY: certs-dev
 certs-dev: certs-dirs
-	@echo "🔐 Generating development certificates..."
-	@openssl req -x509 -newkey rsa:4096 -days 365 -nodes \
-		-keyout $(DEV_CERT_DIR)/$(CA_KEY) \
-		-out $(DEV_CERT_DIR)/$(CA_CERT) \
-		-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=DevCA" \
-		-addext "subjectAltName = DNS:localhost,DNS:remote-process"
-
-	@openssl genrsa -out $(DEV_CERT_DIR)/$(SERVER_KEY) 4096
-	@openssl req -new -key $(DEV_CERT_DIR)/$(SERVER_KEY) \
-		-out $(DEV_CERT_DIR)/server.csr \
-		-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=localhost"
-
-	@echo "subjectAltName=DNS:localhost,DNS:remote-process" > $(DEV_CERT_DIR)/extfile.cnf
-	@openssl x509 -req \
-		-in $(DEV_CERT_DIR)/server.csr \
-		-CA $(DEV_CERT_DIR)/$(CA_CERT) \
-		-CAkey $(DEV_CERT_DIR)/$(CA_KEY) \
-		-CAcreateserial \
-		-out $(DEV_CERT_DIR)/$(SERVER_CERT) \
-		-days 365 \
-		-extfile $(DEV_CERT_DIR)/extfile.cnf
-
-	@openssl genrsa -out $(DEV_CERT_DIR)/$(CLIENT_KEY) 4096
-	@openssl req -new -key $(DEV_CERT_DIR)/$(CLIENT_KEY) \
-		-out $(DEV_CERT_DIR)/client.csr \
-		-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=client"
-
-	@openssl x509 -req \
-		-in $(DEV_CERT_DIR)/client.csr \
-		-CA $(DEV_CERT_DIR)/$(CA_CERT) \
-		-CAkey $(DEV_CERT_DIR)/$(CA_KEY) \
-		-CAcreateserial \
-		-out $(DEV_CERT_DIR)/$(CLIENT_CERT) \
-		-days 365
-
-	@rm $(DEV_CERT_DIR)/*.csr $(DEV_CERT_DIR)/*.srl $(DEV_CERT_DIR)/extfile.cnf
-	@chmod 600 $(DEV_CERT_DIR)/*.pem
-	@echo "✅ Development certificates generated in $(DEV_CERT_DIR)"
+	@if [ ! -f "$(DEV_CERT_DIR)/$(CA_CERT)" ] || [ ! -f "$(DEV_CERT_DIR)/$(SERVER_CERT)" ] || [ ! -f "$(DEV_CERT_DIR)/$(CLIENT_CERT)" ]; then \
+		echo "🔐 Generating development certificates..."; \
+		openssl req -x509 -newkey rsa:4096 -days 365 -nodes \
+			-keyout $(DEV_CERT_DIR)/$(CA_KEY) \
+			-out $(DEV_CERT_DIR)/$(CA_CERT) \
+			-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=DevCA" \
+			-addext "subjectAltName = DNS:localhost,DNS:remote-process,DNS:orchestrator"; \
+		openssl genrsa -out $(DEV_CERT_DIR)/$(SERVER_KEY) 4096; \
+		openssl req -new -key $(DEV_CERT_DIR)/$(SERVER_KEY) \
+			-out $(DEV_CERT_DIR)/server.csr \
+			-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=remote-process"; \
+		echo "subjectAltName=DNS:localhost,DNS:remote-process,DNS:orchestrator" > $(DEV_CERT_DIR)/extfile.cnf; \
+		openssl x509 -req \
+			-in $(DEV_CERT_DIR)/server.csr \
+			-CA $(DEV_CERT_DIR)/$(CA_CERT) \
+			-CAkey $(DEV_CERT_DIR)/$(CA_KEY) \
+			-CAcreateserial \
+			-out $(DEV_CERT_DIR)/$(SERVER_CERT) \
+			-days 365 \
+			-extfile $(DEV_CERT_DIR)/extfile.cnf; \
+		openssl genrsa -out $(DEV_CERT_DIR)/$(CLIENT_KEY) 4096; \
+		openssl req -new -key $(DEV_CERT_DIR)/$(CLIENT_KEY) \
+			-out $(DEV_CERT_DIR)/client.csr \
+			-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=orchestrator"; \
+		openssl x509 -req \
+			-in $(DEV_CERT_DIR)/client.csr \
+			-CA $(DEV_CERT_DIR)/$(CA_CERT) \
+			-CAkey $(DEV_CERT_DIR)/$(CA_KEY) \
+			-CAcreateserial \
+			-out $(DEV_CERT_DIR)/$(CLIENT_CERT) \
+			-days 365; \
+		rm $(DEV_CERT_DIR)/*.csr $(DEV_CERT_DIR)/*.srl $(DEV_CERT_DIR)/extfile.cnf; \
+		chmod 600 $(DEV_CERT_DIR)/*.pem; \
+		echo "✅ Development certificates generated in $(DEV_CERT_DIR)"; \
+	else \
+		echo "✅ Development certificates already exist in $(DEV_CERT_DIR)"; \
+	fi
 
 .PHONY: k8s-secrets
 k8s-secrets: certs-dev
@@ -169,7 +176,7 @@ clean-certs:
 .PHONY: docker-compose-dev
 docker-compose-dev: certs-dev
 	@echo "🐳 Starting services with TLS in development mode..."
-	@CERT_DIR=$(DEV_CERT_DIR) docker-compose up --build
+	@CERT_DIR=$(DEV_CERT_DIR) docker compose up --build
 
 # Target para generar certificados en producción (requiere variables de entorno o vault)
 .PHONY: certs-prod
@@ -188,6 +195,7 @@ help-certs:
 	@echo "  make clean-certs      - Remove all certificates"
 	@echo "Development Commands:"
 	@echo "  make run-server   - Run server with TLS in development"
+	@echo "  make run-server   - Run server with TLS in development"
 	@echo "  make run-client   - Run client with TLS in development"
 	@echo "  make docker-compose-dev - Run all services with TLS in development"
 
@@ -202,3 +210,37 @@ stop-client:
 	@echo "🛑 Deteniendo cliente..."
 	@kill `cat ./bin/client.pid` || true
 	@rm -f ./bin/client.pid
+
+# Agregar nuevos targets para tests en Docker
+.PHONY: test-docker
+test-docker: check-docker certs-dev
+	@echo "🐳 Running tests in Docker containers..."
+	@if [ ! -w "$(DOCKER_SOCKET)" ]; then \
+		echo "🔑 Requesting sudo access for Docker..."; \
+		sudo chmod 666 $(DOCKER_SOCKET); \
+	fi
+	@JWT_SECRET="$(JWT_SECRET)" JWT_TOKEN="$(JWT_TOKEN)" \
+	docker compose -f docker-compose.test.yml up \
+		--build \
+		--abort-on-container-exit \
+		--exit-code-from tests
+
+.PHONY: test-docker-clean
+test-docker-clean:
+	@echo "🧹 Cleaning up Docker test containers..."
+	@#DOCKER_HOST=unix://$(DOCKER_SOCKET) \
+	docker compose -f docker-compose.test.yml down -v --remove-orphans
+
+.PHONY: check-docker
+check-docker:
+	@echo "🔍 Checking Docker daemon..."
+	@if ! docker info > /dev/null 2>&1; then \
+		if [ ! -w "$(DOCKER_SOCKET)" ]; then \
+			echo "🔑 Docker socket requires permissions. Requesting sudo access..."; \
+			sudo chmod 666 $(DOCKER_SOCKET); \
+		else \
+			echo "❌ Docker is not running."; \
+			echo "Please start Docker with: sudo systemctl start docker"; \
+			exit 1; \
+		fi \
+	fi

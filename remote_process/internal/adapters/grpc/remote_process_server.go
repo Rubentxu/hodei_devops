@@ -2,15 +2,14 @@ package grpc
 
 import (
 	"context"
-	"dev.rubentxu.devops-platform/remote_process/internal/adapters/grpc/security"
-	"time"
-
 	"dev.rubentxu.devops-platform/protos/remote_process"
-	"dev.rubentxu.devops-platform/remote_process/config"
+	"dev.rubentxu.devops-platform/remote_process/internal/adapters/grpc/security"
 	"dev.rubentxu.devops-platform/remote_process/internal/ports"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
@@ -109,28 +108,11 @@ func (s *ServerAdapter) MonitorHealth(stream remote_process.RemoteProcessService
 	return nil
 }
 
-// Start inicia el servidor gRPC
-func (s *ServerAdapter) Start(tlsConfig *tls.Config) {
+func (s *ServerAdapter) Start(tlsConfig *tls.Config, authInterceptor *security.AuthInterceptor, env string) {
 	listen, err := net.Listen("tcp", s.port)
 	if err != nil {
 		log.Fatalf("failed to listen on port %s, error: %v", s.port, err)
 	}
-
-	// Configurar JWT Manager
-	jwtManager := security.NewJWTManager(
-		config.GetJWTSecret(),
-		24*time.Hour,
-	)
-
-	// Definir roles y permisos
-	accessibleRoles := map[string][]string{
-		"/remote_process.RemoteProcessService/StartProcess":  {"admin", "operator"},
-		"/remote_process.RemoteProcessService/StopProcess":   {"admin", "operator"},
-		"/remote_process.RemoteProcessService/MonitorHealth": {"admin", "operator", "viewer"},
-	}
-
-	// Crear interceptor de autenticación
-	authInterceptor := security.NewAuthInterceptor(jwtManager, accessibleRoles)
 
 	// Crear opciones del servidor con TLS y autenticación
 	opts := []grpc.ServerOption{
@@ -142,15 +124,24 @@ func (s *ServerAdapter) Start(tlsConfig *tls.Config) {
 	grpcServer := grpc.NewServer(opts...)
 	s.server = grpcServer
 
+	// Registrar servicios de negocio gRPC
 	remote_process.RegisterRemoteProcessServiceServer(grpcServer, s)
 
-	if config.GetEnv() == "development" {
+	// Registrar el servicio de reflexión en entorno de desarrollo
+	if env == "development" {
 		reflection.Register(grpcServer)
 	}
 
+	// Registrar el servicio de salud gRPC
+	healthServer := health.NewServer()
+	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
+
+	// Establecer el estado del servidor como "SERVING"
+	healthServer.SetServingStatus("grpc.health.v1.server", grpc_health_v1.HealthCheckResponse_SERVING)
+
 	log.Printf("starting remote process service on port %s with mTLS and JWT auth...", s.port)
 	if err := grpcServer.Serve(listen); err != nil {
-		log.Fatalf("failed to serve grpc on port %s", s.port)
+		log.Fatalf("failed to serve grpc on port %s: %v", s.port, err)
 	}
 }
 

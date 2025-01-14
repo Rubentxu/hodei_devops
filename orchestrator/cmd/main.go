@@ -41,6 +41,7 @@ var client *remote_process_client.Client
 func main() {
 	http.HandleFunc("/run", runHandler)
 	http.HandleFunc("/health", healthHandler)
+	http.HandleFunc("/health/worker", workerHealthHandler)
 	http.HandleFunc("/stop", stopHandler)
 
 	go func() {
@@ -137,7 +138,7 @@ func runHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func healthHandler(w http.ResponseWriter, r *http.Request) {
+func workerHealthHandler(w http.ResponseWriter, r *http.Request) {
 	var reqBody RequestBody
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
 		sendJSONError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request body: %v", err))
@@ -197,6 +198,23 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		w.(http.Flusher).Flush()
 	}
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Determinar si es un health check del worker o de la aplicación
+
+	status := map[string]interface{}{
+		"timestamp": time.Now(),
+	}
+
+	// Health check de la aplicación
+	status["status"] = "up"
+	status["service"] = "orchestrator"
+	w.WriteHeader(http.StatusOK)
+
+	json.NewEncoder(w).Encode(status)
 }
 
 func handleSignals() {

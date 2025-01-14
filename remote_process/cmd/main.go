@@ -1,7 +1,9 @@
 package main
 
 import (
+	"dev.rubentxu.devops-platform/remote_process/internal/adapters/grpc/security"
 	"log"
+	"time"
 
 	"dev.rubentxu.devops-platform/remote_process/config"
 	remote_process_server "dev.rubentxu.devops-platform/remote_process/internal/adapters/grpc"
@@ -18,6 +20,22 @@ func main() {
 		log.Fatalf("Failed to load TLS config: %v", err)
 	}
 
+	// Configurar JWT Manager
+	jwtManager := security.NewJWTManager(
+		config.GetJWTSecret(),
+		24*time.Hour,
+	)
+
+	// Definir roles y permisos
+	accessibleRoles := map[string][]string{
+		"/remote_process.RemoteProcessService/StartProcess":  {"admin", "operator"},
+		"/remote_process.RemoteProcessService/StopProcess":   {"admin", "operator"},
+		"/remote_process.RemoteProcessService/MonitorHealth": {"admin", "operator", "viewer"},
+	}
+
+	// Crear interceptor de autenticación
+	authInterceptor := security.NewAuthInterceptor(jwtManager, accessibleRoles)
+
 	// Configurar TLS para el servidor
 	serverTLSConfig, err := tlsConfig.ConfigureServerTLS()
 	if err != nil {
@@ -27,5 +45,5 @@ func main() {
 	// Iniciar el servidor gRPC con mTLS
 	address := ":" + config.GetApplicationPort()
 	serverAdapter := remote_process_server.NewAdapter(executor, address)
-	serverAdapter.Start(serverTLSConfig)
+	serverAdapter.Start(serverTLSConfig, authInterceptor, config.GetEnv())
 }

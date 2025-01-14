@@ -6,8 +6,8 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
+	"os"
 
 	"dev.rubentxu.devops-platform/protos/remote_process"
 	"google.golang.org/grpc"
@@ -41,7 +41,7 @@ func New(cfg *ClientConfig) (*Client, error) {
 	}
 
 	// Cargar CA cert
-	caCert, err := ioutil.ReadFile(cfg.CACert)
+	caCert, err := os.ReadFile(cfg.CACert)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read CA certificate: %v", err)
 	}

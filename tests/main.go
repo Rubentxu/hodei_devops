@@ -12,13 +12,11 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"dev.rubentxu.devops-platform/orchestrator/config"
 	"github.com/dgrijalva/jwt-go"
 )
 
@@ -65,18 +63,15 @@ type HealthEvent struct {
 	Resources map[string]interface{}
 }
 
-const serverAddr = "localhost:50051"
-const apiBaseURL = "http://localhost:8080"
+var (
+	apiBaseURL = "http://localhost:8080"
+	serverAddr = "localhost:50051"
+)
 
 func init() {
 	// Configurar variables de entorno para los certificados
 	if err := setupTestEnvironment(); err != nil {
 		log.Fatalf("Failed to setup test environment: %v", err)
-	}
-
-	// Verificar permisos del token
-	if err := verifyTokenPermissions(os.Getenv("JWT_TOKEN")); err != nil {
-		log.Fatalf("Token permission verification failed: %v", err)
 	}
 }
 
@@ -101,21 +96,14 @@ func createAccessToken(secret string) (string, error) {
 }
 
 func setupTestEnvironment() error {
-	// Verificar que existen los certificados
-	certFiles := map[string]string{
-		"SERVER_CERT_PATH": filepath.Join(testCertsDir, "server-cert.pem"),
-		"SERVER_KEY_PATH":  filepath.Join(testCertsDir, "server-key.pem"),
-		"CA_CERT_PATH":     filepath.Join(testCertsDir, "ca-cert.pem"),
-		"CLIENT_CERT_PATH": filepath.Join(testCertsDir, "client-cert.pem"),
-		"CLIENT_KEY_PATH":  filepath.Join(testCertsDir, "client-key.pem"),
+	// Obtener la URL base del API desde una variable de entorno o usar el valor por defecto
+	if apiURL := os.Getenv("API_BASE_URL"); apiURL != "" {
+		apiBaseURL = apiURL
 	}
 
-	// Verificar que los archivos existen y configurar variables de entorno
-	for envVar, path := range certFiles {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return fmt.Errorf("certificate file not found: %s", path)
-		}
-		os.Setenv(envVar, path)
+	// Obtener la dirección del servidor gRPC desde una variable de entorno o usar el valor por defecto
+	if grpcServer := os.Getenv("GRPC_SERVER_ADDRESS"); grpcServer != "" {
+		serverAddr = grpcServer
 	}
 
 	// Verificar que las variables JWT están configuradas
@@ -129,13 +117,8 @@ func setupTestEnvironment() error {
 		return fmt.Errorf("JWT_TOKEN environment variable is not set")
 	}
 
-	// Verificar que el token es válido
-	if err := verifyTokenPermissions(jwtToken); err != nil {
-		return fmt.Errorf("invalid JWT token: %v", err)
-	}
-
-	// Configurar otras variables necesarias
-	os.Setenv("GRPC_SERVER_ADDRESS", "localhost:50051")
+	log.Printf("Using API base URL: %s", apiBaseURL)
+	log.Printf("Using gRPC server address: %s", serverAddr)
 
 	return nil
 }
@@ -159,12 +142,6 @@ func cleanup() {
 
 func main() {
 	defer cleanup()
-
-	// Cargar configuración TLS y JWT
-	grpcConfig := config.LoadGRPCConfig()
-	if grpcConfig == nil {
-		log.Fatal("Failed to load gRPC configuration")
-	}
 
 	testCases := []TestCase{
 		// Tests básicos de conectividad y comunicación
@@ -528,7 +505,7 @@ func runTests(testCases []TestCase) {
 func monitorAllProcessesHealth(ctx context.Context) {
 	log.Printf("🏥 Starting global health monitoring")
 
-	url := fmt.Sprintf("%s/health", apiBaseURL)
+	url := fmt.Sprintf("%s/health/worker", apiBaseURL)
 	reqBody := RequestBody{
 		RemoteProcessServerAddress: serverAddr,
 		ProcessID:                  "global-monitor",
