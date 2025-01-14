@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+
 	"dev.rubentxu.devops-platform/protos/remote_process"
 	"dev.rubentxu.devops-platform/remote_process/internal/adapters/grpc/security"
 	"dev.rubentxu.devops-platform/remote_process/internal/ports"
@@ -21,15 +22,24 @@ import (
 // ServerAdapter implementa la interfaz RemoteProcessServiceServer generada por protoc
 type ServerAdapter struct {
 	remote_process.UnimplementedRemoteProcessServiceServer
-	executor ports.ProcessExecutor
-	port     string
-	server   *grpc.Server
+	executor       ports.ProcessExecutor
+	metricsHandler *MetricsHandler
+	syncHandler    *SyncHandler
+	port           string
+	server         *grpc.Server
 }
 
-func NewAdapter(executor ports.ProcessExecutor, port string) *ServerAdapter {
+func NewAdapter(
+	executor ports.ProcessExecutor,
+	metricsService ports.MetricsService,
+	syncService ports.SyncService,
+	port string,
+) *ServerAdapter {
 	return &ServerAdapter{
-		executor: executor,
-		port:     port,
+		executor:       executor,
+		metricsHandler: NewMetricsHandler(metricsService),
+		syncHandler:    NewSyncHandler(syncService),
+		port:           port,
 	}
 }
 
@@ -108,6 +118,26 @@ func (s *ServerAdapter) MonitorHealth(stream remote_process.RemoteProcessService
 	return nil
 }
 
+func (s *ServerAdapter) CollectMetrics(stream remote_process.RemoteProcessService_CollectMetricsServer) error {
+	return s.metricsHandler.CollectMetrics(stream)
+}
+
+func (s *ServerAdapter) SyncFiles(req *remote_process.FileSyncRequest, stream remote_process.RemoteProcessService_SyncFilesServer) error {
+	return s.syncHandler.SyncFiles(req, stream)
+}
+
+func (s *ServerAdapter) SyncFilesStream(stream remote_process.RemoteProcessService_SyncFilesStreamServer) error {
+	return s.syncHandler.SyncFilesStream(stream)
+}
+
+func (s *ServerAdapter) GetRemoteFileList(ctx context.Context, req *remote_process.RemoteListRequest) (*remote_process.RemoteFileList, error) {
+	return s.syncHandler.GetRemoteFileList(ctx, req)
+}
+
+func (s *ServerAdapter) DeleteRemoteFile(ctx context.Context, req *remote_process.RemoteDeleteRequest) (*remote_process.RemoteDeleteResponse, error) {
+	return s.syncHandler.DeleteRemoteFile(ctx, req)
+}
+
 func (s *ServerAdapter) Start(tlsConfig *tls.Config, authInterceptor *security.AuthInterceptor, env string) {
 	listen, err := net.Listen("tcp", s.port)
 	if err != nil {
@@ -145,6 +175,8 @@ func (s *ServerAdapter) Start(tlsConfig *tls.Config, authInterceptor *security.A
 	}
 }
 
-func (a *ServerAdapter) Stop() {
-	a.server.Stop()
+func (s *ServerAdapter) Stop() {
+	if s.server != nil {
+		s.server.GracefulStop()
+	}
 }

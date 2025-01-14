@@ -12,8 +12,15 @@ service RemoteProcessService {
 
   // Monitorización
   rpc MonitorHealth(stream HealthCheckRequest) returns (stream HealthStatus);
-
-  // ... otros métodos
+  
+  // Recopilación de Métricas
+  rpc CollectMetrics(stream MetricsRequest) returns (stream WorkerMetrics);
+  
+  // Sincronización de Archivos
+  rpc SyncFiles(FileSyncRequest) returns (stream SyncProgress);
+  rpc SyncFilesStream(stream FileUploadRequest) returns (stream SyncProgress);
+  rpc GetRemoteFileList(RemoteListRequest) returns (RemoteFileList);
+  rpc DeleteRemoteFile(RemoteDeleteRequest) returns (RemoteDeleteResponse);
 }
 
 // Mensaje para iniciar un proceso
@@ -54,4 +61,370 @@ message HealthStatus {
   bool is_running = 2;  // Indica si el proceso está en ejecución
   string status = 3;
   bool is_healthy = 4; // Indica si el proceso está saludable
+}
+
+// Mensaje para solicitar métricas
+message MetricsRequest {
+  string worker_id = 1;           // Identificador del worker
+  repeated string metric_types = 2; // Tipos de métricas solicitadas (cpu, memory, disk, etc.)
+  int64 interval = 3;             // Intervalo de recolección en segundos
+}
+
+// Tipos de métricas disponibles
+enum MetricType {
+  UNKNOWN = 0;
+  CPU = 1;
+  MEMORY = 2;
+  DISK = 3;
+  NETWORK = 4;
+  PROCESS = 5;
+  SYSTEM = 6;
+  IO = 7;
+}
+
+// Mensaje con métricas del worker
+message WorkerMetrics {
+  string worker_id = 1;
+  int64 timestamp = 2;
+  CPUMetrics cpu = 3;
+  MemoryMetrics memory = 4;
+  repeated DiskMetrics disks = 5;
+  repeated NetworkMetrics networks = 6;
+  SystemMetrics system = 7;
+  repeated ProcessMetrics processes = 8;
+  IOMetrics io = 9;
+}
+
+// Métricas de CPU
+message CPUMetrics {
+  double total_usage_percent = 1;
+  repeated CPUCoreMetrics cores = 2;
+  map<string, double> load_average = 3;  // 1min, 5min, 15min
+  Temperature temperature = 4;
+  int32 core_count = 5;
+  int32 thread_count = 6;
+  repeated CPUTime times = 7;
+}
+
+message CPUCoreMetrics {
+  int32 core_id = 1;
+  double usage_percent = 2;
+  double frequency_mhz = 3;
+  Temperature temperature = 4;
+  CPUTime times = 5;
+}
+
+message CPUTime {
+  double user = 1;
+  double system = 2;
+  double idle = 3;
+  double nice = 4;
+  double iowait = 5;
+  double irq = 6;
+  double softirq = 7;
+  double steal = 8;
+  double guest = 9;
+}
+
+// Métricas de Memoria
+message MemoryMetrics {
+  uint64 total = 1;
+  uint64 used = 2;
+  uint64 free = 3;
+  uint64 shared = 4;
+  uint64 buffers = 5;
+  uint64 cached = 6;
+  uint64 available = 7;
+  SwapMetrics swap = 8;
+  repeated VirtualMemoryMetrics vm_stats = 9;
+}
+
+message SwapMetrics {
+  uint64 total = 1;
+  uint64 used = 2;
+  uint64 free = 3;
+  double swap_in = 4;
+  double swap_out = 5;
+}
+
+// Estadísticas de memoria virtual
+message VirtualMemoryMetrics {
+  uint64 page_faults = 1;         // Número total de page faults
+  uint64 major_faults = 2;        // Page faults que requirieron I/O
+  uint64 minor_faults = 3;        // Page faults que no requirieron I/O
+  uint64 page_ins = 4;            // Páginas leídas desde disco
+  uint64 page_outs = 5;           // Páginas escritas a disco
+  double swap_in_rate = 6;        // Tasa de swap in (páginas/s)
+  double swap_out_rate = 7;       // Tasa de swap out (páginas/s)
+  uint64 dirty_pages = 8;         // Páginas modificadas pendientes de escribir
+  uint64 writeback_pages = 9;     // Páginas siendo escritas a disco
+  uint64 slab = 10;               // Memoria usada por el kernel
+  uint64 mapped = 11;             // Archivos mapeados en memoria
+  uint64 active = 12;             // Páginas activas (recientemente usadas)
+  uint64 inactive = 13;           // Páginas inactivas
+}
+
+// Métricas de Disco
+message DiskMetrics {
+  string device = 1;
+  string mount_point = 2;
+  string fs_type = 3;
+  uint64 total = 4;
+  uint64 used = 5;
+  uint64 free = 6;
+  double usage_percent = 7;
+  uint64 inodes_total = 8;
+  uint64 inodes_used = 9;
+  uint64 inodes_free = 10;
+  DiskIOMetrics io = 11;
+}
+
+message DiskIOMetrics {
+  uint64 reads_completed = 1;
+  uint64 writes_completed = 2;
+  uint64 read_bytes = 3;
+  uint64 write_bytes = 4;
+  double read_time = 5;
+  double write_time = 6;
+  uint64 io_time = 7;
+  uint64 weighted_io = 8;
+}
+
+// Métricas de Red
+message NetworkMetrics {
+  string interface = 1;
+  uint64 bytes_sent = 2;
+  uint64 bytes_recv = 3;
+  uint64 packets_sent = 4;
+  uint64 packets_recv = 5;
+  uint64 err_in = 6;
+  uint64 err_out = 7;
+  uint64 drop_in = 8;
+  uint64 drop_out = 9;
+  string ip_address = 10;
+  string mac_address = 11;
+  double bandwidth_usage = 12;
+  NetworkStatus status = 13;
+}
+
+// Métricas del Sistema
+message SystemMetrics {
+  string hostname = 1;
+  string os = 2;
+  string platform = 3;
+  string kernel = 4;
+  int32 uptime = 5;
+  int32 process_count = 6;
+  int32 thread_count = 7;
+  int32 user_count = 8;
+  repeated string users = 9;
+  string boot_time = 10;
+}
+
+// Métricas de Procesos
+message ProcessMetrics {
+  int32 pid = 1;
+  string name = 2;
+  string status = 3;
+  double cpu_percent = 4;
+  uint64 memory_rss = 5;
+  uint64 memory_vms = 6;
+  string username = 7;
+  int32 threads = 8;
+  int32 fds = 9;
+  string cmdline = 10;
+  int32 priority = 11;
+  int32 nice = 12;
+  ProcessIOCounters io_counters = 13;
+  int32 parent_pid = 14;
+}
+
+message ProcessIOCounters {
+  uint64 read_count = 1;
+  uint64 write_count = 2;
+  uint64 read_bytes = 3;
+  uint64 write_bytes = 4;
+}
+
+// Métricas de IO
+message IOMetrics {
+  uint64 read_bytes_total = 1;
+  uint64 write_bytes_total = 2;
+  double read_speed = 3;
+  double write_speed = 4;
+  int32 active_requests = 5;
+  double queue_length = 6;
+}
+
+// Temperatura (para CPU y otros componentes)
+message Temperature {
+  double current = 1;
+  double critical = 2;
+  string unit = 3;
+}
+
+// Estado de la interfaz de red
+message NetworkStatus {
+  bool is_up = 1;
+  bool is_running = 2;
+  string duplex = 3;
+  uint64 speed = 4;
+  string mtu = 5;
+}
+
+// Mensaje para solicitar sincronización de archivos (estilo rsync)
+message FileSyncRequest {
+  string source_path = 1;      // Ruta de origen
+  string destination_path = 2; // Ruta de destino
+  SyncOptions options = 3;     // Opciones de sincronización
+}
+
+message SyncOptions {
+  bool recursive = 1;          // -r, --recursive
+  bool archive = 2;           // -a, preserva permisos, timestamps, etc.
+  bool compress = 3;          // -z, comprime durante la transferencia
+  bool delete = 4;            // --delete, elimina archivos que no existen en origen
+  bool dry_run = 5;           // -n, simula la operación
+  bool preserve_perms = 6;    // -p, preserva permisos
+  bool preserve_times = 7;    // -t, preserva timestamps
+  bool preserve_owner = 8;    // -o, preserva propietario
+  bool preserve_group = 9;    // -g, preserva grupo
+  bool checksum = 10;         // -c, usa checksums en lugar de tiempo/tamaño
+  repeated string exclude = 11;    // --exclude patrones
+  repeated string include = 12;    // --include patrones
+  int32 max_depth = 13;           // --max-depth=N
+  int32 compress_level = 14;      // Nivel de compresión (1-9)
+  string bandwidth_limit = 15;    // --bwlimit=RATE (ej: "1M")
+  bool use_delta = 16;         // Usar transferencia delta
+  int32 block_size = 17;       // Tamaño de bloque para delta sync
+  bool bidirectional = 18;     // Sincronización en ambas direcciones
+  bool follow_symlinks = 19;   // Seguir enlaces simbólicos
+  bool preserve_acls = 20;     // Preservar ACLs
+  bool preserve_xattrs = 21;   // Preservar atributos extendidos
+  int32 io_timeout = 22;       // Timeout para operaciones I/O
+  int32 retry_count = 23;      // Número de reintentos
+}
+
+// Mensaje de progreso de sincronización
+message SyncProgress {
+  string file_path = 1;           // Ruta del archivo actual
+  int64 bytes_transferred = 2;    // Bytes transferidos
+  int64 total_bytes = 3;         // Total de bytes a transferir
+  SyncStatus status = 4;         // Estado detallado de la sincronización
+  string error_message = 5;      // Mensaje de error si existe
+  double progress_percentage = 6; // Porcentaje de progreso
+  SyncStats stats = 7;           // Estadísticas de la sincronización
+}
+
+message SyncStatus {
+  enum Action {
+    UNKNOWN = 0;
+    SCANNING = 1;     // Escaneando directorios
+    COMPARING = 2;    // Comparando archivos
+    COPYING = 3;      // Copiando archivo
+    DELETING = 4;     // Eliminando archivo
+    LINKING = 5;      // Creando enlace
+    SKIPPING = 6;     // Saltando archivo
+    VERIFYING = 7;    // Verificando checksum
+    DONE = 8;         // Completado
+    ERROR = 9;        // Error
+  }
+  Action action = 1;
+  string details = 2;
+}
+
+message SyncStats {
+  int64 files_transferred = 1;   // Archivos transferidos
+  int64 files_deleted = 2;       // Archivos eliminados
+  int64 files_skipped = 3;       // Archivos omitidos
+  int64 total_files = 4;         // Total de archivos
+  int64 total_size = 5;          // Tamaño total en bytes
+  double transfer_speed = 6;     // Velocidad de transferencia (bytes/s)
+  int64 errors = 7;              // Número de errores
+  repeated string error_list = 8; // Lista de errores encontrados
+}
+
+// Nuevo mensaje para la subida de archivos
+message FileUploadRequest {
+    oneof request {
+        FileSyncMetadata metadata = 1;  // Información inicial del archivo
+        FileChunk chunk = 2;            // Chunk de datos
+    }
+}
+
+message FileSyncMetadata {
+    string source_path = 1;      // Ruta origen (cliente)
+    string destination_path = 2;  // Ruta destino (servidor)
+    int64 total_size = 3;        // Tamaño total del archivo
+    SyncOptions options = 4;      // Opciones de sincronización
+}
+
+message FileChunk {
+    oneof data {
+        bytes content = 1;           // Contenido del chunk
+        DeltaReference delta = 2;    // Referencia a bloque existente
+    }
+    int64 offset = 3;
+    bool is_last = 4;
+}
+
+message DeltaReference {
+    int64 source_offset = 1;     // Offset en el archivo fuente
+    int32 length = 2;            // Longitud del bloque
+    string checksum = 3;         // Checksum para verificación
+}
+
+// Nuevo mensaje para listar archivos remotos
+message RemoteListRequest {
+    string path = 1;
+    bool recursive = 2;
+    repeated string include = 3;
+    repeated string exclude = 4;
+}
+
+message RemoteFileList {
+    repeated RemoteFileInfo files = 1;
+}
+
+message RemoteFileInfo {
+    string path = 1;
+    int64 size = 2;
+    int64 mod_time = 3;
+    uint32 mode = 4;
+    bool is_dir = 5;
+    bool is_symlink = 6;
+    string owner = 7;
+    string group = 8;
+    string checksum = 9;
+    string link_target = 10;
+    repeated ACLEntry acls = 11;
+    map<string, bytes> xattrs = 12;
+}
+
+message ACLEntry {
+    string principal = 1;
+    string perms = 2;
+    string type = 3;
+}
+
+// Nuevo mensaje para eliminar archivos remotos
+message RemoteDeleteRequest {
+    string path = 1;
+    bool recursive = 2;
+    bool force = 3;
+}
+
+message RemoteDeleteResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+// Añadir mensaje para bloques delta
+message DeltaBlock {
+    int64 offset = 1;
+    int32 size = 2;
+    string checksum = 3;
+    bytes data = 4;
+    int64 match_ref = 5;
+    bool is_literal = 6;
 }
