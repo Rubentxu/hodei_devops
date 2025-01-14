@@ -126,3 +126,5 @@ go.sum
 
 bin/
 *.log
+certs/
+k8s/

@@ -2,15 +2,19 @@ package grpc
 
 import (
 	"context"
+	"time"
+
 	"dev.rubentxu.devops-platform/protos/remote_process"
 	"dev.rubentxu.devops-platform/remote_process/config"
 	"dev.rubentxu.devops-platform/remote_process/internal/ports"
+	"dev.rubentxu.devops-platform/remote_process/internal/security"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
+	"crypto/tls"
 	"log"
 	"net"
 )
@@ -106,14 +110,33 @@ func (s *ServerAdapter) MonitorHealth(stream remote_process.RemoteProcessService
 }
 
 // Start inicia el servidor gRPC
-func (s *ServerAdapter) Start(creds credentials.TransportCredentials) {
+func (s *ServerAdapter) Start(tlsConfig *tls.Config) {
 	listen, err := net.Listen("tcp", s.port)
 	if err != nil {
-		log.Fatalf("failed to listen on port %d, error: %v", s.port, err)
+		log.Fatalf("failed to listen on port %s, error: %v", s.port, err)
 	}
 
+	// Configurar JWT Manager
+	jwtManager := security.NewJWTManager(
+		config.GetJWTSecret(),
+		24*time.Hour,
+	)
+
+	// Definir roles y permisos
+	accessibleRoles := map[string][]string{
+		"/remote_process.RemoteProcessService/StartProcess":  {"admin", "operator"},
+		"/remote_process.RemoteProcessService/StopProcess":   {"admin", "operator"},
+		"/remote_process.RemoteProcessService/MonitorHealth": {"admin", "operator", "viewer"},
+	}
+
+	// Crear interceptor de autenticación
+	authInterceptor := security.NewAuthInterceptor(jwtManager, accessibleRoles)
+
+	// Crear opciones del servidor con TLS y autenticación
 	opts := []grpc.ServerOption{
-		grpc.Creds(creds),
+		grpc.Creds(credentials.NewTLS(tlsConfig)),
+		grpc.UnaryInterceptor(authInterceptor.Unary()),
+		grpc.StreamInterceptor(authInterceptor.Stream()),
 	}
 
 	grpcServer := grpc.NewServer(opts...)
@@ -125,11 +148,10 @@ func (s *ServerAdapter) Start(creds credentials.TransportCredentials) {
 		reflection.Register(grpcServer)
 	}
 
-	log.Printf("starting order service on port %s ...", s.port)
+	log.Printf("starting remote process service on port %s with mTLS and JWT auth...", s.port)
 	if err := grpcServer.Serve(listen); err != nil {
 		log.Fatalf("failed to serve grpc on port %s", s.port)
 	}
-
 }
 
 func (a *ServerAdapter) Stop() {

@@ -2,46 +2,99 @@ package grpc
 
 import (
 	"context"
-	"google.golang.org/grpc/credentials"
-
-	"dev.rubentxu.devops-platform/protos/remote_process"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
-	"time"
 
+	"dev.rubentxu.devops-platform/protos/remote_process"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 )
 
 // Client encapsulates the gRPC client functionality for RemoteProcess
 type Client struct {
-	client remote_process.RemoteProcessServiceClient
-	conn   *grpc.ClientConn
+	client    remote_process.RemoteProcessServiceClient
+	conn      *grpc.ClientConn
+	jwtToken  string
+	tlsConfig *tls.Config
+}
+
+// ClientConfig contiene la configuración necesaria para el cliente
+type ClientConfig struct {
+	ServerAddress string
+	ClientCert    string
+	ClientKey     string
+	CACert        string
+	JWTToken      string
 }
 
 // New creates a new instance of the client
-func New(serverAddress string, creds credentials.TransportCredentials) (*Client, error) {
-	conn, err := grpc.NewClient(
-		serverAddress,
-		grpc.WithTransportCredentials(creds),
+func New(cfg *ClientConfig) (*Client, error) {
+	// Cargar certificado del cliente
+	certificate, err := tls.LoadX509KeyPair(cfg.ClientCert, cfg.ClientKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load client certificate: %v", err)
+	}
+
+	// Cargar CA cert
+	caCert, err := ioutil.ReadFile(cfg.CACert)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CA certificate: %v", err)
+	}
+
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("failed to append CA certificate")
+	}
+
+	// Configurar TLS
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		RootCAs:      caCertPool,
+		MinVersion:   tls.VersionTLS13,
+	}
+
+	// Establecer conexión con credenciales TLS
+	conn, err := grpc.Dial(
+		cfg.ServerAddress,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to server: %v", err)
 	}
 
 	client := remote_process.NewRemoteProcessServiceClient(conn)
-	return &Client{client: client, conn: conn}, nil
+	return &Client{
+		client:    client,
+		conn:      conn,
+		jwtToken:  cfg.JWTToken,
+		tlsConfig: tlsConfig,
+	}, nil
 }
 
-// StartProcess sends a request to start a process on the server and receives the output via a channel
+// createAuthContext crea un contexto con el token JWT
+func (c *Client) createAuthContext(ctx context.Context) context.Context {
+	md := metadata.New(map[string]string{
+		"authorization": "bearer " + c.jwtToken,
+	})
+	return metadata.NewOutgoingContext(ctx, md)
+}
+
+// StartProcess envía una solicitud para iniciar un proceso en el servidor
 func (c *Client) StartProcess(ctx context.Context, processID string, command []string, env map[string]string, workingDir string, outputChan chan<- *remote_process.ProcessOutput) error {
-	// Create the stream
+	ctx = c.createAuthContext(ctx)
+
+	// Crear el stream
 	stream, err := c.client.StartProcess(ctx)
 	if err != nil {
 		return fmt.Errorf("error creating stream: %v", err)
 	}
 
-	// Send the initial request
+	// Enviar la solicitud inicial
 	err = stream.Send(&remote_process.ProcessStartRequest{
 		ProcessId:        processID,
 		Command:          command,
@@ -49,76 +102,63 @@ func (c *Client) StartProcess(ctx context.Context, processID string, command []s
 		WorkingDirectory: workingDir,
 	})
 	if err != nil {
-		return fmt.Errorf("error sending request: %v", err)
+		return fmt.Errorf("error sending initial request: %v", err)
 	}
 
-	// Close the send stream
-	if err := stream.CloseSend(); err != nil {
-		return fmt.Errorf("error closing send stream: %v", err)
-	}
-
-	// Process responses in a goroutine
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("Recovered in StartProcess: %v", r)
-			}
-			close(outputChan)
-		}()
-		for {
-			resp, err := stream.Recv()
-			if err == io.EOF {
-				return // End of stream
-			}
-			if err != nil {
-				log.Printf("Error receiving response: %v", err)
-				return
-			}
-
-			// Send the output to the channel
-			outputChan <- resp
+	// Recibir la salida del proceso
+	for {
+		output, err := stream.Recv()
+		if err == io.EOF {
+			break
 		}
-	}()
+		if err != nil {
+			return fmt.Errorf("error receiving output: %v", err)
+		}
+
+		select {
+		case outputChan <- output:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 
 	return nil
 }
 
-// StopProcess sends a request to stop a process on the server
+// StopProcess envía una solicitud para detener un proceso
 func (c *Client) StopProcess(ctx context.Context, processID string) (bool, string, error) {
-	request := &remote_process.ProcessStopRequest{
+	ctx = c.createAuthContext(ctx)
+
+	resp, err := c.client.StopProcess(ctx, &remote_process.ProcessStopRequest{
 		ProcessId: processID,
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	response, err := c.client.StopProcess(ctx, request)
+	})
 	if err != nil {
 		return false, "", fmt.Errorf("error stopping process: %v", err)
 	}
 
-	return response.Success, response.Message, nil
+	return resp.Success, resp.Message, nil
 }
 
-// MonitorHealth inicia el monitoreo de la salud de un proceso
+// MonitorHealth monitoriza el estado de salud de un proceso
 func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInterval int64, healthChan chan<- *remote_process.HealthStatus) error {
+	ctx = c.createAuthContext(ctx)
+
 	stream, err := c.client.MonitorHealth(ctx)
 	if err != nil {
-		return fmt.Errorf("error creating stream: %v", err)
+		return fmt.Errorf("error creating health monitor stream: %v", err)
 	}
 
-	// Enviar la solicitud inicial
+	// Enviar solicitud inicial de monitoreo
 	err = stream.Send(&remote_process.HealthCheckRequest{
 		ProcessId:     processID,
 		CheckInterval: checkInterval,
 	})
 	if err != nil {
-		return fmt.Errorf("error sending request: %v", err)
+		return fmt.Errorf("error sending health check request: %v", err)
 	}
 
 	// Procesar respuestas en una goroutine
 	go func() {
-		// Usar un defer recover para manejar posibles pánicos
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("Recovered in MonitorHealth: %v", r)
@@ -128,33 +168,33 @@ func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInter
 		for {
 			select {
 			case <-ctx.Done():
-				// El contexto fue cancelado, salir limpiamente
 				return
 			default:
-				resp, err := stream.Recv()
+				healthStatus, err := stream.Recv()
 				if err == io.EOF {
 					return
 				}
 				if err != nil {
 					if ctx.Err() == context.Canceled {
-						// Contexto cancelado, salir silenciosamente
 						return
 					}
-					log.Printf("Error receiving response: %v", err)
+					log.Printf("Error receiving health status: %v", err)
 					select {
 					case healthChan <- &remote_process.HealthStatus{
 						ProcessId: processID,
 						IsRunning: false,
-						Status:    fmt.Sprintf("Error receiving response: %v", err),
+						Status:    fmt.Sprintf("Error receiving health status: %v", err),
 					}:
 					case <-ctx.Done():
 					}
 					return
 				}
 
-				// Enviar el estado de salud al canal
+				// Enviar el estado al canal
 				select {
-				case healthChan <- resp:
+				case healthChan <- healthStatus:
+					log.Printf("Health status for process %s: running=%v, status=%s",
+						healthStatus.ProcessId, healthStatus.IsRunning, healthStatus.Status)
 				case <-ctx.Done():
 					return
 				}
@@ -165,7 +205,7 @@ func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInter
 	return nil
 }
 
-// Close closes the gRPC connection
+// Close cierra la conexión gRPC
 func (c *Client) Close() {
 	if err := c.conn.Close(); err != nil {
 		log.Printf("Error closing connection: %v", err)

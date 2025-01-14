@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	pb "dev.rubentxu.devops-platform/protos/remote_process"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	pb "dev.rubentxu.devops-platform/protos/remote_process"
+
+	"dev.rubentxu.devops-platform/orchestrator/config"
 	remote_process_client "dev.rubentxu.devops-platform/orchestrator/internal/adapters/grpc"
 )
 
@@ -48,6 +50,24 @@ func main() {
 	}()
 
 	handleSignals()
+
+	// Cargar configuración gRPC
+	grpcConfig := config.LoadGRPCConfig()
+
+	// Crear cliente gRPC con autenticación
+	clientConfig := &remote_process_client.ClientConfig{
+		ServerAddress: grpcConfig.ServerAddress,
+		ClientCert:    grpcConfig.ClientCert,
+		ClientKey:     grpcConfig.ClientKey,
+		CACert:        grpcConfig.CACert,
+		JWTToken:      grpcConfig.JWTToken,
+	}
+
+	client, err := remote_process_client.New(clientConfig)
+	if err != nil {
+		log.Fatalf("Failed to create gRPC client: %v", err)
+	}
+	defer client.Close()
 }
 
 func runHandler(w http.ResponseWriter, r *http.Request) {
@@ -57,10 +77,19 @@ func runHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Crear configuración del cliente con los valores por defecto de TLS
+	clientConfig := &remote_process_client.ClientConfig{
+		ServerAddress: reqBody.RemoteProcessServerAddress,
+		ClientCert:    config.LoadGRPCConfig().ClientCert, // Usar certificados configurados
+		ClientKey:     config.LoadGRPCConfig().ClientKey,
+		CACert:        config.LoadGRPCConfig().CACert,
+		JWTToken:      config.LoadGRPCConfig().JWTToken,
+	}
+
 	var err error
-	client, err = remote_process_client.New(reqBody.RemoteProcessServerAddress)
+	client, err = remote_process_client.New(clientConfig)
 	if err != nil {
-		sendJSONError(w, http.StatusInternalServerError, "Failed to create gRPC client")
+		sendJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create gRPC client: %v", err))
 		return
 	}
 	defer client.Close()
@@ -80,18 +109,28 @@ func runHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Crear canal para la salida del proceso
 	outputChan := make(chan *pb.ProcessOutput)
+	defer close(outputChan)
 
-	// Iniciar el proceso
+	// Iniciar el proceso en una goroutine
 	go func() {
-		if err := client.StartProcess(ctx, reqBody.ProcessID, reqBody.Command, reqBody.Env, reqBody.WorkingDirectory, outputChan); err != nil {
-			log.Printf("Error in StartProcess: %v", err)
+		err := client.StartProcess(ctx, reqBody.ProcessID, reqBody.Command, reqBody.Env, reqBody.WorkingDirectory, outputChan)
+		if err != nil {
+			log.Printf("Error starting process: %v", err)
+			// Enviar error al cliente a través de SSE
+			event := fmt.Sprintf("data: {\"error\": \"%v\"}\n\n", err)
+			if _, err := fmt.Fprint(w, event); err != nil {
+				log.Printf("Error sending error event: %v", err)
+			}
+			w.(http.Flusher).Flush()
+			return
 		}
 	}()
 
-	// Stream de la salida
+	// Enviar la salida del proceso al cliente a través de SSE
 	for output := range outputChan {
-		if _, err := fmt.Fprintf(w, "data: %s\n", output.Output); err != nil {
-			log.Printf("Error writing to response: %v", err)
+		event := fmt.Sprintf("data: {\"output\": \"%s\", \"is_error\": %v}\n\n", output.Output, output.IsError)
+		if _, err := fmt.Fprint(w, event); err != nil {
+			log.Printf("Error sending event: %v", err)
 			return
 		}
 		w.(http.Flusher).Flush()
@@ -105,10 +144,19 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Crear configuración del cliente con los valores por defecto de TLS
+	clientConfig := &remote_process_client.ClientConfig{
+		ServerAddress: reqBody.RemoteProcessServerAddress,
+		ClientCert:    config.LoadGRPCConfig().ClientCert,
+		ClientKey:     config.LoadGRPCConfig().ClientKey,
+		CACert:        config.LoadGRPCConfig().CACert,
+		JWTToken:      config.LoadGRPCConfig().JWTToken,
+	}
+
 	var err error
-	client, err = remote_process_client.New(reqBody.RemoteProcessServerAddress)
+	client, err = remote_process_client.New(clientConfig)
 	if err != nil {
-		sendJSONError(w, http.StatusInternalServerError, "Failed to create gRPC client")
+		sendJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create gRPC client: %v", err))
 		return
 	}
 	defer client.Close()
@@ -121,57 +169,33 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 	}
 
+	// Configurar headers para SSE
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
 	// Crear el canal con buffer para evitar bloqueos
 	healthChan := make(chan *pb.HealthStatus, 1)
+	defer close(healthChan)
 
 	if err := client.MonitorHealth(ctx, reqBody.ProcessID, reqBody.CheckInterval, healthChan); err != nil {
 		sendJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to start health monitoring: %v", err))
 		return
 	}
 
-	// Configurar headers para SSE
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
+	// Enviar actualizaciones de estado al cliente a través de SSE
+	for healthStatus := range healthChan {
+		event := fmt.Sprintf("data: {\"process_id\": \"%s\", \"is_running\": %v, \"status\": \"%s\", \"is_healthy\": %v}\n\n",
+			healthStatus.ProcessId,
+			healthStatus.IsRunning,
+			healthStatus.Status,
+			healthStatus.IsHealthy)
 
-	// Detectar si el cliente cierra la conexión
-	notify := w.(http.CloseNotifier).CloseNotify()
-
-	// Crear un encoder JSON para cada línea
-	encoder := json.NewEncoder(w)
-
-	// Stream del estado de salud
-	for {
-		select {
-		case <-notify:
-			return
-		case healthStatus, ok := <-healthChan:
-			if !ok {
-				return
-			}
-			response := HealthResponse{
-				ProcessID: healthStatus.ProcessId,
-				IsRunning: healthStatus.IsRunning,
-				Status:    healthStatus.Status,
-				IsHealthy: healthStatus.IsHealthy,
-				Timestamp: time.Now().Format(time.RFC3339),
-			}
-
-			if err := encoder.Encode(response); err != nil {
-				log.Printf("Error encoding health response: %v", err)
-				return
-			}
-
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
-
-			if !healthStatus.IsRunning {
-				return
-			}
-		case <-ctx.Done():
+		if _, err := fmt.Fprint(w, event); err != nil {
+			log.Printf("Error sending health event: %v", err)
 			return
 		}
+		w.(http.Flusher).Flush()
 	}
 }
 
@@ -196,22 +220,30 @@ func stopHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Usar timeout del request o valor por defecto
-	timeout := reqBody.Timeout
-	if timeout == 0 {
-		timeout = 30 * time.Second
+	// Crear configuración del cliente con los valores por defecto de TLS
+	clientConfig := &remote_process_client.ClientConfig{
+		ServerAddress: reqBody.RemoteProcessServerAddress,
+		ClientCert:    config.LoadGRPCConfig().ClientCert,
+		ClientKey:     config.LoadGRPCConfig().ClientKey,
+		CACert:        config.LoadGRPCConfig().CACert,
+		JWTToken:      config.LoadGRPCConfig().JWTToken,
 	}
 
 	var err error
-	client, err = remote_process_client.New(reqBody.RemoteProcessServerAddress)
+	client, err = remote_process_client.New(clientConfig)
 	if err != nil {
-		sendJSONError(w, http.StatusInternalServerError, "Failed to create gRPC client")
+		sendJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create gRPC client: %v", err))
 		return
 	}
 	defer client.Close()
 
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
-	defer cancel()
+	// Configurar contexto con timeout si se especifica
+	ctx := r.Context()
+	if reqBody.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, reqBody.Timeout)
+		defer cancel()
+	}
 
 	success, message, err := client.StopProcess(ctx, reqBody.ProcessID)
 	if err != nil {
@@ -219,40 +251,31 @@ func stopHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := StopResponse{
+	// Enviar respuesta JSON
+	w.Header().Set("Content-Type", "application/json")
+	response := struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}{
 		Success: success,
 		Message: message,
 	}
-	sendJSONResponse(w, http.StatusOK, response)
-}
 
-// Estructuras de respuesta
-type HealthResponse struct {
-	ProcessID string `json:"process_id"`
-	IsRunning bool   `json:"is_running"`
-	Status    string `json:"status"`
-	IsHealthy bool   `json:"is_healthy"`
-	Timestamp string `json:"timestamp"`
-}
-
-type StopResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-}
-
-// Funciones helper para respuestas JSON
-func sendJSONResponse(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
+	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("Error encoding response: %v", err)
 	}
 }
 
+// Función auxiliar para enviar errores JSON
 func sendJSONError(w http.ResponseWriter, status int, message string) {
-	response := StopResponse{
-		Success: false,
-		Message: message,
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	response := struct {
+		Error string `json:"error"`
+	}{
+		Error: message,
 	}
-	sendJSONResponse(w, status, response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding error response: %v", err)
+	}
 }

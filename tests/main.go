@@ -4,15 +4,27 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"dev.rubentxu.devops-platform/orchestrator/config"
+	"github.com/dgrijalva/jwt-go"
+)
+
+const (
+	baseURL      = "http://localhost:8080"
+	testCertsDir = "certs/dev" // Directorio de certificados de desarrollo
 )
 
 // TestCase define la estructura de un caso de prueba
@@ -56,7 +68,104 @@ type HealthEvent struct {
 const serverAddr = "localhost:50051"
 const apiBaseURL = "http://localhost:8080"
 
+func init() {
+	// Configurar variables de entorno para los certificados
+	if err := setupTestEnvironment(); err != nil {
+		log.Fatalf("Failed to setup test environment: %v", err)
+	}
+
+	// Verificar permisos del token
+	if err := verifyTokenPermissions(os.Getenv("JWT_TOKEN")); err != nil {
+		log.Fatalf("Token permission verification failed: %v", err)
+	}
+}
+
+func generateRandomSecret(length int) string {
+	// Generar un secreto aleatorio de la longitud especificada
+	secret := make([]byte, length)
+	_, err := rand.Read(secret)
+	if err != nil {
+		log.Fatalf("Error generating random secret: %v", err)
+	}
+	return base64.URLEncoding.EncodeToString(secret)
+}
+
+func createAccessToken(secret string) (string, error) {
+	// Crear un token JWT válido usando el secreto proporcionado
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub":  "test-user",
+		"role": "admin",
+		"exp":  time.Now().Add(24 * time.Hour).Unix(),
+	})
+	return token.SignedString([]byte(secret))
+}
+
+func setupTestEnvironment() error {
+	// Verificar que existen los certificados
+	certFiles := map[string]string{
+		"SERVER_CERT_PATH": filepath.Join(testCertsDir, "server-cert.pem"),
+		"SERVER_KEY_PATH":  filepath.Join(testCertsDir, "server-key.pem"),
+		"CA_CERT_PATH":     filepath.Join(testCertsDir, "ca-cert.pem"),
+		"CLIENT_CERT_PATH": filepath.Join(testCertsDir, "client-cert.pem"),
+		"CLIENT_KEY_PATH":  filepath.Join(testCertsDir, "client-key.pem"),
+	}
+
+	// Verificar que los archivos existen y configurar variables de entorno
+	for envVar, path := range certFiles {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return fmt.Errorf("certificate file not found: %s", path)
+		}
+		os.Setenv(envVar, path)
+	}
+
+	// Verificar que las variables JWT están configuradas
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		return fmt.Errorf("JWT_SECRET environment variable is not set")
+	}
+
+	jwtToken := os.Getenv("JWT_TOKEN")
+	if jwtToken == "" {
+		return fmt.Errorf("JWT_TOKEN environment variable is not set")
+	}
+
+	// Verificar que el token es válido
+	if err := verifyTokenPermissions(jwtToken); err != nil {
+		return fmt.Errorf("invalid JWT token: %v", err)
+	}
+
+	// Configurar otras variables necesarias
+	os.Setenv("GRPC_SERVER_ADDRESS", "localhost:50051")
+
+	return nil
+}
+
+func cleanup() {
+	// Limpiar variables de entorno al finalizar
+	envVars := []string{
+		"SERVER_CERT_PATH",
+		"SERVER_KEY_PATH",
+		"CA_CERT_PATH",
+		"CLIENT_CERT_PATH",
+		"CLIENT_KEY_PATH",
+		"GRPC_SERVER_ADDRESS",
+		"JWT_TOKEN",
+	}
+
+	for _, env := range envVars {
+		os.Unsetenv(env)
+	}
+}
+
 func main() {
+	defer cleanup()
+
+	// Cargar configuración TLS y JWT
+	grpcConfig := config.LoadGRPCConfig()
+	if grpcConfig == nil {
+		log.Fatal("Failed to load gRPC configuration")
+	}
+
 	testCases := []TestCase{
 		// Tests básicos de conectividad y comunicación
 		{
@@ -572,6 +681,17 @@ func runProcess(ctx context.Context, tc TestCase, done chan<- struct{}) {
 		Timeout:                    tc.Timeout,
 	}
 
+	req, err := http.NewRequestWithContext(ctx, "POST", url, createJSONBody(reqBody))
+	if err != nil {
+		log.Printf("[%s] Error creating request: %v", tc.ProcessID, err)
+		return
+	}
+
+	// Agregar el token JWT al header
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("JWT_TOKEN")))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
 	// Crear un cliente HTTP con timeout
 	client := &http.Client{
 		Timeout: tc.Duration + 5*time.Second,
@@ -583,7 +703,7 @@ func runProcess(ctx context.Context, tc TestCase, done chan<- struct{}) {
 		return
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err = http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		log.Printf("[%s] Error creating request: %v", tc.ProcessID, err)
 		return
@@ -628,62 +748,54 @@ func runProcess(ctx context.Context, tc TestCase, done chan<- struct{}) {
 	}
 }
 
-func monitorHealth(ctx context.Context, tc TestCase, done chan<- struct{}) {
+func monitorHealth(ctx context.Context, processID string, done chan<- struct{}) {
 	defer close(done)
 
 	url := fmt.Sprintf("%s/health", apiBaseURL)
 	reqBody := RequestBody{
 		RemoteProcessServerAddress: serverAddr,
-		ProcessID:                  tc.ProcessID,
+		ProcessID:                  processID,
 		CheckInterval:              1,
-		Timeout:                    tc.Timeout,
 	}
 
-	// Crear un cliente HTTP con timeout
-	client := &http.Client{
-		Timeout: tc.Duration + 5*time.Second,
-	}
-
-	jsonData, err := json.Marshal(reqBody)
+	req, err := http.NewRequest("POST", url, createJSONBody(reqBody))
 	if err != nil {
-		log.Printf("[%s] Error marshaling health request: %v", tc.ProcessID, err)
+		log.Printf("Error creating health monitor request: %v", err)
 		return
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		log.Printf("[%s] Error creating health request: %v", tc.ProcessID, err)
-		return
-	}
-	req = req.WithContext(ctx)
+	// Agregar el token JWT al header de la petición
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("JWT_TOKEN")))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 
+	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("[%s] Error executing health request: %v", tc.ProcessID, err)
+		log.Printf("Error starting health monitor: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	scanner := bufio.NewScanner(resp.Body)
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
+			log.Printf("[%s] Health monitoring cancelled", processID)
 			return
 		default:
 			line := scanner.Text()
-			if strings.HasPrefix(line, "healthCheck") {
-				log.Printf("[%s] Health status: %s", tc.ProcessID, line)
-				if strings.Contains(line, "Process finished") ||
-					strings.Contains(line, "Process stopped") {
-					return
-				}
+			if strings.HasPrefix(line, "data: ") {
+				data := strings.TrimPrefix(line, "data: ")
+				log.Printf("[%s] Health status: %s", processID, data)
 			}
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("[%s] Error reading health status: %v", processID, err)
 	}
 }
 
@@ -803,8 +915,15 @@ func isProcessStopped(processID string, timeout time.Duration) bool {
 }
 
 func init() {
-	// Configurar el formato del log para incluir timestamp
-	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+	// Configurar variables de entorno para los certificados
+	if err := setupTestEnvironment(); err != nil {
+		log.Fatalf("Failed to setup test environment: %v", err)
+	}
+
+	// Verificar permisos del token
+	if err := verifyTokenPermissions(os.Getenv("JWT_TOKEN")); err != nil {
+		log.Fatalf("Token permission verification failed: %v", err)
+	}
 }
 
 // Agregar estas funciones helper
@@ -914,4 +1033,74 @@ func showHealthSummary(states map[string]*HealthEvent, mutex *sync.RWMutex) {
 	sb.WriteString(fmt.Sprintf("└── Failed: %d 🔴\n", failed))
 
 	log.Print(sb.String())
+}
+
+func startProcess(processID string, command []string, env map[string]string, workingDir string) error {
+	reqBody := RequestBody{
+		RemoteProcessServerAddress: os.Getenv("GRPC_SERVER_ADDRESS"),
+		Command:                    command,
+		ProcessID:                  processID,
+		CheckInterval:              1,
+		Env:                        env,
+		WorkingDirectory:           workingDir,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("error marshaling request: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/run", baseURL), bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("error creating request: %v", err)
+	}
+
+	// Agregar el token JWT al header de la petición
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("JWT_TOKEN")))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// ... resto del código de monitoreo de salida ...
+	return nil
+}
+
+// Agregar función para verificar permisos
+func verifyTokenPermissions(tokenString string) error {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(os.Getenv("JWT_SECRET")), nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("error parsing token: %v", err)
+	}
+
+	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+		role, ok := claims["role"].(string)
+		if !ok {
+			return fmt.Errorf("role claim not found in token")
+		}
+
+		validRoles := map[string]bool{
+			"admin":    true,
+			"operator": true,
+			"viewer":   true,
+		}
+
+		if !validRoles[role] {
+			return fmt.Errorf("invalid role: %s", role)
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("invalid token claims")
 }

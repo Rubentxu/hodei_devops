@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -21,17 +22,67 @@ type TestEnvironment struct {
 func setupTestEnvironment(t *testing.T) (*TestEnvironment, error) {
 	ctx := context.Background()
 
-	// Crear un nombre único para la red usando UUID
-	networkName := fmt.Sprintf("test-network-%s", uuid.New().String())
-
 	// Crear red de Docker
-	_, err := testcontainers.GenericNetwork(ctx, testcontainers.GenericNetworkRequest{
+	networkName := fmt.Sprintf("test-network-%s", uuid.New().String())
+	network, err := testcontainers.GenericNetwork(ctx, testcontainers.GenericNetworkRequest{
 		NetworkRequest: testcontainers.NetworkRequest{
 			Name: networkName,
 		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create network: %v", err)
+	}
+
+	// Configurar variables de entorno comunes
+	commonEnv := map[string]string{
+		"CA_CERT_PATH": "/certs/ca-cert.pem",
+		"ENV":          "development",
+	}
+
+	// Configurar el contenedor del servidor
+	serverEnv := map[string]string{
+		"SERVER_CERT_PATH": "/certs/server-cert.pem",
+		"SERVER_KEY_PATH":  "/certs/server-key.pem",
+		"APPLICATION_PORT": "50051",
+		"JWT_SECRET":       os.Getenv("JWT_SECRET"),
+	}
+	for k, v := range commonEnv {
+		serverEnv[k] = v
+	}
+
+	serverReq := testcontainers.ContainerRequest{
+		FromDockerfile: testcontainers.FromDockerfile{
+			Context:    "../../",
+			Dockerfile: "build/server/Dockerfile",
+		},
+		Networks:     []string{networkName},
+		Name:         fmt.Sprintf("server-%s", uuid.New().String()),
+		ExposedPorts: []string{"50051:50051"},
+		Env:          serverEnv,
+		WaitingFor:   wait.ForLog("Server started").WithStartupTimeout(60 * time.Second),
+	}
+
+	// Configurar el contenedor del cliente
+	clientEnv := map[string]string{
+		"CLIENT_CERT_PATH":    "/certs/client-cert.pem",
+		"CLIENT_KEY_PATH":     "/certs/client-key.pem",
+		"GRPC_SERVER_ADDRESS": "server:50051",
+		"JWT_TOKEN":           os.Getenv("JWT_TOKEN"),
+	}
+	for k, v := range commonEnv {
+		clientEnv[k] = v
+	}
+
+	clientReq := testcontainers.ContainerRequest{
+		FromDockerfile: testcontainers.FromDockerfile{
+			Context:    "../../",
+			Dockerfile: "build/client/Dockerfile",
+		},
+		Networks:     []string{networkName},
+		Name:         fmt.Sprintf("client-%s", uuid.New().String()),
+		ExposedPorts: []string{"8080:8080"},
+		Env:          clientEnv,
+		WaitingFor:   wait.ForHTTP("/health").WithPort("8080/tcp"),
 	}
 
 	// Mejorar el manejo de errores y limpieza
@@ -48,27 +99,6 @@ func setupTestEnvironment(t *testing.T) (*TestEnvironment, error) {
 	}()
 
 	// Configurar el contenedor del servidor con mejor logging
-	serverReq := testcontainers.ContainerRequest{
-		FromDockerfile: testcontainers.FromDockerfile{
-			Context:    "../../",
-			Dockerfile: "build/server/Dockerfile",
-		},
-		Networks:     []string{networkName},
-		Name:         fmt.Sprintf("server-%s", uuid.New().String()),
-		ExposedPorts: []string{"50051:50051"},
-		WaitingFor: wait.ForAll(
-			wait.ForLog("Server started").WithStartupTimeout(60*time.Second),
-			wait.ForListeningPort("50051/tcp"),
-		),
-		Env: map[string]string{
-			"GRPC_PORT": "50051",
-		},
-		LogLevel: testcontainers.LogLevel{
-			Level:  "debug",
-			Output: true,
-		},
-	}
-
 	serverC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: serverReq,
 		Started:          true,
@@ -83,28 +113,6 @@ func setupTestEnvironment(t *testing.T) (*TestEnvironment, error) {
 	time.Sleep(5 * time.Second)
 
 	// Configurar el contenedor del cliente con mejor logging
-	clientReq := testcontainers.ContainerRequest{
-		FromDockerfile: testcontainers.FromDockerfile{
-			Context:    "../../",
-			Dockerfile: "build/client/Dockerfile",
-		},
-		Networks:     []string{networkName},
-		Name:         fmt.Sprintf("client-%s", uuid.New().String()),
-		ExposedPorts: []string{"8080:8080"},
-		Env: map[string]string{
-			"HTTP_PORT":   "8080",
-			"GRPC_SERVER": fmt.Sprintf("%s:50051", serverReq.Name),
-		},
-		WaitingFor: wait.ForAll(
-			wait.ForLog("Client started").WithStartupTimeout(60*time.Second),
-			wait.ForHTTP("/health").WithPort("8080/tcp"),
-		),
-		LogLevel: testcontainers.LogLevel{
-			Level:  "debug",
-			Output: true,
-		},
-	}
-
 	clientC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: clientReq,
 		Started:          true,
