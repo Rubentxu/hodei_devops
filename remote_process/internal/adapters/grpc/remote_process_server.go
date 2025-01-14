@@ -2,12 +2,12 @@ package grpc
 
 import (
 	"context"
+	"dev.rubentxu.devops-platform/remote_process/internal/adapters/grpc/security"
 	"time"
 
 	"dev.rubentxu.devops-platform/protos/remote_process"
 	"dev.rubentxu.devops-platform/remote_process/config"
 	"dev.rubentxu.devops-platform/remote_process/internal/ports"
-	"dev.rubentxu.devops-platform/remote_process/internal/security"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
