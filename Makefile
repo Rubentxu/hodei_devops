@@ -49,7 +49,7 @@ test: proto build run-server run-client
 test-go: stop-server stop-client clean build run-server run-client
 	@sleep 5 # Increase sleep time to ensure the server starts
 	@echo "🧪 Ejecutando pruebas Go..."
-	@JWT_SECRET="$(JWT_SECRET)" JWT_TOKEN="$(JWT_TOKEN)" go run tests/main.go
+	@JWT_SECRET="$(JWT_SECRET)" JWT_TOKEN="$(JWT_TOKEN)" go test -v ./tests/...
 	@echo "✅ Pruebas Go completadas."
 	@$(MAKE) stop-server
 	@$(MAKE) stop-client

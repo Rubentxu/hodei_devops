@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -128,15 +129,21 @@ func (g *GopsutilCollector) CollectDiskMetrics(ctx context.Context) ([]domain.Di
 	for _, partition := range partitions {
 		usage, err := disk.UsageWithContext(ctx, partition.Mountpoint)
 		if err != nil {
+			log.Printf("Error getting usage for partition %s: %v", partition.Mountpoint, err)
 			continue
 		}
 
 		ioCounters, err := disk.IOCountersWithContext(ctx, partition.Device)
 		if err != nil {
+			log.Printf("Error getting IO counters for device %s: %v", partition.Device, err)
 			continue
 		}
 
-		counter := ioCounters[partition.Device]
+		var counter disk.IOCountersStat
+		if ioCounters != nil {
+			counter = ioCounters[partition.Device]
+		}
+
 		metrics = append(metrics, domain.DiskMetrics{
 			Device:       partition.Device,
 			MountPoint:   partition.Mountpoint,
@@ -165,44 +172,59 @@ func (g *GopsutilCollector) CollectDiskMetrics(ctx context.Context) ([]domain.Di
 }
 
 func (g *GopsutilCollector) CollectNetworkMetrics(ctx context.Context) ([]domain.NetworkMetrics, error) {
-	interfaces, err := net.InterfacesWithContext(ctx)
+	// Obtener interfaces de red
+	interfaces, err := net.Interfaces()
 	if err != nil {
 		return nil, fmt.Errorf("error getting network interfaces: %w", err)
 	}
 
-	counters, err := net.IOCountersWithContext(ctx, true)
+	// Obtener estadísticas de IO
+	ioStats, err := net.IOCounters(true)
 	if err != nil {
-		return nil, fmt.Errorf("error getting network IO counters: %w", err)
+		return nil, fmt.Errorf("error getting network IO stats: %w", err)
 	}
 
 	var metrics []domain.NetworkMetrics
 	for _, iface := range interfaces {
-		for _, counter := range counters {
-			if iface.Name == counter.Name {
-				metrics = append(metrics, domain.NetworkMetrics{
-					Interface:   iface.Name,
-					BytesSent:   counter.BytesSent,
-					BytesRecv:   counter.BytesRecv,
-					PacketsSent: counter.PacketsSent,
-					PacketsRecv: counter.PacketsRecv,
-					ErrIn:       counter.Errin,
-					ErrOut:      counter.Errout,
-					DropIn:      counter.Dropin,
-					DropOut:     counter.Dropout,
-					IPAddress:   getIPAddress(iface),
-					MACAddress:  iface.HardwareAddr,
-					Status: domain.NetworkStatus{
-						IsUp:      containsFlag(iface.Flags, "up"),
-						IsRunning: containsFlag(iface.Flags, "running"),
-						MTU:       fmt.Sprintf("%d", iface.MTU),
-					},
-				})
+		// Buscar estadísticas correspondientes
+		var stats *net.IOCountersStat
+		for _, s := range ioStats {
+			if s.Name == iface.Name {
+				stats = &s
 				break
 			}
 		}
+
+		if stats == nil {
+			continue // Skip interfaces without stats
+		}
+
+		metric := domain.NetworkMetrics{
+			Interface:   iface.Name,
+			BytesSent:   stats.BytesSent,
+			BytesRecv:   stats.BytesRecv,
+			PacketsSent: stats.PacketsSent,
+			PacketsRecv: stats.PacketsRecv,
+			IPAddress:   getIPAddress(iface),
+			MACAddress:  iface.HardwareAddr,
+			Status: domain.NetworkStatus{
+				IsUp:      containsFlag(iface.Flags, "up"),
+				IsRunning: containsFlag(iface.Flags, "running"),
+				MTU:       fmt.Sprintf("%d", iface.MTU),
+			},
+			BandwidthUsage: calculateBandwidthUsage(stats),
+		}
+
+		metrics = append(metrics, metric)
 	}
 
 	return metrics, nil
+}
+
+func calculateBandwidthUsage(stats *net.IOCountersStat) float64 {
+	// Implementar cálculo de uso de ancho de banda
+	// Por ejemplo, porcentaje del máximo teórico o del histórico
+	return 0.0 // Por ahora retornamos 0
 }
 
 func containsFlag(flags []string, flag string) bool {
@@ -253,57 +275,38 @@ func (g *GopsutilCollector) CollectProcessMetrics(ctx context.Context) ([]domain
 	for _, p := range processes {
 		name, err := p.Name()
 		if err != nil {
+			log.Printf("Error getting name for PID %d: %v", p.Pid, err)
 			continue
 		}
 
 		status, err := p.Status()
 		if err != nil {
+			log.Printf("Error getting status for PID %d: %v", p.Pid, err)
 			continue
 		}
 
 		cpu, err := p.CPUPercent()
 		if err != nil {
-			continue
+			log.Printf("Error getting CPU percent for PID %d: %v", p.Pid, err)
+			cpu = 0.0 // Usar un valor por defecto en caso de error
 		}
 
 		memInfo, err := p.MemoryInfo()
 		if err != nil {
+			log.Printf("Error getting memory info for PID %d: %v", p.Pid, err)
 			continue
 		}
 
 		username, err := p.Username()
 		if err != nil {
-			continue
+			log.Printf("Error getting username for PID %d: %v", p.Pid, err)
+			username = "unknown"
 		}
 
 		numThreads, err := p.NumThreads()
 		if err != nil {
-			continue
-		}
-
-		numFDs, err := p.NumFDs()
-		if err != nil {
-			continue
-		}
-
-		cmdline, err := p.Cmdline()
-		if err != nil {
-			continue
-		}
-
-		nice, err := p.Nice()
-		if err != nil {
-			continue
-		}
-
-		ioCounters, err := p.IOCounters()
-		if err != nil {
-			continue
-		}
-
-		ppid, err := p.Ppid()
-		if err != nil {
-			continue
+			log.Printf("Error getting thread count for PID %d: %v", p.Pid, err)
+			numThreads = 0
 		}
 
 		metrics = append(metrics, domain.ProcessMetrics{
@@ -315,16 +318,6 @@ func (g *GopsutilCollector) CollectProcessMetrics(ctx context.Context) ([]domain
 			MemoryVMS:  memInfo.VMS,
 			Username:   username,
 			Threads:    int32(numThreads),
-			FDs:        int32(numFDs),
-			Cmdline:    cmdline,
-			Nice:       int32(nice),
-			IOCounters: domain.ProcessIOCounters{
-				ReadCount:  ioCounters.ReadCount,
-				WriteCount: ioCounters.WriteCount,
-				ReadBytes:  ioCounters.ReadBytes,
-				WriteBytes: ioCounters.WriteBytes,
-			},
-			ParentPID: int32(ppid),
 		})
 	}
 

@@ -105,16 +105,16 @@ type DiskIOMetrics struct {
 // Network Metrics
 type NetworkMetrics struct {
 	Interface      string
-	BytesSent      uint64
-	BytesRecv      uint64
+	BytesSent      uint64 `json:"bytes_sent"`
+	BytesRecv      uint64 `json:"bytes_recv"`
 	PacketsSent    uint64
 	PacketsRecv    uint64
-	ErrIn          uint64 `proto:"errin"`
-	ErrOut         uint64 `proto:"errout"`
-	DropIn         uint64 `proto:"dropin"`
-	DropOut        uint64 `proto:"dropout"`
-	IPAddress      string
-	MACAddress     string
+	ErrIn          uint64
+	ErrOut         uint64
+	DropIn         uint64
+	DropOut        uint64
+	IPAddress      string `json:"ip_address"`
+	MACAddress     string `json:"mac_address"`
 	BandwidthUsage float64
 	Status         NetworkStatus
 }

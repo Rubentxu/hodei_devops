@@ -205,6 +205,43 @@ func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInter
 	return nil
 }
 
+// StreamMetrics envía una solicitud para obtener métricas de un proceso
+func (c *Client) StreamMetrics(ctx context.Context, workerID string, metricTypes []string, interval int64, metricsChan chan<- *remote_process.WorkerMetrics) error {
+	ctx = c.createAuthContext(ctx)
+
+	stream, err := c.client.CollectMetrics(ctx)
+	if err != nil {
+		return fmt.Errorf("error creating metrics stream: %w", err)
+	}
+
+	// Enviar solicitud inicial
+	err = stream.Send(&remote_process.MetricsRequest{
+		WorkerId:    workerID,
+		MetricTypes: metricTypes,
+		Interval:    interval,
+	})
+	if err != nil {
+		return fmt.Errorf("error sending metrics request: %w", err)
+	}
+
+	// Recibir métricas
+	for {
+		metrics, err := stream.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("error receiving metrics: %w", err)
+		}
+
+		select {
+		case metricsChan <- metrics:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
 // Close cierra la conexión gRPC
 func (c *Client) Close() {
 	if err := c.conn.Close(); err != nil {

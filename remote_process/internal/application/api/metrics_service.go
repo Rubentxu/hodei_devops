@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"time"
 
@@ -76,7 +75,13 @@ func (s *MetricsService) collectMetricByType(ctx context.Context, metricType str
 	case "io":
 		metrics.IO, err = s.collector.CollectIOMetrics(ctx)
 	default:
-		return fmt.Errorf("unknown metric type: %s", metricType)
+		log.Printf("Warning: unknown metric type: %s", metricType)
+		return nil
+	}
+
+	if err != nil {
+		log.Printf("Error collecting %s metrics: %v", metricType, err)
+		return nil // Continuar con otras métricas en caso de error
 	}
 
 	return err

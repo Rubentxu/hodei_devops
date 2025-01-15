@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -43,6 +44,7 @@ func main() {
 	http.HandleFunc("/health", healthHandler)
 	http.HandleFunc("/health/worker", workerHealthHandler)
 	http.HandleFunc("/stop", stopHandler)
+	http.HandleFunc("/metrics", metricsHandler)
 
 	go func() {
 		if err := http.ListenAndServe(":8080", nil); err != nil {
@@ -281,6 +283,88 @@ func stopHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("Error encoding response: %v", err)
+	}
+}
+
+func metricsHandler(w http.ResponseWriter, r *http.Request) {
+	// Configurar headers para SSE
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Obtener parámetros
+	workerID := r.URL.Query().Get("worker_id")
+	intervalStr := r.URL.Query().Get("interval")
+	metricTypes := r.URL.Query()["metric_types"]
+
+	interval, err := strconv.ParseInt(intervalStr, 10, 64)
+	if err != nil {
+		interval = 1 // valor por defecto
+	}
+
+	// Crear cliente gRPC si no existe
+	if client == nil {
+		clientConfig := &remote_process_client.ClientConfig{
+			ServerAddress: config.LoadGRPCConfig().ServerAddress,
+			ClientCert:    config.LoadGRPCConfig().ClientCert,
+			ClientKey:     config.LoadGRPCConfig().ClientKey,
+			CACert:        config.LoadGRPCConfig().CACert,
+			JWTToken:      config.LoadGRPCConfig().JWTToken,
+		}
+
+		var err error
+		client, err = remote_process_client.New(clientConfig)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to create gRPC client: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Crear canal para métricas
+	metricsChan := make(chan *pb.WorkerMetrics)
+	errChan := make(chan error, 1)
+
+	// Iniciar streaming de métricas
+	go func() {
+		defer close(metricsChan)
+		defer close(errChan)
+
+		err := client.StreamMetrics(r.Context(), workerID, metricTypes, interval, metricsChan)
+		if err != nil {
+			errChan <- err
+			return
+		}
+	}()
+
+	// Flusher para SSE
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Enviar métricas como eventos SSE
+	for {
+		select {
+		case err := <-errChan:
+			fmt.Fprintf(w, "data: {\"error\": \"%v\"}\n\n", err)
+			flusher.Flush()
+			return
+		case metrics, ok := <-metricsChan:
+			if !ok {
+				return
+			}
+			// Convertir métricas a JSON
+			data, err := json.Marshal(metrics)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
 	}
 }
 
