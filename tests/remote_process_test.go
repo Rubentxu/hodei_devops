@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,23 +8,41 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
+
+// Variables para URLs base
+var (
+	// Endpoints HTTP normales (ej: /stop, /health)
+	apiBaseURL = "http://localhost:8080"
+
+	// Endpoints WebSocket (ej: /run, /metrics, /health/worker)
+	wsBaseURL = "ws://localhost:8080"
+
+	// Dirección del servidor gRPC (interna)
+	serverAddr = "localhost:50051"
+)
+
+// --------------------------------------------------------------------------
+// Estructuras de datos para las pruebas
+// --------------------------------------------------------------------------
 
 // ProcessTestCase define la estructura de un caso de prueba
 type ProcessTestCase struct {
-	Name       string            `json:"name"`
-	ProcessID  string            `json:"process_id"`
-	Command    []string          `json:"command"`
-	Env        map[string]string `json:"env,omitempty"`
-	WorkingDir string            `json:"working_directory,omitempty"`
-	Duration   time.Duration     // Duración para procesos largos
-	Timeout    time.Duration     // Timeout para operaciones (stop, health check, etc.)
+	Name       string
+	ProcessID  string
+	Command    []string
+	Env        map[string]string
+	WorkingDir string
+	Duration   time.Duration
+	Timeout    time.Duration
 }
 
-// RequestBody define la estructura del JSON para las peticiones
+// RequestBody define la estructura del JSON que se envía
+// como primer mensaje WebSocket en /run.
 type RequestBody struct {
 	RemoteProcessServerAddress string            `json:"remote_process_server_address"`
 	Command                    []string          `json:"command"`
@@ -33,14 +50,12 @@ type RequestBody struct {
 	CheckInterval              int64             `json:"check_interval"`
 	Env                        map[string]string `json:"env,omitempty"`
 	WorkingDirectory           string            `json:"working_directory,omitempty"`
-	Timeout                    time.Duration     `json:"timeout,omitempty"` // Timeout en segundos
+	Timeout                    time.Duration     `json:"timeout,omitempty"`
 }
 
-var (
-	apiBaseURL = "http://localhost:8080"
-	serverAddr = "localhost:50051"
-)
-
+// --------------------------------------------------------------------------
+// TEST: /run -> Iniciar proceso vía WebSocket
+// --------------------------------------------------------------------------
 func TestProcessExecution(t *testing.T) {
 	for _, tc := range ProcessTestCases {
 		t.Run(tc.Name, func(t *testing.T) {
@@ -48,7 +63,7 @@ func TestProcessExecution(t *testing.T) {
 			defer cancel()
 
 			processDone := make(chan struct{})
-			go runProcess(ctx, tc, processDone)
+			go runProcess(ctx, tc, processDone, t)
 
 			select {
 			case <-processDone:
@@ -60,10 +75,34 @@ func TestProcessExecution(t *testing.T) {
 	}
 }
 
-func runProcess(ctx context.Context, tc ProcessTestCase, done chan<- struct{}) {
+// runProcess establece una conexión WebSocket con /run, envía el JSON como
+// primer mensaje y luego lee la salida en un bucle.
+func runProcess(ctx context.Context, tc ProcessTestCase, done chan<- struct{}, t *testing.T) {
 	defer close(done)
 
-	url := fmt.Sprintf("%s/run", apiBaseURL)
+	// 1. Determinar la URL para el WebSocket (por ejemplo, /run)
+	wsURL := fmt.Sprintf("%s/run", wsBaseURL)
+
+	// 2. Crear el Dialer y preparar cabeceras (si tu servidor requiere token, etc.)
+	dialer := &websocket.Dialer{}
+	headers := http.Header{}
+	headers.Set("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("JWT_TOKEN")))
+
+	// 3. Conectarse vía WebSocket
+	conn, resp, err := dialer.Dial(wsURL, headers)
+	if err != nil {
+		t.Errorf("[%s] WebSocket dial error: %v", tc.ProcessID, err)
+		return
+	}
+	defer conn.Close()
+
+	// Revisar el status code de handshake (opcional)
+	if resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Errorf("[%s] Server did not switch protocols. Got status: %d", tc.ProcessID, resp.StatusCode)
+		return
+	}
+
+	// 4. Enviar el JSON de configuración como primer mensaje
 	reqBody := RequestBody{
 		RemoteProcessServerAddress: serverAddr,
 		Command:                    tc.Command,
@@ -73,75 +112,115 @@ func runProcess(ctx context.Context, tc ProcessTestCase, done chan<- struct{}) {
 		WorkingDirectory:           tc.WorkingDir,
 		Timeout:                    tc.Timeout,
 	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, createJSONBody(reqBody))
-	if err != nil {
-		log.Printf("[%s] Error creating request: %v", tc.ProcessID, err)
+	if err := sendJSONWebSocket(conn, reqBody); err != nil {
+		t.Errorf("[%s] Error sending JSON config: %v", tc.ProcessID, err)
 		return
 	}
 
-	// Agregar el token JWT al header
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("JWT_TOKEN")))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-
-	// Crear un cliente HTTP con timeout
-	client := &http.Client{
-		Timeout: tc.Duration + 5*time.Second,
-	}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		log.Printf("[%s] Error marshaling request: %v", tc.ProcessID, err)
-		return
-	}
-
-	req, err = http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		log.Printf("[%s] Error creating request: %v", tc.ProcessID, err)
-		return
-	}
-	req = req.WithContext(ctx)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[%s] Error executing request: %v", tc.ProcessID, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	scanner := bufio.NewScanner(resp.Body)
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
-
-	// Canal para manejar el timeout de lectura
-	readDone := make(chan struct{})
+	// 5. Leer la salida del proceso en un goroutine
+	doneReading := make(chan struct{})
 	go func() {
-		defer close(readDone)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.HasPrefix(line, "data: ") {
-				data := strings.TrimPrefix(line, "data: ")
-				log.Printf("[%s] Process output: %s", tc.ProcessID, data)
+		defer close(doneReading)
+		for {
+			// Salir si el contexto se cerró
+			select {
+			case <-ctx.Done():
+				log.Printf("[%s] Context canceled: %v", tc.ProcessID, ctx.Err())
+				return
+			default:
 			}
+
+			// Leer siguiente mensaje del WebSocket
+			msgType, msg, err := conn.ReadMessage()
+			if err != nil {
+				log.Printf("[%s] Error reading WebSocket message: %v", tc.ProcessID, err)
+				return
+			}
+			if msgType == websocket.CloseMessage {
+				log.Printf("[%s] Received close message", tc.ProcessID)
+				return
+			}
+
+			// Interpretar el JSON
+			var data map[string]interface{}
+			if err := json.Unmarshal(msg, &data); err != nil {
+				log.Printf("[%s] Error parsing JSON: %v", tc.ProcessID, err)
+				return
+			}
+
+			// Si el mensaje contiene "done": true, terminar
+			if doneVal, ok := data["done"].(bool); ok && doneVal {
+				exitCode := data["exit_code"]
+				msgStr := data["message"]
+				log.Printf("[%s] Process finished. exit_code=%v, message=%v", tc.ProcessID, exitCode, msgStr)
+				return
+			}
+
+			// Procesar la salida
+			log.Printf("[%s] Process output: %s", tc.ProcessID, string(msg))
 		}
 	}()
 
+	// Esperar a que termine la lectura o se venza el context
 	select {
 	case <-ctx.Done():
-		log.Printf("[%s] Process monitoring cancelled", tc.ProcessID)
+		log.Printf("[%s] runProcess context done", tc.ProcessID)
 		return
-	case <-readDone:
-		if err := scanner.Err(); err != nil {
-			log.Printf("[%s] Error reading output: %v", tc.ProcessID, err)
-		}
+	case <-doneReading:
 		return
 	}
 }
 
-// Agregar estas funciones helper
+// --------------------------------------------------------------------------
+// TEST: /stop -> Endpoint HTTP normal para detener el proceso
+// --------------------------------------------------------------------------
+func TestStopProcess(t *testing.T) {
+	// Aquí un ejemplo sencillo. Ajusta según tus necesidades reales.
+	processID := "echo-basic"
+
+	reqBody := RequestBody{
+		RemoteProcessServerAddress: serverAddr,
+		ProcessID:                  processID,
+		Timeout:                    10 * time.Second,
+	}
+
+	url := fmt.Sprintf("%s/stop", apiBaseURL)
+	bodyBuf := createJSONBody(reqBody)
+	req, err := http.NewRequest("POST", url, bodyBuf)
+	if err != nil {
+		t.Fatalf("Error creating stop request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("JWT_TOKEN")))
+
+	client := &http.Client{Timeout: 25 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Error executing stop request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Unexpected status code: got %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	// Podrías leer el body para verificar "success", "message", etc.
+	log.Printf("Process %s stopped successfully", processID)
+	log.Printf("Response: %v", resp)
+}
+
+// ==================================
+// Helpers
+// ==================================
+
+// sendJSONWebSocket serializa y envía un objeto como mensaje de texto WebSocket
+func sendJSONWebSocket(conn *websocket.Conn, data interface{}) error {
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshal error: %w", err)
+	}
+	return conn.WriteMessage(websocket.TextMessage, payload)
+}
+
 func createJSONBody(reqBody RequestBody) *bytes.Buffer {
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {

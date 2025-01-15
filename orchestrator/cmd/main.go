@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -16,6 +15,8 @@ import (
 
 	"dev.rubentxu.devops-platform/orchestrator/config"
 	remote_process_client "dev.rubentxu.devops-platform/orchestrator/internal/adapters/grpc"
+
+	"github.com/gorilla/websocket"
 )
 
 // Configuración del cliente
@@ -27,6 +28,7 @@ type Config struct {
 }
 
 // RequestBody define la estructura del JSON que se recibirá
+// (se usará en los mensajes WebSocket)
 type RequestBody struct {
 	RemoteProcessServerAddress string            `json:"remote_process_server_address"`
 	Command                    []string          `json:"command,omitempty"`
@@ -37,7 +39,22 @@ type RequestBody struct {
 	Timeout                    time.Duration     `json:"timeout,omitempty"`
 }
 
+// (Opcional) Podrías definir structs distintos si cada endpoint WS
+// tiene distintos campos. Por ejemplo, para métricas:
+type MetricsRequest struct {
+	WorkerID    string   `json:"worker_id"`
+	Interval    int64    `json:"interval"`
+	MetricTypes []string `json:"metric_types"`
+}
+
+// Variable global para el cliente gRPC
 var client *remote_process_client.Client
+
+// Upgrader de Gorilla para convertir la conexión HTTP a WebSocket
+var upgrader = websocket.Upgrader{
+	// Permitir todas las conexiones. Ajusta si necesitas validaciones extra.
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
 
 func main() {
 	http.HandleFunc("/run", runHandler)
@@ -46,6 +63,7 @@ func main() {
 	http.HandleFunc("/stop", stopHandler)
 	http.HandleFunc("/metrics", metricsHandler)
 
+	// Iniciar servidor HTTP en un goroutine
 	go func() {
 		if err := http.ListenAndServe(":8080", nil); err != nil {
 			log.Fatalf("Failed to start server: %v", err)
@@ -66,88 +84,34 @@ func main() {
 		JWTToken:      grpcConfig.JWTToken,
 	}
 
-	client, err := remote_process_client.New(clientConfig)
+	var err error
+	client, err = remote_process_client.New(clientConfig)
 	if err != nil {
 		log.Fatalf("Failed to create gRPC client: %v", err)
 	}
 	defer client.Close()
 }
 
+// ==========================================================================
+// 1. /run -> Iniciar un proceso remoto y transmitir su salida vía WebSockets
+// ==========================================================================
 func runHandler(w http.ResponseWriter, r *http.Request) {
-	var reqBody RequestBody
-	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-		sendJSONError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request body: %v", err))
-		return
-	}
-
-	// Crear configuración del cliente con los valores por defecto de TLS
-	clientConfig := &remote_process_client.ClientConfig{
-		ServerAddress: reqBody.RemoteProcessServerAddress,
-		ClientCert:    config.LoadGRPCConfig().ClientCert, // Usar certificados configurados
-		ClientKey:     config.LoadGRPCConfig().ClientKey,
-		CACert:        config.LoadGRPCConfig().CACert,
-		JWTToken:      config.LoadGRPCConfig().JWTToken,
-	}
-
-	var err error
-	client, err = remote_process_client.New(clientConfig)
+	// 1. Convertir la conexión HTTP en WebSocket
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		sendJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create gRPC client: %v", err))
+		log.Printf("Error upgrading to websocket: %v", err)
 		return
 	}
-	defer client.Close()
+	defer conn.Close()
 
-	// Configurar contexto con timeout si se especifica
-	ctx := r.Context()
-	if reqBody.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, reqBody.Timeout)
-		defer cancel()
-	}
-
-	// Configurar headers para SSE
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	// Crear canal para la salida del proceso
-	outputChan := make(chan *pb.ProcessOutput)
-	defer close(outputChan)
-
-	// Iniciar el proceso en una goroutine
-	go func() {
-		err := client.StartProcess(ctx, reqBody.ProcessID, reqBody.Command, reqBody.Env, reqBody.WorkingDirectory, outputChan)
-		if err != nil {
-			log.Printf("Error starting process: %v", err)
-			// Enviar error al cliente a través de SSE
-			event := fmt.Sprintf("data: {\"error\": \"%v\"}\n\n", err)
-			if _, err := fmt.Fprint(w, event); err != nil {
-				log.Printf("Error sending error event: %v", err)
-			}
-			w.(http.Flusher).Flush()
-			return
-		}
-	}()
-
-	// Enviar la salida del proceso al cliente a través de SSE
-	for output := range outputChan {
-		event := fmt.Sprintf("data: {\"output\": \"%s\", \"is_error\": %v}\n\n", output.Output, output.IsError)
-		if _, err := fmt.Fprint(w, event); err != nil {
-			log.Printf("Error sending event: %v", err)
-			return
-		}
-		w.(http.Flusher).Flush()
-	}
-}
-
-func workerHealthHandler(w http.ResponseWriter, r *http.Request) {
+	// 2. Leer la configuración (RequestBody) del PRIMER mensaje WebSocket
 	var reqBody RequestBody
-	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-		sendJSONError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request body: %v", err))
+	if err := conn.ReadJSON(&reqBody); err != nil {
+		_ = sendJSONErrorWebSocket(conn, fmt.Sprintf("Invalid first message: %v", err))
 		return
 	}
 
-	// Crear configuración del cliente con los valores por defecto de TLS
+	// 3. Crear una nueva configuración del cliente gRPC basado en el request
 	clientConfig := &remote_process_client.ClientConfig{
 		ServerAddress: reqBody.RemoteProcessServerAddress,
 		ClientCert:    config.LoadGRPCConfig().ClientCert,
@@ -155,16 +119,14 @@ func workerHealthHandler(w http.ResponseWriter, r *http.Request) {
 		CACert:        config.LoadGRPCConfig().CACert,
 		JWTToken:      config.LoadGRPCConfig().JWTToken,
 	}
-
-	var err error
-	client, err = remote_process_client.New(clientConfig)
+	c, err := remote_process_client.New(clientConfig)
 	if err != nil {
-		sendJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create gRPC client: %v", err))
+		_ = sendJSONErrorWebSocket(conn, fmt.Sprintf("Failed to create gRPC client: %v", err))
 		return
 	}
-	defer client.Close()
+	defer c.Close()
 
-	// Configurar contexto con timeout si se especifica
+	// 4. Configurar contexto con timeout si se especifica
 	ctx := r.Context()
 	if reqBody.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -172,75 +134,143 @@ func workerHealthHandler(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 	}
 
-	// Configurar headers para SSE
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
+	// 5. Canal para la salida del proceso
+	outputChan := make(chan *pb.ProcessOutput)
+	defer close(outputChan)
 
-	// Crear el canal con buffer para evitar bloqueos
-	healthChan := make(chan *pb.HealthStatus, 1)
-	defer close(healthChan)
+	// 6. Iniciar el proceso en una goroutine
+	go func() {
+		err := c.StartProcess(ctx, reqBody.ProcessID, reqBody.Command, reqBody.Env, reqBody.WorkingDirectory, outputChan)
+		if err != nil {
+			log.Printf("Error starting process: %v", err)
+			_ = sendJSONErrorWebSocket(conn, fmt.Sprintf("Error starting process: %v", err))
+			return
+		}
+	}()
 
-	if err := client.MonitorHealth(ctx, reqBody.ProcessID, reqBody.CheckInterval, healthChan); err != nil {
-		sendJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to start health monitoring: %v", err))
+	// 7. Leer del canal y enviar por WebSocket
+	for output := range outputChan {
+		data := map[string]interface{}{
+			"output":   output.Output,
+			"is_error": output.IsError,
+		}
+		if err := conn.WriteJSON(data); err != nil {
+			log.Printf("Error sending WebSocket message: %v", err)
+			return
+		}
+	}
+
+	// 8. CUANDO el proceso finaliza, enviar un mensaje final “done”
+	doneMsg := map[string]interface{}{
+		"done":      true, // Indicador de finalización
+		"exit_code": 0,    // Si lo conoces o deseas retornarlo
+		"message":   "Process completed successfully",
+	}
+	if err := conn.WriteJSON(doneMsg); err != nil {
+		log.Printf("Error sending done message: %v", err)
+	}
+
+	// (Opcional) Enviar un CloseMessage indicando cierre normal
+	_ = conn.WriteMessage(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Process finished"),
+	)
+}
+
+// ====================================================================
+// 2. /health/worker -> Monitorizar la salud de un proceso vía WebSockets
+// ====================================================================
+func workerHealthHandler(w http.ResponseWriter, r *http.Request) {
+	// (A) Upgradear conexión a WebSocket
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("Error upgrading to websocket: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	// (B) Leer RequestBody en el primer mensaje WS
+	var reqBody RequestBody
+	if err := conn.ReadJSON(&reqBody); err != nil {
+		_ = sendJSONErrorWebSocket(conn, fmt.Sprintf("Invalid first message: %v", err))
 		return
 	}
 
-	// Enviar actualizaciones de estado al cliente a través de SSE
-	for healthStatus := range healthChan {
-		event := fmt.Sprintf("data: {\"process_id\": \"%s\", \"is_running\": %v, \"status\": \"%s\", \"is_healthy\": %v}\n\n",
-			healthStatus.ProcessId,
-			healthStatus.IsRunning,
-			healthStatus.Status,
-			healthStatus.IsHealthy)
+	// (C) Crear cliente gRPC
+	clientConfig := &remote_process_client.ClientConfig{
+		ServerAddress: reqBody.RemoteProcessServerAddress,
+		ClientCert:    config.LoadGRPCConfig().ClientCert,
+		ClientKey:     config.LoadGRPCConfig().ClientKey,
+		CACert:        config.LoadGRPCConfig().CACert,
+		JWTToken:      config.LoadGRPCConfig().JWTToken,
+	}
+	c, err := remote_process_client.New(clientConfig)
+	if err != nil {
+		_ = sendJSONErrorWebSocket(conn, fmt.Sprintf("Failed to create gRPC client: %v", err))
+		return
+	}
+	defer c.Close()
 
-		if _, err := fmt.Fprint(w, event); err != nil {
-			log.Printf("Error sending health event: %v", err)
+	// (D) Contexto con timeout
+	ctx := r.Context()
+	if reqBody.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, reqBody.Timeout)
+		defer cancel()
+	}
+
+	// (E) Crear canal
+	healthChan := make(chan *pb.HealthStatus, 1)
+	defer close(healthChan)
+
+	// (F) Iniciar monitor de salud
+	if err := c.MonitorHealth(ctx, reqBody.ProcessID, reqBody.CheckInterval, healthChan); err != nil {
+		_ = sendJSONErrorWebSocket(conn, fmt.Sprintf("Failed to start health monitoring: %v", err))
+		return
+	}
+
+	// (G) Leer actualizaciones y enviarlas por WS
+	for healthStatus := range healthChan {
+		data := map[string]interface{}{
+			"process_id": healthStatus.ProcessId,
+			"is_running": healthStatus.IsRunning,
+			"status":     healthStatus.Status,
+			"is_healthy": healthStatus.IsHealthy,
+		}
+		if err := conn.WriteJSON(data); err != nil {
+			log.Printf("Error sending WebSocket message: %v", err)
 			return
 		}
-		w.(http.Flusher).Flush()
 	}
 }
 
+// ===============================================
+// 3. /health -> Health check simple vía HTTP (no WS)
+// ===============================================
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Determinar si es un health check del worker o de la aplicación
-
 	status := map[string]interface{}{
 		"timestamp": time.Now(),
+		"status":    "up",
+		"service":   "orchestrator",
 	}
-
-	// Health check de la aplicación
-	status["status"] = "up"
-	status["service"] = "orchestrator"
 	w.WriteHeader(http.StatusOK)
 
 	json.NewEncoder(w).Encode(status)
 }
 
-func handleSignals() {
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	select {
-	case <-sigCh:
-		log.Println("Signal received, shutting down...")
-		if client != nil {
-			client.Close()
-		}
-		os.Exit(0)
-	}
-}
-
+// ====================================================================
+// 4. /stop -> Detener un proceso remoto (respuesta simple vía HTTP)
+// ====================================================================
 func stopHandler(w http.ResponseWriter, r *http.Request) {
+	// Se mantiene como HTTP normal
 	var reqBody RequestBody
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
 		sendJSONError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request body: %v", err))
 		return
 	}
 
-	// Crear configuración del cliente con los valores por defecto de TLS
 	clientConfig := &remote_process_client.ClientConfig{
 		ServerAddress: reqBody.RemoteProcessServerAddress,
 		ClientCert:    config.LoadGRPCConfig().ClientCert,
@@ -249,15 +279,13 @@ func stopHandler(w http.ResponseWriter, r *http.Request) {
 		JWTToken:      config.LoadGRPCConfig().JWTToken,
 	}
 
-	var err error
-	client, err = remote_process_client.New(clientConfig)
+	c, err := remote_process_client.New(clientConfig)
 	if err != nil {
 		sendJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create gRPC client: %v", err))
 		return
 	}
-	defer client.Close()
+	defer c.Close()
 
-	// Configurar contexto con timeout si se especifica
 	ctx := r.Context()
 	if reqBody.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -265,13 +293,12 @@ func stopHandler(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 	}
 
-	success, message, err := client.StopProcess(ctx, reqBody.ProcessID)
+	success, message, err := c.StopProcess(ctx, reqBody.ProcessID)
 	if err != nil {
 		sendJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to stop process: %v", err))
 		return
 	}
 
-	// Enviar respuesta JSON
 	w.Header().Set("Content-Type", "application/json")
 	response := struct {
 		Success bool   `json:"success"`
@@ -286,24 +313,26 @@ func stopHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ===========================================================================
+// 5. /metrics -> Stream de métricas del worker vía WebSockets (con primer mensaje)
+// ===========================================================================
 func metricsHandler(w http.ResponseWriter, r *http.Request) {
-	// Configurar headers para SSE
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	// Obtener parámetros
-	workerID := r.URL.Query().Get("worker_id")
-	intervalStr := r.URL.Query().Get("interval")
-	metricTypes := r.URL.Query()["metric_types"]
-
-	interval, err := strconv.ParseInt(intervalStr, 10, 64)
+	// (A) Upgradear a WebSocket
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		interval = 1 // valor por defecto
+		log.Printf("Error upgrading to websocket: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	// (B) Leer la config para métricas desde el PRIMER mensaje WS
+	var req MetricsRequest
+	if err := conn.ReadJSON(&req); err != nil {
+		_ = sendJSONErrorWebSocket(conn, fmt.Sprintf("Invalid first message: %v", err))
+		return
 	}
 
-	// Crear cliente gRPC si no existe
+	// (C) Crear cliente gRPC si no existe
 	if client == nil {
 		clientConfig := &remote_process_client.ClientConfig{
 			ServerAddress: config.LoadGRPCConfig().ServerAddress,
@@ -316,59 +345,82 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 		var err error
 		client, err = remote_process_client.New(clientConfig)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to create gRPC client: %v", err), http.StatusInternalServerError)
+			_ = sendJSONErrorWebSocket(conn, fmt.Sprintf("Failed to create gRPC client: %v", err))
 			return
 		}
 	}
 
-	// Crear canal para métricas
+	// (D) Si Interval = 0, establecer un default
+	interval := req.Interval
+	if interval == 0 {
+		interval = 1
+	}
+
+	// Crear canales
 	metricsChan := make(chan *pb.WorkerMetrics)
 	errChan := make(chan error, 1)
 
-	// Iniciar streaming de métricas
+	// (E) Iniciar streaming de métricas
 	go func() {
 		defer close(metricsChan)
 		defer close(errChan)
 
-		err := client.StreamMetrics(r.Context(), workerID, metricTypes, interval, metricsChan)
+		err := client.StreamMetrics(
+			r.Context(),
+			req.WorkerID,
+			req.MetricTypes,
+			interval,
+			metricsChan,
+		)
 		if err != nil {
 			errChan <- err
 			return
 		}
 	}()
 
-	// Flusher para SSE
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	// Enviar métricas como eventos SSE
+	// (F) Leer en bucle y reenviar al cliente
 	for {
 		select {
-		case err := <-errChan:
-			fmt.Fprintf(w, "data: {\"error\": \"%v\"}\n\n", err)
-			flusher.Flush()
+		case e := <-errChan:
+			if e != nil {
+				_ = sendJSONErrorWebSocket(conn, fmt.Sprintf("Error streaming metrics: %v", e))
+			}
 			return
 		case metrics, ok := <-metricsChan:
 			if !ok {
+				// Canal cerrado => se terminó el streaming
 				return
 			}
-			// Convertir métricas a JSON
-			data, err := json.Marshal(metrics)
-			if err != nil {
-				continue
+			if err := conn.WriteJSON(metrics); err != nil {
+				log.Printf("Error sending WebSocket message: %v", err)
+				return
 			}
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
 		case <-r.Context().Done():
 			return
 		}
 	}
 }
 
-// Función auxiliar para enviar errores JSON
+// ============================================================
+// Función para manejar señales del sistema (SIGINT, SIGTERM)
+// ============================================================
+func handleSignals() {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case <-sigCh:
+		log.Println("Signal received, shutting down...")
+		if client != nil {
+			client.Close()
+		}
+		os.Exit(0)
+	}
+}
+
+// =======================================
+// Utilidades para enviar errores en JSON
+// =======================================
 func sendJSONError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -380,4 +432,12 @@ func sendJSONError(w http.ResponseWriter, status int, message string) {
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("Error encoding error response: %v", err)
 	}
+}
+
+// Versión para WebSocket
+func sendJSONErrorWebSocket(conn *websocket.Conn, message string) error {
+	data := map[string]interface{}{
+		"error": message,
+	}
+	return conn.WriteJSON(data)
 }

@@ -1,27 +1,28 @@
 package integration
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // MetricsTestCase define la estructura para casos de prueba de métricas
 type MetricsTestCase struct {
-	Name          string   `json:"name"`
-	WorkerID      string   `json:"worker_id"`
-	MetricTypes   []string `json:"metric_types"`
+	Name          string
+	WorkerID      string
+	MetricTypes   []string
 	Duration      time.Duration
 	CheckInterval int64
 }
 
+// Lista de casos de prueba
 var MetricsTestCases = []MetricsTestCase{
 	{
 		Name:          "Basic CPU Metrics",
@@ -67,8 +68,16 @@ var MetricsTestCases = []MetricsTestCase{
 	},
 }
 
+// MetricsRequest se utilizará para enviar la configuración como primer mensaje
+type MetricsRequest struct {
+	WorkerID    string   `json:"worker_id"`
+	Interval    int64    `json:"interval"`
+	MetricTypes []string `json:"metric_types"`
+}
+
+// TestMetricsCollection ejecuta todos los casos de prueba de métricas
 func TestMetricsCollection(t *testing.T) {
-	// Esperar a que el servidor esté listo
+	// Asegurar que el servidor esté listo
 	if err := waitForServer(t); err != nil {
 		t.Fatalf("Server not ready: %v", err)
 	}
@@ -81,11 +90,13 @@ func TestMetricsCollection(t *testing.T) {
 			metricsChan := make(chan map[string]interface{}, 100)
 			errChan := make(chan error, 1)
 
-			go collectMetrics(ctx, tc, metricsChan, errChan)
+			go collectMetricsWS(ctx, tc, metricsChan, errChan, t)
 
 			var metricsCount int
+			// Mínimo de muestras esperadas (aprox.) de acuerdo al intervalo
 			expectedMinCount := int(tc.Duration.Seconds() / float64(tc.CheckInterval))
 
+			// Bucle para leer los datos que llegan por metricsChan
 			for {
 				select {
 				case err := <-errChan:
@@ -93,9 +104,10 @@ func TestMetricsCollection(t *testing.T) {
 					return
 				case metrics, ok := <-metricsChan:
 					if !ok {
-						// Canal cerrado, verificar resultados
+						// Canal cerrado => fin de la recepción
 						if metricsCount < expectedMinCount {
-							t.Errorf("Expected at least %d metrics updates, got %d", expectedMinCount, metricsCount)
+							t.Errorf("Expected at least %d metrics updates, got %d",
+								expectedMinCount, metricsCount)
 						}
 						return
 					}
@@ -110,87 +122,113 @@ func TestMetricsCollection(t *testing.T) {
 	}
 }
 
-func collectMetrics(ctx context.Context, tc MetricsTestCase, metricsChan chan<- map[string]interface{}, errChan chan<- error) {
+// collectMetricsWS se conecta vía WebSocket a /metrics, envía la configuración
+// como primer mensaje, y lee continuamente las actualizaciones de métricas.
+func collectMetricsWS(
+	ctx context.Context,
+	tc MetricsTestCase,
+	metricsChan chan<- map[string]interface{},
+	errChan chan<- error,
+	t *testing.T,
+) {
 	defer close(metricsChan)
 
-	url := fmt.Sprintf("%s/metrics?worker_id=%s&interval=%d", apiBaseURL, tc.WorkerID, tc.CheckInterval)
-	for _, metricType := range tc.MetricTypes {
-		url += fmt.Sprintf("&metric_types=%s", metricType)
-	}
+	// (1) URL base para WebSocket (sin query string)
+	wsURL := fmt.Sprintf("%s/metrics", wsBaseURL)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	// (2) Crear el dialer
+	dialer := &websocket.Dialer{}
+
+	// (3) Cabeceras para la conexión
+	headers := http.Header{}
+	headers.Set("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("JWT_TOKEN")))
+
+	// (4) Establecer la conexión WebSocket
+	conn, resp, err := dialer.Dial(wsURL, headers)
 	if err != nil {
-		errChan <- fmt.Errorf("error creating request: %w", err)
+		errChan <- fmt.Errorf("error making websocket dial: %w", err)
+		return
+	}
+	defer conn.Close()
+
+	// Verificar handshake (opcional)
+	if resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
+		errChan <- fmt.Errorf("server did not switch protocols; status=%d", resp.StatusCode)
 		return
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("JWT_TOKEN")))
-	req.Header.Set("Accept", "text/event-stream")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		errChan <- fmt.Errorf("error making request: %w", err)
+	// (5) Enviar la configuración de métricas como primer mensaje
+	req := MetricsRequest{
+		WorkerID:    tc.WorkerID,
+		Interval:    tc.CheckInterval,
+		MetricTypes: tc.MetricTypes,
+	}
+	if err := sendJSONWebSocket(conn, req); err != nil {
+		errChan <- fmt.Errorf("error sending first message: %w", err)
 		return
 	}
-	defer resp.Body.Close()
 
-	scanner := bufio.NewScanner(resp.Body)
-	const maxScannerSize = 10 * 1024 * 1024 // 10MB
-	buf := make([]byte, maxScannerSize)
-	scanner.Buffer(buf, maxScannerSize)
-
-	scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
-		if atEOF && len(data) == 0 {
-			return 0, nil, nil
-		}
-
-		if i := bytes.Index(data, []byte("\n\n")); i >= 0 {
-			return i + 2, data[0:i], nil
-		}
-
-		if atEOF {
-			return len(data), data, nil
-		}
-
-		return 0, nil, nil
-	})
-
-	for scanner.Scan() {
+	// (6) Leer en bucle hasta que se cancele el contexto
+	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			line := scanner.Text()
-			var metricsData string
-			for _, l := range strings.Split(line, "\n") {
-				if strings.HasPrefix(l, "data: ") {
-					metricsData = strings.TrimPrefix(l, "data: ")
-					break
-				}
+			// Leer siguiente mensaje
+			msgType, msg, err := conn.ReadMessage()
+			if err != nil {
+				// Error típico al cerrar la conexión
+				errChan <- fmt.Errorf("error reading websocket message: %w", err)
+				return
 			}
 
-			if metricsData == "" {
-				continue
+			if msgType == websocket.CloseMessage {
+				log.Printf("[metrics] Server closed the connection.")
+				return
 			}
 
+			// Mensaje en formato JSON
 			var metrics map[string]interface{}
-			if err := json.Unmarshal([]byte(metricsData), &metrics); err != nil {
-				errChan <- fmt.Errorf("error parsing metrics data: %w", err)
+			if err := json.Unmarshal(msg, &metrics); err != nil {
+				errChan <- fmt.Errorf("error parsing JSON metrics: %w", err)
 				continue
 			}
 
+			// Enviar al canal principal
 			metricsChan <- metrics
 		}
 	}
+}
 
-	if err := scanner.Err(); err != nil {
-		errChan <- fmt.Errorf("error reading metrics stream: %w", err)
+// waitForServer -> Health check HTTP (como en tu código original)
+func waitForServer(t *testing.T) error {
+	timeout := time.After(30 * time.Second)
+	tick := time.Tick(1 * time.Second)
+
+	url := fmt.Sprintf("%s/health", apiBaseURL)
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("timeout waiting for server")
+		case <-tick:
+			resp, err := http.Get(url)
+			if err == nil && resp.StatusCode == http.StatusOK {
+				resp.Body.Close()
+				return nil
+			}
+			if resp != nil {
+				resp.Body.Close()
+			}
+		}
 	}
 }
 
+// validateMetrics y las funciones de validación específicas se conservan.
+// No requieren cambios, siempre que la estructura JSON recibida sea la misma.
 func validateMetrics(t *testing.T, metricTypes []string, metrics map[string]interface{}) {
 	t.Logf("\n Metrics Update:")
+
 	// Mostrar todas las claves disponibles para depuración
 	var keys []string
 	for k := range metrics {
@@ -200,8 +238,8 @@ func validateMetrics(t *testing.T, metricTypes []string, metrics map[string]inte
 
 	// Mapa de nombres de métricas
 	metricTypeMap := map[string]string{
-		"disk":    "disks",    // El tipo disk se mapea a disks en la respuesta
-		"network": "networks", // El tipo network se mapea a networks en la respuesta
+		"disk":    "disks",
+		"network": "networks",
 		"cpu":     "cpu",
 		"memory":  "memory",
 		"system":  "system",
@@ -210,11 +248,10 @@ func validateMetrics(t *testing.T, metricTypes []string, metrics map[string]inte
 	}
 
 	for _, metricType := range metricTypes {
-		// Obtener el nombre correcto de la métrica
 		actualMetricType := metricTypeMap[metricType]
 		metric, ok := metrics[actualMetricType]
 		if !ok {
-			t.Errorf("Expected metric type %s (mapped to %s) not found in response. Available types: %v",
+			t.Errorf("Expected metric type %s (mapped to %s) not found. Available types: %v",
 				metricType, actualMetricType, keys)
 			continue
 		}
@@ -238,6 +275,20 @@ func validateMetrics(t *testing.T, metricTypes []string, metrics map[string]inte
 	}
 	t.Log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 }
+
+// Resto de validaciones (validateCPUMetrics, validateMemoryMetrics, etc.)
+// se mantienen exactamente como antes, sin cambios:
+//
+// func validateCPUMetrics(t *testing.T, metric interface{}) { ... }
+// func validateMemoryMetrics(t *testing.T, metric interface{}) { ... }
+// func validateDiskMetrics(t *testing.T, metric interface{}) { ... }
+// func validateNetworkMetrics(t *testing.T, metric interface{}) { ... }
+// func validateSystemMetrics(t *testing.T, metric interface{}) { ... }
+// func validateProcessMetrics(t *testing.T, metric interface{}) { ... }
+// func validateIOMetrics(t *testing.T, metric interface{}) { ... }
+//
+// Igualmente, las funciones auxiliares getFloat64Value(...) y formatBytes(...)
+// no cambian, ya que todo se mantiene en JSON.
 
 // Funciones de validación específicas para cada tipo de métrica
 func validateCPUMetrics(t *testing.T, metric interface{}) {
@@ -582,28 +633,5 @@ func validateIOMetrics(t *testing.T, metric interface{}) {
 	t.Logf("     Active Requests: %v", io["active_requests"])
 	if queueLen, ok := io["queue_length"]; ok {
 		t.Logf("     Queue Length: %.2f", queueLen)
-	}
-}
-
-func waitForServer(t *testing.T) error {
-	timeout := time.After(30 * time.Second)
-	tick := time.Tick(1 * time.Second)
-
-	url := fmt.Sprintf("%s/health", apiBaseURL)
-
-	for {
-		select {
-		case <-timeout:
-			return fmt.Errorf("timeout waiting for server")
-		case <-tick:
-			resp, err := http.Get(url)
-			if err == nil && resp.StatusCode == http.StatusOK {
-				resp.Body.Close()
-				return nil
-			}
-			if resp != nil {
-				resp.Body.Close()
-			}
-		}
 	}
 }
