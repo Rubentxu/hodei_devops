@@ -14,8 +14,8 @@ import (
 
 	pb "dev.rubentxu.devops-platform/protos/remote_process"
 
-	"dev.rubentxu.devops-platform/orchestrator/config"
-	remote_process_client "dev.rubentxu.devops-platform/orchestrator/internal/adapters/grpc"
+	"dev.rubentxu.devops-platform/worker/config"
+	remote_process_client "dev.rubentxu.devops-platform/worker/internal/adapters/grpc"
 )
 
 // Configuración del cliente

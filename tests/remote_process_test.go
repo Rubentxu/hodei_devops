@@ -14,18 +14,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Variables para URLs base
-var (
-	// Endpoints HTTP normales (ej: /stop, /health)
-	apiBaseURL = "http://localhost:8080"
-
-	// Endpoints WebSocket (ej: /run, /metrics, /health/worker)
-	wsBaseURL = "ws://localhost:8080"
-
-	// Dirección del servidor gRPC (interna)
-	serverAddr = "localhost:50051"
-)
-
 // --------------------------------------------------------------------------
 // Estructuras de datos para las pruebas
 // --------------------------------------------------------------------------

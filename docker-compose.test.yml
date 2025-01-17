@@ -2,12 +2,12 @@ services:
   remote-process:
     build:
       context: .
-      dockerfile: build/server/Dockerfile
+      dockerfile: build/remote_process/Dockerfile
     ports:
       - "50051:50051"
     environment:
-      - SERVER_CERT_PATH=/certs/server-cert.pem
-      - SERVER_KEY_PATH=/certs/server-key.pem
+      - SERVER_CERT_PATH=/certs/remote_process-cert.pem
+      - SERVER_KEY_PATH=/certs/remote_process-key.pem
       - CA_CERT_PATH=/certs/ca-cert.pem
       - APPLICATION_PORT=50051
       - JWT_SECRET=${JWT_SECRET}
@@ -20,15 +20,15 @@ services:
       timeout: 5s
       retries: 2
 
-  orchestrator:
+  worker:
     build:
       context: .
-      dockerfile: build/client/Dockerfile
+      dockerfile: build/worker/Dockerfile
     ports:
       - "8080:8080"
     environment:
-      - CLIENT_CERT_PATH=/certs/client-cert.pem
-      - CLIENT_KEY_PATH=/certs/client-key.pem
+      - CLIENT_CERT_PATH=/certs/worker-cert.pem
+      - CLIENT_KEY_PATH=/certs/worker-key.pem
       - CA_CERT_PATH=/certs/ca-cert.pem
       - HTTP_PORT=8080
       - GRPC_SERVER=remote-process:50051
@@ -52,9 +52,13 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - JWT_TOKEN=${JWT_TOKEN}
       - GRPC_SERVER_ADDRESS=remote-process:50051
-      - API_BASE_URL=http://orchestrator:8080
+      - API_BASE_URL=http://worker:8080
+      - WS_BASE_URL=ws://worker:8080
     volumes:
       - ./certs/dev:/certs:ro
     depends_on:
-      orchestrator:
+      worker:
         condition: service_healthy
+      remote-process:
+        condition: service_healthy
+

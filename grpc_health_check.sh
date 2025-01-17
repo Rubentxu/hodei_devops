@@ -1,16 +1,20 @@
 #!/bin/sh
-# instalar grpcurl
+
+# Instalar grpcurl (si es necesario)
 # go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
+
+# Configurar la URL del servidor gRPC desde una variable de entorno con un valor predeterminado
+GRPC_SERVER_ADDRESS=${GRPC_SERVER_ADDRESS:-"localhost:50051"}
 
 echo "Checking gRPC health status"
 echo "JWT_TOKEN: ${JWT_TOKEN}"
+echo "GRPC_SERVER_ADDRESS: ${GRPC_SERVER_ADDRESS}"
 ls -la /certs
 
 grpcurl \
   -d '{}' \
   -rpc-header "authorization: Bearer ${JWT_TOKEN}" \
   -cacert /certs/ca-cert.pem \
-  -cert /certs/client-cert.pem \
-  -key /certs/client-key.pem \
-  localhost:50051 grpc.health.v1.Health/Check || exit 1
-
+  -cert /certs/worker-cert.pem \
+  -key /certs/worker-key.pem \
+  ${GRPC_SERVER_ADDRESS} grpc.health.v1.Health/Check || exit 1

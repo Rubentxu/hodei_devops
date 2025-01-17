@@ -1,6 +1,34 @@
 package integration
 
-import "time"
+import (
+	"os"
+	"time"
+)
+
+// Variables para URLs base
+var (
+	// Endpoints HTTP normales (ej: /stop, /health)
+	apiBaseURL = getEnv("API_BASE_URL", "http://localhost:8080")
+
+	// Endpoints WebSocket (ej: /run, /metrics, /health/worker)
+	wsBaseURL = getEnv("WS_BASE_URL", "ws://localhost:8080")
+
+	// Dirección del servidor gRPC (interna)
+	serverAddr = getEnv("GRPC_SERVER_ADDRESS", "localhost:50051")
+)
+
+// --------------------------------------------------------------------------
+// Función helper para obtener variables de entorno con valores predeterminados
+// --------------------------------------------------------------------------
+
+// getEnv devuelve el valor de la variable de entorno si está definida;
+// de lo contrario, devuelve el valor predeterminado proporcionado.
+func getEnv(key, defaultValue string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return defaultValue
+}
 
 var ProcessTestCases = []ProcessTestCase{
 	// Tests básicos de conectividad y comunicación

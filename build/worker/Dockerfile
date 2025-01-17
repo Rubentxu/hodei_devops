@@ -9,7 +9,7 @@ RUN go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 
 # Copiar solo los archivos necesarios para la compilación
 COPY protos/ ./protos/
-COPY orchestrator/ ./orchestrator/
+COPY worker/ ./worker/
 
 # Generar código protobuf
 RUN protoc --go_out=. --go_opt=paths=source_relative \
@@ -20,11 +20,11 @@ RUN protoc --go_out=. --go_opt=paths=source_relative \
 WORKDIR /app/protos
 RUN go mod download
 
-WORKDIR /app/orchestrator
+WORKDIR /app/worker
 RUN go mod download
 
-WORKDIR /app/orchestrator
-RUN CGO_ENABLED=0 GOOS=linux go build -o /client cmd/main.go
+WORKDIR /app/worker
+RUN CGO_ENABLED=0 GOOS=linux go build -o /worker cmd/main.go
 
 # Runtime stage
 FROM alpine:3.18
@@ -34,7 +34,7 @@ RUN apk add --no-cache ca-certificates curl
 WORKDIR /app
 
 # Copiar el binario compilado
-COPY --from=builder /client .
+COPY --from=builder /worker .
 
 # Crear directorio para certificados
 RUN mkdir -p /certs
@@ -42,5 +42,5 @@ RUN mkdir -p /certs
 # Puerto HTTP
 EXPOSE 8080
 
-# Comando para ejecutar el cliente
-CMD ["./client"] 
+# Comando para ejecutar el workere
+CMD ["./worker"]

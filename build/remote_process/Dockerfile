@@ -23,9 +23,7 @@ RUN go mod download
 
 WORKDIR /app/remote_process
 RUN go mod download
-
-WORKDIR /app/remote_process
-RUN CGO_ENABLED=0 GOOS=linux go build -o /server cmd/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o /remote_process cmd/main.go
 
 
 # Runtime stage
@@ -42,7 +40,7 @@ RUN curl -L -o grpcurl.tar.gz https://github.com/fullstorydev/grpcurl/releases/d
 WORKDIR /app
 
 # Copiar el binario compilado
-COPY --from=builder /server .
+COPY --from=builder /remote_process .
 
 # Copiar el script de health check al contenedor
 COPY grpc_health_check.sh .
@@ -56,4 +54,4 @@ RUN mkdir -p /certs
 EXPOSE 50051
 
 # Comando para ejecutar el servidor
-CMD ["./server"]
+CMD ["./remote_process"]

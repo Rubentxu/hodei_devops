@@ -12,10 +12,10 @@ PROD_CERT_DIR := $(CERT_DIR)/prod
 # Nombres de archivos de certificados
 CA_KEY := ca-key.pem
 CA_CERT := ca-cert.pem
-SERVER_KEY := server-key.pem
-SERVER_CERT := server-cert.pem
-CLIENT_KEY := client-key.pem
-CLIENT_CERT := client-cert.pem
+SERVER_KEY := remote_process-key.pem
+SERVER_CERT := remote_process-cert.pem
+CLIENT_KEY := worker-key.pem
+CLIENT_CERT := worker-cert.pem
 
 # Modificar las variables JWT
 JWT_SECRET ?= "test_secret_key_for_development_1234567890"
@@ -38,21 +38,21 @@ proto:
 	          $(PROTO_FILE)
 
 .PHONY: test
-test: proto build run-server run-client
-	@sleep 2 # Espera a que el servidor y el cliente se inicien
+test: proto build run-remote_process run-worker
+	@sleep 2 # Espera a que el servidor y el workere se inicien
 	@echo "🧪 Ejecutando pruebas..."
 	@echo "🧪 Ejecutando pruebas shell..."
 	@bash $(TEST_SCRIPT)
 	
 
 .PHONY: test-go
-test-go: stop-server stop-client clean build run-server run-client
-	@sleep 5 # Increase sleep time to ensure the server starts
+test-go: stop-remote_process stop-worker clean build run-remote_process run-worker
+	@sleep 5 # Increase sleep time to ensure the remote_process starts
 	@echo "🧪 Ejecutando pruebas Go..."
 	@JWT_SECRET="$(JWT_SECRET)" JWT_TOKEN="$(JWT_TOKEN)" go test -v ./tests/...
 	@echo "✅ Pruebas Go completadas."
-	@$(MAKE) stop-server
-	@$(MAKE) stop-client
+	@$(MAKE) stop-remote_process
+	@$(MAKE) stop-worker
 
 .PHONY: test-integration
 test-integration:
@@ -63,25 +63,21 @@ test-integration:
 test-all: test test-integration
 
 .PHONY: clean
-clean: stop-server stop-client
+clean: stop-remote_process stop-worker
 	@echo "🧹 Limpiando binarios..."
-	rm -f bin/server bin/client
+	rm -f bin/remote_process bin/worker
 
 .PHONY: build
 build:
 	@echo "🏗️  Construyendo binarios..."
-	go build -o bin/server remote_process/cmd/main.go
-	go build -o bin/client orchestrator/cmd/main.go
+	go build -o bin/remote_process remote_process/cmd/main.go
+	go build -o bin/worker worker/cmd/main.go
 
 .PHONY: certs-dirs
 certs-dirs:
 	@echo "🔐 Creating certificate directories..."
 	@mkdir -p $(DEV_CERT_DIR) $(PROD_CERT_DIR)
 
-.PHONY: certs-dirs
-certs-dirs:
-	@echo "🔐 Creating certificate directories..."
-	@mkdir -p $(DEV_CERT_DIR) $(PROD_CERT_DIR)
 
 .PHONY: certs-dev
 certs-dev: certs-dirs
@@ -91,14 +87,14 @@ certs-dev: certs-dirs
 			-keyout $(DEV_CERT_DIR)/$(CA_KEY) \
 			-out $(DEV_CERT_DIR)/$(CA_CERT) \
 			-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=DevCA" \
-			-addext "subjectAltName = DNS:localhost,DNS:remote-process,DNS:orchestrator"; \
+			-addext "subjectAltName = DNS:localhost,DNS:remote-process,DNS:worker"; \
 		openssl genrsa -out $(DEV_CERT_DIR)/$(SERVER_KEY) 4096; \
 		openssl req -new -key $(DEV_CERT_DIR)/$(SERVER_KEY) \
-			-out $(DEV_CERT_DIR)/server.csr \
+			-out $(DEV_CERT_DIR)/remote_process.csr \
 			-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=remote-process"; \
-		echo "subjectAltName=DNS:localhost,DNS:remote-process,DNS:orchestrator" > $(DEV_CERT_DIR)/extfile.cnf; \
+		echo "subjectAltName=DNS:localhost,DNS:remote-process,DNS:worker" > $(DEV_CERT_DIR)/extfile.cnf; \
 		openssl x509 -req \
-			-in $(DEV_CERT_DIR)/server.csr \
+			-in $(DEV_CERT_DIR)/remote_process.csr \
 			-CA $(DEV_CERT_DIR)/$(CA_CERT) \
 			-CAkey $(DEV_CERT_DIR)/$(CA_KEY) \
 			-CAcreateserial \
@@ -107,10 +103,10 @@ certs-dev: certs-dirs
 			-extfile $(DEV_CERT_DIR)/extfile.cnf; \
 		openssl genrsa -out $(DEV_CERT_DIR)/$(CLIENT_KEY) 4096; \
 		openssl req -new -key $(DEV_CERT_DIR)/$(CLIENT_KEY) \
-			-out $(DEV_CERT_DIR)/client.csr \
-			-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=orchestrator"; \
+			-out $(DEV_CERT_DIR)/worker.csr \
+			-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=worker"; \
 		openssl x509 -req \
-			-in $(DEV_CERT_DIR)/client.csr \
+			-in $(DEV_CERT_DIR)/worker.csr \
 			-CA $(DEV_CERT_DIR)/$(CA_CERT) \
 			-CAkey $(DEV_CERT_DIR)/$(CA_KEY) \
 			-CAcreateserial \
@@ -129,43 +125,43 @@ k8s-secrets: certs-dev
 	@kubectl create secret tls grpc-tls-certs \
 		--cert=$(DEV_CERT_DIR)/$(SERVER_CERT) \
 		--key=$(DEV_CERT_DIR)/$(SERVER_KEY) \
-		--dry-run=client -o yaml > k8s/tls-secret.yaml
+		--dry-run=worker -o yaml > k8s/tls-secret.yaml
 	@kubectl create configmap grpc-ca-cert \
 		--from-file=ca.crt=$(DEV_CERT_DIR)/$(CA_CERT) \
-		--dry-run=client -o yaml > k8s/ca-configmap.yaml
+		--dry-run=worker -o yaml > k8s/ca-configmap.yaml
 	@echo "✅ Kubernetes secrets generated in k8s/"
 
-.PHONY: run-server
-run-server: build
-	@echo "🚀 Starting server with TLS and JWT in development mode..."
+.PHONY: run-remote_process
+run-remote_process: build
+	@echo "🚀 Starting remote_process with TLS and JWT in development mode..."
 	@SERVER_CERT_PATH=$(DEV_CERT_DIR)/$(SERVER_CERT) \
 	SERVER_KEY_PATH=$(DEV_CERT_DIR)/$(SERVER_KEY) \
 	CA_CERT_PATH=$(DEV_CERT_DIR)/$(CA_CERT) \
 	APPLICATION_PORT=50051 \
 	JWT_SECRET="$(JWT_SECRET)" \
 	ENV=development \
-	./bin/server > ./bin/server.log 2>&1 & echo $$! > ./bin/server.pid
+	./bin/remote_process > ./bin/remote_process.log 2>&1 & echo $$! > ./bin/remote_process.pid
 
 
-.PHONY: run-client
-run-client: build
-	@echo "🚀 Starting client with TLS and JWT in development mode..."
+.PHONY: run-worker
+run-worker: build
+	@echo "🚀 Starting worker with TLS and JWT in development mode..."
 	@CLIENT_CERT_PATH=$(DEV_CERT_DIR)/$(CLIENT_CERT) \
 	CLIENT_KEY_PATH=$(DEV_CERT_DIR)/$(CLIENT_KEY) \
 	CA_CERT_PATH=$(DEV_CERT_DIR)/$(CA_CERT) \
 	JWT_TOKEN="$(JWT_TOKEN)" \
-	./bin/client > ./bin/client.log 2>&1 & echo $$! > ./bin/client.pid
+	./bin/worker > ./bin/worker.log 2>&1 & echo $$! > ./bin/worker.pid
 
 .PHONY: test-tls
 test-tls: certs-dev
 	@echo "🧪 Testing TLS configuration..."
-	@echo "Testing server certificate:"
+	@echo "Testing remote_process certificate:"
 	@openssl x509 -in $(DEV_CERT_DIR)/$(SERVER_CERT) -text -noout | grep "Subject:"
-	@echo "Testing client certificate:"
+	@echo "Testing worker certificate:"
 	@openssl x509 -in $(DEV_CERT_DIR)/$(CLIENT_CERT) -text -noout | grep "Subject:"
-	@echo "Verifying server certificate against CA:"
+	@echo "Verifying remote_process certificate against CA:"
 	@openssl verify -CAfile $(DEV_CERT_DIR)/$(CA_CERT) $(DEV_CERT_DIR)/$(SERVER_CERT)
-	@echo "Verifying client certificate against CA:"
+	@echo "Verifying worker certificate against CA:"
 	@openssl verify -CAfile $(DEV_CERT_DIR)/$(CA_CERT) $(DEV_CERT_DIR)/$(CLIENT_CERT)
 
 .PHONY: clean-certs
@@ -194,22 +190,22 @@ help-certs:
 	@echo "  make test-tls         - Test TLS configuration"
 	@echo "  make clean-certs      - Remove all certificates"
 	@echo "Development Commands:"
-	@echo "  make run-server   - Run server with TLS in development"
-	@echo "  make run-server   - Run server with TLS in development"
-	@echo "  make run-client   - Run client with TLS in development"
+	@echo "  make run-remote_process   - Run remote_process with TLS in development"
+	@echo "  make run-remote_process   - Run remote_process with TLS in development"
+	@echo "  make run-worker   - Run worker with TLS in development"
 	@echo "  make docker-compose-dev - Run all services with TLS in development"
 
-.PHONY: stop-server
-stop-server:
+.PHONY: stop-remote_process
+stop-remote_process:
 	@echo "🛑 Deteniendo servidor..."
-	@kill `cat ./bin/server.pid` || true
-	@rm -f ./bin/server.pid
+	@kill `cat ./bin/remote_process.pid` || true
+	@rm -f ./bin/remote_process.pid
 
-.PHONY: stop-client
-stop-client:
-	@echo "🛑 Deteniendo cliente..."
-	@kill `cat ./bin/client.pid` || true
-	@rm -f ./bin/client.pid
+.PHONY: stop-worker
+stop-worker:
+	@echo "🛑 Deteniendo worker..."
+	@kill `cat ./bin/worker.pid` || true
+	@rm -f ./bin/worker.pid
 
 # Agregar nuevos targets para tests en Docker
 .PHONY: test-docker

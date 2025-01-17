@@ -136,7 +136,7 @@ Cada una de estas capas se comunica con las otras a través de interfaces bien d
     - **`domain/`**: Contiene la lógica de negocio y las interfaces.
         - **`go.mod`**: Módulo de Go para la capa de dominio.
         - **`ports/process.go`**: Define las interfaces (puertos) para la ejecución de procesos.
-        - **`services/orchestrator.go`**: Implementación futura para la orquestación de procesos.
+        - **`services/worker.go`**: Implementación futura para la orquestación de procesos.
 
 4. **`adapters/`**: Contiene las implementaciones de los adaptadores.
     - **`go.mod`**: Módulo de Go para la capa de adaptadores.
