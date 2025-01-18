@@ -17,8 +17,8 @@ type GRPCConfig struct {
 func LoadGRPCConfig() *GRPCConfig {
 	return &GRPCConfig{
 		ServerAddress: getEnvironmentValue("GRPC_SERVER_ADDRESS", "localhost:50051"),
-		ClientCert:    getEnvironmentValue("CLIENT_CERT_PATH", "certs/dev/client-cert.pem"),
-		ClientKey:     getEnvironmentValue("CLIENT_KEY_PATH", "certs/dev/client-key.pem"),
+		ClientCert:    getEnvironmentValue("CLIENT_CERT_PATH", "certs/dev/worker-cert.pem"),
+		ClientKey:     getEnvironmentValue("CLIENT_KEY_PATH", "certs/dev/worker-key.pem"),
 		CACert:        getEnvironmentValue("CA_CERT_PATH", "certs/dev/ca-cert.pem"),
 		JWTToken:      getEnvironmentValue("JWT_TOKEN", "default_jwt_token"),
 	}

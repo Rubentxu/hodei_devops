@@ -18,7 +18,7 @@ import (
 // LocalProcessExecutor implementa ports.ProcessExecutor para la ejecución local de comandos.
 type LocalProcessExecutor struct {
 	processes      map[string]*exec.Cmd
-	healthStatuses map[string]*ports.HealthStatus
+	healthStatuses map[string]*ports.ProcessHealthStatus
 	mu             sync.Mutex
 	healthStatusMu sync.Mutex
 }
@@ -27,7 +27,7 @@ type LocalProcessExecutor struct {
 func NewLocalProcessExecutor() *LocalProcessExecutor {
 	return &LocalProcessExecutor{
 		processes:      make(map[string]*exec.Cmd),
-		healthStatuses: make(map[string]*ports.HealthStatus),
+		healthStatuses: make(map[string]*ports.ProcessHealthStatus),
 	}
 }
 
@@ -87,12 +87,12 @@ func (e *LocalProcessExecutor) Start(ctx context.Context, processID string, comm
 	e.processes[processID] = cmd
 	e.mu.Unlock()
 
-	// Inicializa el HealthStatus
+	// Inicializa el ProcessHealthStatus
 	e.healthStatusMu.Lock()
-	e.healthStatuses[processID] = &ports.HealthStatus{
+	e.healthStatuses[processID] = &ports.ProcessHealthStatus{
 		ProcessID: processID,
-		IsRunning: true,
-		Status:    "Process started",
+		Status:    ports.RUNNING,
+		Message:   "Process started",
 	}
 	e.healthStatusMu.Unlock()
 
@@ -115,11 +115,13 @@ func (e *LocalProcessExecutor) Start(ctx context.Context, processID string, comm
 		err := cmd.Wait()
 		e.healthStatusMu.Lock()
 		if err != nil {
-			e.healthStatuses[processID].Status = fmt.Sprintf("Process finished with error: %v", err)
+			e.healthStatuses[processID].Status = ports.ERROR
+			e.healthStatuses[processID].Message = fmt.Sprintf("Process finished with error: %v", err)
 		} else {
-			e.healthStatuses[processID].Status = "Process finished successfully"
+			e.healthStatuses[processID].Status = ports.FINISHED
+			e.healthStatuses[processID].Message = "Process finished successfully"
 		}
-		e.healthStatuses[processID].IsRunning = false
+		e.healthStatuses[processID].Status = ports.RUNNING
 		e.healthStatusMu.Unlock()
 
 		// Espera a que las goroutines terminen antes de cerrar el canal
@@ -163,9 +165,9 @@ func (e *LocalProcessExecutor) Stop(ctx context.Context, processID string) error
 	// Actualizar el estado antes de intentar detener
 	e.healthStatusMu.Lock()
 	if status, exists := e.healthStatuses[processID]; exists {
-		status.IsRunning = false
-		status.Status = "Process stopping"
-		status.IsHealthy = false
+		status.ProcessID = processID
+		status.Status = ports.STOPPED
+		status.Message = "Process stopping"
 	}
 	e.healthStatusMu.Unlock()
 
@@ -206,9 +208,9 @@ func (e *LocalProcessExecutor) Stop(ctx context.Context, processID string) error
 	delete(e.processes, processID)
 	e.healthStatusMu.Lock()
 	if status, exists := e.healthStatuses[processID]; exists {
-		status.IsRunning = false
-		status.Status = "Process stopped"
-		status.IsHealthy = false
+		status.ProcessID = processID
+		status.Status = ports.STOPPED
+		status.Message = "Process stopped"
 	}
 	e.healthStatusMu.Unlock()
 
@@ -223,8 +225,8 @@ func (e *LocalProcessExecutor) Stop(ctx context.Context, processID string) error
 }
 
 // MonitorHealth monitoriza el estado de un proceso.
-func (e *LocalProcessExecutor) MonitorHealth(ctx context.Context, processID string, checkInterval int64) (<-chan ports.HealthStatus, error) {
-	healthChan := make(chan ports.HealthStatus)
+func (e *LocalProcessExecutor) MonitorHealth(ctx context.Context, processID string, checkInterval int64) (<-chan ports.ProcessHealthStatus, error) {
+	healthChan := make(chan ports.ProcessHealthStatus)
 
 	go func() {
 		ticker := time.NewTicker(time.Duration(checkInterval) * time.Second)
@@ -244,12 +246,15 @@ func (e *LocalProcessExecutor) MonitorHealth(ctx context.Context, processID stri
 					close(healthChan)
 					return
 				}
-				// Copia el valor actual de HealthStatus
+				// Copia el valor actual de ProcessHealthStatus
 				currentStatus := *healthStatus
 				e.healthStatusMu.Unlock()
 
-				// Envía la copia al canal
-				healthChan <- currentStatus
+				// Send the copy to the channel
+				healthChan <- ports.ProcessHealthStatus{
+					ProcessID: currentStatus.ProcessID,
+					Status:    ports.ProcessStatus(currentStatus.Status),
+				}
 			}
 		}
 	}()

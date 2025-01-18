@@ -96,18 +96,18 @@ func (s *ServerAdapter) MonitorHealth(stream remote_process.RemoteProcessService
 	processID := in.ProcessId
 	checkInterval := in.CheckInterval
 
-	// Utiliza un canal para recibir HealthStatus del método MonitorHealth
+	// Utiliza un canal para recibir ProcessHealthStatus del método MonitorHealth
 	healthChan, err := s.executor.MonitorHealth(stream.Context(), processID, checkInterval)
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to start health monitoring: %v", err)
 	}
 
-	// Transmite actualizaciones de HealthStatus al cliente
+	// Transmite actualizaciones de ProcessHealthStatus al cliente
 	for healthStatus := range healthChan {
-		err := stream.Send(&remote_process.HealthStatus{
+		err := stream.Send(&remote_process.ProcessHealthStatus{
 			ProcessId: healthStatus.ProcessID,
-			IsRunning: healthStatus.IsRunning,
-			Status:    healthStatus.Status,
+			Status:    ConvertPortsProcessStatusToProto(healthStatus.Status),
+			Message:   healthStatus.Message,
 		})
 		if err != nil {
 			return status.Errorf(codes.Internal, "failed to send health status: %v", err)
@@ -178,5 +178,25 @@ func (s *ServerAdapter) Start(tlsConfig *tls.Config, authInterceptor *security.A
 func (s *ServerAdapter) Stop() {
 	if s.server != nil {
 		s.server.GracefulStop()
+	}
+}
+
+// ConvertPortsProcessStatusToProto converts ports.ProcessStatus to remote_process.ProcessStatus
+func ConvertPortsProcessStatusToProto(status ports.ProcessStatus) remote_process.ProcessStatus {
+	switch status {
+	case ports.UNKNOWN:
+		return remote_process.ProcessStatus_UNKNOWN_PROCESS_STATUS
+	case ports.RUNNING:
+		return remote_process.ProcessStatus_RUNNING
+	case ports.HEALTHY:
+		return remote_process.ProcessStatus_HEALTHY
+	case ports.ERROR:
+		return remote_process.ProcessStatus_ERROR
+	case ports.STOPPED:
+		return remote_process.ProcessStatus_STOPPED
+	case ports.FINISHED:
+		return remote_process.ProcessStatus_FINISHED
+	default:
+		return remote_process.ProcessStatus_UNKNOWN_PROCESS_STATUS
 	}
 }

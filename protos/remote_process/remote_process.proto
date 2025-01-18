@@ -11,7 +11,7 @@ service RemoteProcessService {
   rpc StopProcess(ProcessStopRequest) returns (ProcessStopResponse);
 
   // Monitorización
-  rpc MonitorHealth(stream HealthCheckRequest) returns (stream HealthStatus);
+  rpc MonitorHealth(stream HealthCheckRequest) returns (stream ProcessHealthStatus);
   
   // Recopilación de Métricas
   rpc CollectMetrics(stream MetricsRequest) returns (stream WorkerMetrics);
@@ -21,6 +21,16 @@ service RemoteProcessService {
   rpc SyncFilesStream(stream FileUploadRequest) returns (stream SyncProgress);
   rpc GetRemoteFileList(RemoteListRequest) returns (RemoteFileList);
   rpc DeleteRemoteFile(RemoteDeleteRequest) returns (RemoteDeleteResponse);
+}
+
+// Definición del enum ProcessStatus
+enum ProcessStatus {
+  UNKNOWN_PROCESS_STATUS = 0;
+  RUNNING = 1;
+  HEALTHY = 2;
+  ERROR = 3;
+  STOPPED = 4;
+  FINISHED = 5;
 }
 
 // Mensaje para iniciar un proceso
@@ -56,11 +66,10 @@ message HealthCheckRequest {
 }
 
 // Mensaje con el estado actual de un proceso
-message HealthStatus {
+message ProcessHealthStatus {
   string process_id = 1; // Identificador del proceso
-  bool is_running = 2;  // Indica si el proceso está en ejecución
-  string status = 3;
-  bool is_healthy = 4; // Indica si el proceso está saludable
+  ProcessStatus status = 2; // Use the ProcessStatus enum
+  string message = 3; // Mensaje adicional
 }
 
 // Mensaje para solicitar métricas

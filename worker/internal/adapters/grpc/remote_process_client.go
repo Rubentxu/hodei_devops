@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"dev.rubentxu.devops-platform/worker/internal/domain"
 	"fmt"
 	"io"
 	"log"
@@ -59,7 +60,7 @@ func New(cfg *ClientConfig) (*Client, error) {
 	}
 
 	// Establecer conexión con credenciales TLS
-	conn, err := grpc.Dial(
+	conn, err := grpc.NewClient(
 		cfg.ServerAddress,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 	)
@@ -85,7 +86,7 @@ func (c *Client) createAuthContext(ctx context.Context) context.Context {
 }
 
 // StartProcess envía una solicitud para iniciar un proceso en el servidor
-func (c *Client) StartProcess(ctx context.Context, processID string, command []string, env map[string]string, workingDir string, outputChan chan<- *remote_process.ProcessOutput) error {
+func (c *Client) StartProcess(ctx context.Context, processID string, command []string, env map[string]string, workingDir string, outputChan chan<- *domain.ProcessOutput) error {
 	ctx = c.createAuthContext(ctx)
 
 	// Crear el stream
@@ -115,8 +116,15 @@ func (c *Client) StartProcess(ctx context.Context, processID string, command []s
 			return fmt.Errorf("error receiving output: %v", err)
 		}
 
+		// Convertir remote_process.ProcessOutput a domain.ProcessOutput
+		domainOutput := &domain.ProcessOutput{
+			ProcessID: output.ProcessId,
+			Output:    output.Output,
+			IsError:   output.IsError,
+		}
+
 		select {
-		case outputChan <- output:
+		case outputChan <- domainOutput:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -139,8 +147,8 @@ func (c *Client) StopProcess(ctx context.Context, processID string) (bool, strin
 	return resp.Success, resp.Message, nil
 }
 
-// MonitorHealth monitoriza el estado de salud de un proceso
-func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInterval int64, healthChan chan<- *remote_process.HealthStatus) error {
+// / MonitorHealth monitoriza el estado de salud de un proceso
+func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInterval int64, healthChan chan<- *domain.ProcessHealthStatus) error {
 	ctx = c.createAuthContext(ctx)
 
 	stream, err := c.client.MonitorHealth(ctx)
@@ -180,10 +188,10 @@ func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInter
 					}
 					log.Printf("Error receiving health status: %v", err)
 					select {
-					case healthChan <- &remote_process.HealthStatus{
-						ProcessId: processID,
-						IsRunning: false,
-						Status:    fmt.Sprintf("Error receiving health status: %v", err),
+					case healthChan <- &domain.ProcessHealthStatus{
+						ProcessID: processID,
+						Status:    domain.ERROR,
+						Message:   fmt.Sprintf("Error receiving health status: %v", err),
 					}:
 					case <-ctx.Done():
 					}
@@ -192,9 +200,13 @@ func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInter
 
 				// Enviar el estado al canal
 				select {
-				case healthChan <- healthStatus:
-					log.Printf("Health status for process %s: running=%v, status=%s",
-						healthStatus.ProcessId, healthStatus.IsRunning, healthStatus.Status)
+				case healthChan <- &domain.ProcessHealthStatus{
+					ProcessID: processID,
+					Status:    domain.ConvertProtoProcessStatusToPorts(healthStatus.Status),
+					Message:   healthStatus.Message,
+				}:
+					log.Printf("Health status for process %s: status=%v, message=%s",
+						healthStatus.ProcessId, healthStatus.Status, healthStatus.Message)
 				case <-ctx.Done():
 					return
 				}
