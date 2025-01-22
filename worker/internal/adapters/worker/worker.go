@@ -1,266 +1,286 @@
+// worker/worker.go
 package worker
 
 import (
 	"context"
-	"dev.rubentxu.devops-platform/worker/internal/adapters/store"
-	"dev.rubentxu.devops-platform/worker/internal/adapters/worker_instance"
-	"dev.rubentxu.devops-platform/worker/internal/domain"
-	"errors"
 	"fmt"
-	"github.com/google/uuid"
-	"log"
+	"sync"
+	"sync/atomic"
 	"time"
 
-	"dev.rubentxu.devops-platform/worker/internal/ports"
-	"google.golang.org/grpc/benchmark/stats"
+	"dev.rubentxu.devops-platform/worker/internal/domain"
 
+	"dev.rubentxu.devops-platform/worker/internal/adapters/store"
+	"dev.rubentxu.devops-platform/worker/internal/ports"
 	"github.com/golang-collections/collections/queue"
 )
 
 type TaskContext struct {
 	Task       domain.Task
 	outputChan chan<- *domain.ProcessOutput
-	goContext  context.Context
+	ctx        context.Context
 }
 
 type Worker struct {
-	Name  string
-	Queue queue.Queue
-	Db    store.Store[domain.Task]
-	//data        map[uuid.UUID]*task.Task
-	Stats                 *stats.Stats
-	TaskCount             int
-	WorkerInstanceFactory ports.WorkerInstanceFactory
-	workerInstances       map[string]ports.WorkerInstance
+	name          string
+	db            store.Store[domain.Task]
+	taskChan      chan TaskContext
+	pendingQueue  queue.Queue
+	pendingMutex  sync.Mutex
+	workerFactory ports.WorkerFactory
+	activeWorkers sync.Map
+	configMutex   sync.RWMutex
+	metrics       *domain.Metrics
+
+	// Concurrency control
+	maxConcurrent  int32
+	currentTasks   int32
+	scalingHistory []domain.ScalingEvent
+	scalingChan    chan int
 }
 
-func New(name string, taskDbType string) *Worker {
-	w := Worker{
-		Name:                  name,
-		Queue:                 *queue.New(),
-		WorkerInstanceFactory: worker_instance.NewWorkerInstanceFactory(),
-		workerInstances:       make(map[string]ports.WorkerInstance),
+func NewWorker(name string, initialMaxConcurrent int, storeType string, workerFactory ports.WorkerFactory) *Worker {
+	w := &Worker{
+		name:          name,
+		taskChan:      make(chan TaskContext, 100),
+		pendingQueue:  *queue.New(),
+		maxConcurrent: int32(initialMaxConcurrent),
+		scalingChan:   make(chan int, 10),
+		metrics:       &domain.Metrics{},
+		workerFactory: workerFactory,
 	}
 
-	var s store.Store[domain.Task]
-	var err error
-	switch taskDbType {
+	w.initStore(storeType)
+	go w.taskDispatcher()
+	go w.monitorResources()
+	go w.scalingListener()
+
+	return w
+}
+
+func (w *Worker) initStore(storeType string) {
+	switch storeType {
 	case "memory":
-		s = store.NewInMemoryStore[domain.Task]()
-	case "persistent":
-		filename := fmt.Sprintf("%s_tasks.db", name)
-		s, err = store.NewBoltDBStore[domain.Task](filename, 0600, "tasks")
+		w.db = store.NewInMemoryStore[domain.Task]()
+	case "bolt":
+		filename := fmt.Sprintf("%s_tasks.db", w.name)
+		store, err := store.NewBoltDBStore[domain.Task](filename, 0600, "tasks")
+		if err != nil {
+			panic(err)
+		}
+		w.db = store
 	}
-	if err != nil {
-		log.Printf("eunable to create new task store: %v", err)
-	}
-	w.Db = s
-	return &w
 }
 
-func (w *Worker) GetTasks() ([]*domain.Task, error) {
-	taskListInterface, err := w.Db.List()
+func (w *Worker) taskDispatcher() {
+	for taskCtx := range w.taskChan {
+		if w.acquireSlot() {
+			go w.processTask(taskCtx)
+		} else {
+			w.pendingQueue.Enqueue(taskCtx)
+		}
+	}
+}
+
+func (w *Worker) processTask(taskCtx TaskContext) {
+	defer w.releaseSlot()
+
+	// No cerramos el canal aquí, lo haremos después de enviar el último mensaje
+	// defer close(taskCtx.outputChan)
+
+	// Actualizar estado de la tarea
+	task := taskCtx.Task
+	task.State = domain.Running
+	w.db.Put(task.ID.String(), task)
+
+	// Ejecutar la tarea
+	workerInstance, err := w.workerFactory.Create(task)
 	if err != nil {
-		return nil, err
+		task.State = domain.Failed
+		w.db.Put(task.ID.String(), task)
+		taskCtx.outputChan <- &domain.ProcessOutput{
+			Output:  fmt.Sprintf("Error creando worker instance: %v", err),
+			IsError: true,
+		}
+		close(taskCtx.outputChan)
+		return
 	}
 
-	taskList := make([]*domain.Task, 0)
-	for _, t := range taskListInterface {
-		taskList = append(taskList, &t)
+	w.activeWorkers.Store(task.ID.String(), workerInstance)
+	defer w.activeWorkers.Delete(task.ID.String())
+
+	endpoint, err := workerInstance.Start(taskCtx.ctx, taskCtx.outputChan)
+	if err != nil {
+		task.State = domain.Failed
+		taskCtx.outputChan <- &domain.ProcessOutput{
+			Output:  fmt.Sprintf("Error iniciando tarea: %v no se resolvio el enpoint", err),
+			IsError: true,
+		}
+		close(taskCtx.outputChan)
+		return
+	}
+	taskCtx.outputChan <- &domain.ProcessOutput{
+		Output:  fmt.Sprintf("Tarea iniciada en %s", endpoint),
+		IsError: false,
+	}
+
+	// Ejecutar y monitorear
+	if err := workerInstance.Run(taskCtx.ctx, task, taskCtx.outputChan); err != nil {
+		task.State = domain.Failed
+		taskCtx.outputChan <- &domain.ProcessOutput{
+			Output:  fmt.Sprintf("Error ejecutando tarea: %v", err),
+			IsError: true,
+		}
+	} else {
+		task.State = domain.Completed
+		taskCtx.outputChan <- &domain.ProcessOutput{
+			Output:  "Tarea completada exitosamente",
+			IsError: false,
+		}
+	}
+
+	// Actualizar estado final y cerrar el canal
+	w.db.Put(task.ID.String(), task)
+	close(taskCtx.outputChan)
+
+	// Procesar siguiente tarea pendiente
+	w.processPendingQueue()
+}
+
+func (w *Worker) acquireSlot() bool {
+	current := atomic.LoadInt32(&w.currentTasks)
+	max := atomic.LoadInt32(&w.maxConcurrent)
+	if current < max {
+		atomic.AddInt32(&w.currentTasks, 1)
+		return true
+	}
+	return false
+}
+
+func (w *Worker) releaseSlot() {
+	atomic.AddInt32(&w.currentTasks, -1)
+}
+
+func (w *Worker) processPendingQueue() {
+	for w.pendingQueue.Len() > 0 {
+		if !w.acquireSlot() {
+			break
+		}
+		taskCtx := w.pendingQueue.Dequeue().(TaskContext)
+		go w.processTask(taskCtx)
+	}
+}
+
+// Control de concurrencia dinámico
+func (w *Worker) scalingListener() {
+	for newLimit := range w.scalingChan {
+		w.configMutex.Lock()
+		oldLimit := int(atomic.LoadInt32(&w.maxConcurrent))
+
+		atomic.StoreInt32(&w.maxConcurrent, int32(newLimit))
+
+		w.scalingHistory = append(w.scalingHistory, domain.ScalingEvent{
+			Timestamp: time.Now(),
+			OldLimit:  oldLimit,
+			NewLimit:  newLimit,
+			Reason:    "external adjustment",
+		})
+
+		if newLimit > oldLimit {
+			w.processPendingQueue()
+		}
+		w.configMutex.Unlock()
+	}
+}
+
+// API pública
+func (w *Worker) AddTask(ctx context.Context, task domain.Task) (<-chan *domain.ProcessOutput, error) {
+	outputChan := make(chan *domain.ProcessOutput, 100) // Buffer para evitar bloqueos
+	task.CreatedAt = time.Now()
+	task.UpdatedAt = time.Now()
+
+	// Guardar la tarea en la base de datos
+	if err := w.db.Put(task.ID.String(), task); err != nil {
+		close(outputChan)
+		return nil, fmt.Errorf("error guardando tarea: %w", err)
+	}
+
+	w.taskChan <- TaskContext{
+		Task:       task,
+		outputChan: outputChan,
+		ctx:        ctx,
+	}
+	outputChan <- &domain.ProcessOutput{
+		Output:    "Tarea encolada exitosamente",
+		IsError:   false,
+		ProcessID: task.ID.String(),
+	}
+	return outputChan, nil
+}
+
+func (w *Worker) SetConcurrencyLimit(newLimit int) {
+	if newLimit < 1 {
+		newLimit = 1
+	}
+	if newLimit > 100 {
+		newLimit = 100
+	}
+	w.scalingChan <- newLimit
+}
+
+func (w *Worker) GetStatus() domain.WorkerConfig {
+	return domain.WorkerConfig{
+		MaxConcurrentTasks: int(atomic.LoadInt32(&w.maxConcurrent)),
+		CurrentTasks:       int(atomic.LoadInt32(&w.currentTasks)),
+	}
+}
+
+// Monitorización de recursos
+func (w *Worker) monitorResources() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		w.metrics.CPUUsage = getCPUUsage()
+		w.metrics.MemoryUsage = getMemoryUsage()
+
+		if w.metrics.CPUUsage > 80 && atomic.LoadInt32(&w.maxConcurrent) > 1 {
+			w.SetConcurrencyLimit(int(atomic.LoadInt32(&w.maxConcurrent) - 1))
+		}
+	}
+}
+
+func getCPUUsage() float64    { return 45.0 }
+func getMemoryUsage() float64 { return 60.0 }
+
+// GetTasks retorna un slice con todas las tareas almacenadas.
+func (w *Worker) GetTasks() ([]domain.Task, error) {
+	taskList, err := w.db.List()
+	if err != nil {
+		return nil, fmt.Errorf("error obteniendo lista de tareas: %w", err)
 	}
 	return taskList, nil
 }
 
-//func (w *Worker) CollectStats() {
-//	for {
-//		log.Println("Collecting stats")
-//		w.Stats = stats.GetStats()
-//		w.TaskCount = w.Stats.TaskCount
-//		time.Sleep(15 * time.Second)
-//	}
-//}
-
-func generateWorkerID(taskName string) string {
-	hash := uuid.New()
-	return fmt.Sprintf("%s-%s", taskName, hash.String())
-}
-
-func (w *Worker) AddTask(t domain.Task) chan *domain.ProcessOutput {
-	outputChan := make(chan *domain.ProcessOutput)
-	workerID := generateWorkerID(t.Name)
-	t.Status.WorkerID = &domain.WorkerID{ID: workerID}
-	taskContext := TaskContext{Task: t, outputChan: outputChan, goContext: context.Background()}
-	w.Queue.Enqueue(taskContext)
-	log.Printf("Task %v added to queue\n with workerID: %v\n", t.ID, workerID)
-	return outputChan
-}
-
-func (w *Worker) RunTasks() {
-	for {
-		if w.Queue.Len() != 0 {
-			result := w.runTask()
-			if result.Error != nil {
-				log.Printf("Error running task: %v\n", result.Error)
-			}
-		} else {
-			log.Printf("No tasks to process currently.\n")
-		}
-		log.Println("Sleeping for 4 seconds.")
-		time.Sleep(4 * time.Second)
-	}
-
-}
-
-func (w *Worker) runTask() domain.TaskResult {
-	t := w.Queue.Dequeue()
-	if t == nil {
-		log.Println("[worker] No tasks in the queue")
-		return domain.TaskResult{Error: nil}
-	}
-
-	taskContext := t.(TaskContext)
-	fmt.Printf("[worker] Found task in queue: %v:\n", taskContext)
-
-	err := w.Db.Put(taskContext.Task.ID.String(), taskContext.Task)
+// GetTask retorna la tarea con el id dado.
+func (w *Worker) GetTask(taskID string) (domain.Task, error) {
+	t, err := w.db.Get(taskID)
 	if err != nil {
-		msg := fmt.Errorf("error storing task %s: %v", taskContext.Task.ID.String(), err)
-		log.Println(msg)
-		return domain.TaskResult{Error: msg}
+		return domain.Task{}, fmt.Errorf("no se encontró la tarea con ID %s", taskID)
 	}
-
-	taskPersisted, err := w.Db.Get(taskContext.Task.ID.String())
-	if err != nil {
-		msg := fmt.Errorf("error getting task %s from database: %v", taskContext.Task.ID.String(), err)
-		log.Println(msg)
-		return domain.TaskResult{Error: msg}
-	}
-
-	log.Printf("[worker] Task persisted: %v\n", taskPersisted)
-
-	if taskPersisted.State == domain.Completed {
-		return w.StopTask(taskPersisted)
-	}
-
-	var taskResult domain.TaskResult
-	if domain.ValidStateTransition(taskPersisted.State, taskContext.Task.State) {
-		switch taskContext.Task.State {
-		case domain.Scheduled:
-			log.Printf("[worker] Task %v is scheduled\n with workerID: %v\n", taskContext.Task.ID, taskContext.Task.Status.WorkerID)
-			if taskContext.Task.Status.WorkerID != nil && taskContext.Task.Status.WorkerID.ID != "" {
-				taskResult = w.StopTask(taskContext.Task)
-				if taskResult.Error != nil {
-					log.Printf("%v\n", taskResult.Error)
-				}
-			}
-			log.Printf("[worker] Task %v is preparing to start\n", taskContext.Task.ID)
-			taskResult = w.StartTask(taskContext)
-			log.Printf("[worker] Task %v has started\n", taskContext.Task.ID)
-		default:
-			log.Printf("This is a mistake. taskPersisted: %v, taskContext: %v\n", taskPersisted, taskContext)
-			taskResult.Error = errors.New("We should not get here")
-		}
-	} else {
-		err := fmt.Errorf("Invalid transition from %v to %v", taskPersisted.State, taskContext.Task.State)
-		taskResult.Error = err
-		log.Println(err)
-		return taskResult
-	}
-	return taskResult
+	return t, nil
 }
 
-func (w *Worker) StartTask(t TaskContext) domain.TaskResult {
-	log.Printf("[worker] Starting task: %v\n", t)
-
-	inst, err := w.WorkerInstanceFactory.Create(t.Task.WorkerInstanceSpec)
+// StopTask localiza la tarea, cambia su estado y, de ser necesario, detiene el proceso subyacente.
+func (w *Worker) StopTask(taskID string) error {
+	task, err := w.db.Get(taskID)
 	if err != nil {
-		return domain.TaskResult{Error: fmt.Errorf("error creating worker instance: %v", err)}
-	}
-	w.workerInstances[t.Task.Status.WorkerID.ID] = inst
-
-	workerID, err := inst.Start(t.goContext)
-	if err != nil {
-		return domain.TaskResult{Error: fmt.Errorf("error starting worker instance: %v", err)}
-	}
-	t.Task.Status.WorkerID = workerID
-
-	result := inst.Run(t.goContext, t.Task, t.outputChan)
-	if result.Error != nil {
-		log.Printf("Err running task %v: %v\n", t.Task.ID, result.Error)
-		t.Task.State = domain.Failed
-		_ = w.Db.Put(t.Task.ID.String(), t.Task)
-		return result
+		return fmt.Errorf("no se encontró la tarea: %w", err)
 	}
 
-	t.Task.State = domain.Running
-	_ = w.Db.Put(t.Task.ID.String(), t.Task)
-
-	w.updateTask(t.Task, inst)
-
-	return result
-}
-
-func (w *Worker) updateTask(t domain.Task, inst ports.WorkerInstance) {
-	go func() {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		healthChan := make(chan *domain.ProcessHealthStatus)
-		err := inst.StartMonitoring(ctx, 5, healthChan) // 5s
-		if err != nil {
-			log.Printf("Error abriendo canal de monitor para %s: %v", t.ID, err)
-			return
-		}
-
-		for status := range healthChan {
-			switch status.Status {
-			case domain.RUNNING:
-				// No action needed, the task is running
-			case domain.HEALTHY:
-				// No action needed, the task is healthy
-			case domain.ERROR:
-				log.Printf("Tarea %s: estado=%s => marcando como FAILED", t.ID, status.Status)
-				t.State = domain.Failed
-				_ = w.Db.Put(t.ID.String(), t)
-				return
-			case domain.FINISHED:
-				log.Printf("Tarea %s: estado=%s => marcando como COMPLETED", t.ID, status.Status)
-				t.State = domain.Completed
-				_ = w.Db.Put(t.ID.String(), t)
-				return
-			case domain.STOPPED:
-				log.Printf("Tarea %s: estado=%s => marcando como FAILED", t.ID, status.Status)
-				t.State = domain.Stopped
-				_ = w.Db.Put(t.ID.String(), t)
-				return
-			case domain.UNKNOWN:
-				log.Printf("Tarea %s: estado=%s => marcando como FAILED", t.ID, status.Status)
-				t.State = domain.Unknown
-				_ = w.Db.Put(t.ID.String(), t)
-				return
-			default:
-				log.Printf("Tarea %s: estado desconocido=%s => marcando como FAILED", t.ID, status.Status)
-				t.State = domain.Failed
-				_ = w.Db.Put(t.ID.String(), t)
-				return
-			}
-		}
-	}()
-}
-
-func (w *Worker) StopTask(t domain.Task) domain.TaskResult {
-	inst, ok := w.workerInstances[t.Status.WorkerID.ID]
-	if !ok {
-		return domain.TaskResult{Error: fmt.Errorf("worker instance not found: %v", t.Status.WorkerID.ID)}
+	task.State = domain.Stopped
+	if err := w.db.Put(taskID, task); err != nil {
+		return fmt.Errorf("error actualizando estado a Stopped: %w", err)
 	}
-
-	_, msg, err := inst.Stop()
-	if err != nil {
-		return domain.TaskResult{Error: fmt.Errorf("error stopping worker instance: %v, %S", err, msg)}
-	}
-
-	t.FinishTime = time.Now().UTC()
-	t.State = domain.Completed
-	_ = w.Db.Put(t.ID.String(), t)
-	log.Printf("Stopped & removed container %v for task %v\n", t.Status.WorkerID, t.ID)
-
-	return domain.TaskResult{Action: "stop", Result: "stopped"}
+	return nil
 }

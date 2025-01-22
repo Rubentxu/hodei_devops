@@ -6,11 +6,10 @@ import (
 )
 
 type Store[T any] interface {
-	Put(key string, value T) error
 	Get(key string) (T, error)
-	List() ([]T, error)
-	Count() (int, error)
+	Put(key string, value T) error
 	Delete(key string) error
+	List() ([]T, error)
 }
 
 type InMemoryStore[T any] struct {
@@ -51,15 +50,19 @@ func (s *InMemoryStore[T]) List() ([]T, error) {
 	return list, nil
 }
 
-func (s *InMemoryStore[T]) Count() (int, error) {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-	return len(s.data), nil
-}
-
 func (s *InMemoryStore[T]) Delete(key string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	delete(s.data, key)
 	return nil
+}
+
+func (s *InMemoryStore[T]) Keys() []string {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	keys := make([]string, 0, len(s.data))
+	for key := range s.data {
+		keys = append(keys, key)
+	}
+	return keys
 }

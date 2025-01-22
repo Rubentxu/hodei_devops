@@ -16,25 +16,25 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// Client encapsulates the gRPC client functionality for RemoteProcess
-type Client struct {
+// RPSClient encapsulates the gRPC client functionality for RemoteProcess
+type RPSClient struct {
 	client    remote_process.RemoteProcessServiceClient
 	conn      *grpc.ClientConn
 	jwtToken  string
 	tlsConfig *tls.Config
 }
 
-// ClientConfig contiene la configuración necesaria para el cliente
-type ClientConfig struct {
-	ServerAddress string
-	ClientCert    string
-	ClientKey     string
-	CACert        string
-	JWTToken      string
+// RemoteProcessClientConfig contiene la configuración necesaria para el cliente
+type RemoteProcessClientConfig struct {
+	Address    string
+	ClientCert string
+	ClientKey  string
+	CACert     string
+	AuthToken  string
 }
 
 // New creates a new instance of the client
-func New(cfg *ClientConfig) (*Client, error) {
+func New(cfg *RemoteProcessClientConfig) (*RPSClient, error) {
 	// Cargar certificado del cliente
 	certificate, err := tls.LoadX509KeyPair(cfg.ClientCert, cfg.ClientKey)
 	if err != nil {
@@ -61,7 +61,7 @@ func New(cfg *ClientConfig) (*Client, error) {
 
 	// Establecer conexión con credenciales TLS
 	conn, err := grpc.NewClient(
-		cfg.ServerAddress,
+		cfg.Address,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 	)
 	if err != nil {
@@ -69,16 +69,16 @@ func New(cfg *ClientConfig) (*Client, error) {
 	}
 
 	client := remote_process.NewRemoteProcessServiceClient(conn)
-	return &Client{
+	return &RPSClient{
 		client:    client,
 		conn:      conn,
-		jwtToken:  cfg.JWTToken,
+		jwtToken:  cfg.AuthToken,
 		tlsConfig: tlsConfig,
 	}, nil
 }
 
 // createAuthContext crea un contexto con el token JWT
-func (c *Client) createAuthContext(ctx context.Context) context.Context {
+func (c *RPSClient) createAuthContext(ctx context.Context) context.Context {
 	md := metadata.New(map[string]string{
 		"authorization": "bearer " + c.jwtToken,
 	})
@@ -86,7 +86,7 @@ func (c *Client) createAuthContext(ctx context.Context) context.Context {
 }
 
 // StartProcess envía una solicitud para iniciar un proceso en el servidor
-func (c *Client) StartProcess(ctx context.Context, processID string, command []string, env map[string]string, workingDir string, outputChan chan<- *domain.ProcessOutput) error {
+func (c *RPSClient) StartProcess(ctx context.Context, processID string, command []string, env map[string]string, workingDir string, outputChan chan<- *domain.ProcessOutput) error {
 	ctx = c.createAuthContext(ctx)
 
 	// Crear el stream
@@ -134,7 +134,7 @@ func (c *Client) StartProcess(ctx context.Context, processID string, command []s
 }
 
 // StopProcess envía una solicitud para detener un proceso
-func (c *Client) StopProcess(ctx context.Context, processID string) (bool, string, error) {
+func (c *RPSClient) StopProcess(ctx context.Context, processID string) (bool, string, error) {
 	ctx = c.createAuthContext(ctx)
 
 	resp, err := c.client.StopProcess(ctx, &remote_process.ProcessStopRequest{
@@ -148,7 +148,7 @@ func (c *Client) StopProcess(ctx context.Context, processID string) (bool, strin
 }
 
 // / MonitorHealth monitoriza el estado de salud de un proceso
-func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInterval int64, healthChan chan<- *domain.ProcessHealthStatus) error {
+func (c *RPSClient) MonitorHealth(ctx context.Context, processID string, checkInterval int64, healthChan chan<- *domain.ProcessHealthStatus) error {
 	ctx = c.createAuthContext(ctx)
 
 	stream, err := c.client.MonitorHealth(ctx)
@@ -218,7 +218,7 @@ func (c *Client) MonitorHealth(ctx context.Context, processID string, checkInter
 }
 
 // StreamMetrics envía una solicitud para obtener métricas de un proceso
-func (c *Client) StreamMetrics(ctx context.Context, workerID string, metricTypes []string, interval int64, metricsChan chan<- *remote_process.WorkerMetrics) error {
+func (c *RPSClient) StreamMetrics(ctx context.Context, workerID string, metricTypes []string, interval int64, metricsChan chan<- *remote_process.WorkerMetrics) error {
 	ctx = c.createAuthContext(ctx)
 
 	stream, err := c.client.CollectMetrics(ctx)
@@ -255,7 +255,7 @@ func (c *Client) StreamMetrics(ctx context.Context, workerID string, metricTypes
 }
 
 // Close cierra la conexión gRPC
-func (c *Client) Close() {
+func (c *RPSClient) Close() {
 	if err := c.conn.Close(); err != nil {
 		log.Printf("Error closing connection: %v", err)
 	}

@@ -15,6 +15,11 @@ type BoltDBStore[T any] struct {
 	bucketName []byte
 }
 
+func (s *BoltDBStore[T]) Keys() []string {
+	//TODO implement me
+	panic("implement me")
+}
+
 // NewBoltDBStore crea una nueva instancia de BoltDBStore.
 // `filename` es el nombre del archivo de la base de datos BoltDB.
 // `mode` son los permisos del archivo (por ejemplo, 0600).

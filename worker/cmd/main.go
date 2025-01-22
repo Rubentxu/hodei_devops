@@ -1,34 +1,47 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 
+	"dev.rubentxu.devops-platform/worker/config"
 	"dev.rubentxu.devops-platform/worker/internal/adapters/websockets"
 	"dev.rubentxu.devops-platform/worker/internal/adapters/worker"
+	"dev.rubentxu.devops-platform/worker/internal/adapters/worker/factories"
 )
 
 func main() {
-	// Crea e inicializa tu Worker (storage en memoria, por ejemplo).
-	websockets.GlobalWorker = worker.New("myWorker", "memory")
-	go websockets.GlobalWorker.RunTasks()
+	cfg := config.Load()
+	log.Printf("Configuración cargada en worker api: %+v", cfg)
+	workerFactory := factories.NewWorkerInstanceFactory(cfg)
+
+	w := worker.NewWorker(
+		cfg.WorkerName,
+		cfg.MaxConcurrentTasks,
+		cfg.StorageType,
+		workerFactory,
+	)
+
+	wsHandler := websockets.NewWSHandler(w)
 
 	go func() {
-		// Endpoints existentes (WebSockets, etc.)
-		http.HandleFunc("/run", websockets.RunHandler)
-		http.HandleFunc("/health/worker", websockets.WorkerHealthHandler)
-		http.HandleFunc("/health", websockets.HealthHandler)
-		http.HandleFunc("/stop", websockets.StopHandler)
-		http.HandleFunc("/metrics", websockets.MetricsHandler)
+		http.HandleFunc("/ws", wsHandler.HandleConnection)
+		setupRoutes(wsHandler)
 
-		// Nuevos endpoints para gestionar Tasks:
-		http.HandleFunc("/tasks/create", websockets.CreateTaskHandler)
-		http.HandleFunc("/tasks", websockets.ListTasksHandler)
-
-		if err := http.ListenAndServe(":8080", nil); err != nil {
-			log.Fatalf("Failed to start server: %v", err)
+		addr := fmt.Sprintf(":%d", cfg.Port)
+		log.Printf("Iniciando servidor en %s (WebSocket /ws)...", addr)
+		if err := http.ListenAndServe(addr, nil); err != nil {
+			log.Fatalf("Error al iniciar el servidor: %v", err)
 		}
 	}()
 
 	websockets.HandleSignals()
+}
+
+func setupRoutes(wsHandler *websockets.WSHandler) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", wsHandler.HandleConnection)
+	mux.HandleFunc("/health", websockets.HealthHandler)
+	return mux
 }

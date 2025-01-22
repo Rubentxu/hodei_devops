@@ -1,6 +1,9 @@
 package domain
 
-import "dev.rubentxu.devops-platform/protos/remote_process"
+import (
+	"dev.rubentxu.devops-platform/protos/remote_process"
+	"time"
+)
 
 type ProcessOutput struct {
 	ProcessID string
@@ -14,18 +17,18 @@ type InspectResult struct {
 	AdditionalError error
 }
 
-type ProcessStatus int32
+type HealthStatus int32
 
 const (
-	UNKNOWN  ProcessStatus = 0
-	RUNNING  ProcessStatus = 1
-	HEALTHY  ProcessStatus = 2
-	ERROR    ProcessStatus = 3
-	STOPPED  ProcessStatus = 4
-	FINISHED ProcessStatus = 5
+	UNKNOWN  HealthStatus = 0
+	RUNNING  HealthStatus = 1
+	HEALTHY  HealthStatus = 2
+	ERROR    HealthStatus = 3
+	STOPPED  HealthStatus = 4
+	FINISHED HealthStatus = 5
 )
 
-func ConvertProtoProcessStatusToPorts(status remote_process.ProcessStatus) ProcessStatus {
+func ConvertProtoProcessStatusToPorts(status remote_process.ProcessStatus) HealthStatus {
 	switch status {
 	case remote_process.ProcessStatus_UNKNOWN_PROCESS_STATUS:
 		return UNKNOWN
@@ -47,25 +50,48 @@ func ConvertProtoProcessStatusToPorts(status remote_process.ProcessStatus) Proce
 // ProcessHealthStatus representa el estado de un proceso.
 type ProcessHealthStatus struct {
 	ProcessID string
-	Status    ProcessStatus
+	Status    HealthStatus
 	Message   string
 }
 
-type WorkerID struct {
-	ID      string
-	Address string
-	Port    string
+type InstanceType string
+
+const (
+	DockerInstance     InstanceType = "docker"
+	KubernetesInstance InstanceType = "kubernetes"
+	VMInstance         InstanceType = "vm"
+)
+
+// WorkerSpec describe cómo y dónde se va a ejecutar la tarea.
+// Por ejemplo, "docker" vs "k8s", parámetros, etc.
+type WorkerSpec struct {
+	Type                 InstanceType      `json:"instance_type"`
+	Image                string            `json:"image,omitempty"`
+	Command              []string          `json:"command,omitempty"`
+	Env                  map[string]string `json:"env,omitempty"`
+	WorkingDir           string            `json:"working_dir,omitempty"`
+	ConnectionParameters map[string]string `json:"connection_parameters,omitempty"`
 }
 
-// WorkerInstanceSpec describe cómo y dónde se va a ejecutar la tarea.
-// Por ejemplo, "docker" vs "k8s", parámetros, etc.
-type WorkerInstanceSpec struct {
-	Name string
-	// Indica la plataforma: 'docker', 'kubernetes', etc.
-	InstanceType               string            `json:"instance_type"`
-	Image                      string            `json:"image,omitempty"`
-	Command                    []string          `json:"command,omitempty"`
-	Env                        map[string]string `json:"env,omitempty"`
-	WorkingDir                 string            `json:"working_dir,omitempty"`
-	RemoteProcessServerAddress string            `json:"remote_process_server_address"`
+type WorkerConfig struct {
+	MaxConcurrentTasks int
+	CurrentTasks       int
+}
+
+type ScalingEvent struct {
+	Timestamp time.Time
+	OldLimit  int
+	NewLimit  int
+	Reason    string
+}
+
+type Metrics struct {
+	CPUUsage    float64
+	MemoryUsage float64
+}
+
+type WorkerEndpoint struct {
+	WorkerID string
+	Address  string
+	Port     string
 }

@@ -14,29 +14,37 @@ import (
 )
 
 func main() {
+	log.Println("Iniciando el servicio de proceso remoto...")
+
 	// Crear el recolector de métricas
 	metricsCollector := metrics.NewGopsutilCollector()
+	log.Println("Recolector de métricas creado.")
 
 	// Crear el servicio de métricas
 	metricsService := api.NewMetricsService(metricsCollector)
+	log.Println("Servicio de métricas creado.")
 
 	// Crear el ejecutor de procesos
 	executor := api.NewLocalProcessExecutor()
+	log.Println("Ejecutor de procesos creado.")
 
 	// Crear el servicio de sincronización
 	syncService := services.NewSyncService(32 * 1024) // 32KB buffer
+	log.Println("Servicio de sincronización creado.")
 
 	// Cargar configuración TLS
 	tlsConfig, err := config.LoadTLSConfig()
 	if err != nil {
-		log.Fatalf("Failed to load TLS config: %v", err)
+		log.Fatalf("Error al cargar la configuración TLS: %v", err)
 	}
+	log.Println("Configuración TLS cargada.")
 
 	// Configurar JWT Manager
 	jwtManager := security.NewJWTManager(
 		config.GetJWTSecret(),
 		24*time.Hour,
 	)
+	log.Println("JWT Manager configurado.")
 
 	// Definir roles y permisos
 	accessibleRoles := map[string][]string{
@@ -48,15 +56,18 @@ func main() {
 		"/remote_process.RemoteProcessService/GetRemoteFileList": {"admin", "operator", "viewer"},
 		"/remote_process.RemoteProcessService/DeleteRemoteFile":  {"admin", "operator"},
 	}
+	log.Println("Roles y permisos definidos.")
 
 	// Crear interceptor de autenticación
 	authInterceptor := security.NewAuthInterceptor(jwtManager, accessibleRoles)
+	log.Println("Interceptor de autenticación creado.")
 
 	// Configurar TLS para el servidor
 	serverTLSConfig, err := tlsConfig.ConfigureServerTLS()
 	if err != nil {
-		log.Fatalf("Failed to configure server TLS: %v", err)
+		log.Fatalf("Error al configurar TLS del servidor: %v", err)
 	}
+	log.Println("TLS del servidor configurado.")
 
 	// Iniciar el servidor gRPC con todas las dependencias
 	address := ":" + config.GetApplicationPort()
@@ -66,5 +77,6 @@ func main() {
 		syncService,
 		address,
 	)
+	log.Printf("Iniciando servidor gRPC en la dirección %s...", address)
 	serverAdapter.Start(serverTLSConfig, authInterceptor, config.GetEnv())
 }

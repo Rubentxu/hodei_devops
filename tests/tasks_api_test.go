@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"testing"
@@ -13,8 +12,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func TestCreateTask(t *testing.T) {
-	// Definimos la estructura que se enviará al WebSocket /tasks/create
+func TestCreateTaskViaWS(t *testing.T) {
+	type WSMessage struct {
+		Action  string      `json:"action"`
+		Payload interface{} `json:"payload"`
+	}
+
 	type createTaskRequest struct {
 		Name         string            `json:"name"`
 		Image        string            `json:"image"`
@@ -24,26 +27,16 @@ func TestCreateTask(t *testing.T) {
 		InstanceType string            `json:"instance_type,omitempty"`
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	taskReq := createTaskRequest{
-		Name:         "test-domain-1",
-		Image:        "busybox",
-		Command:      []string{"echo", "Hola desde createTask test"},
-		Env:          map[string]string{"EXAMPLE_KEY": "EXAMPLE_VALUE"},
-		WorkingDir:   "/",
-		InstanceType: "docker",
-	}
+	// Nueva URL de WebSocket -> /ws
+	wsURL := fmt.Sprintf("ws://%s/ws", "localhost:8080")
 
-	// Construct WebSocket URL (cambia host/puerto si es necesario)
-	wsURL := fmt.Sprintf("ws://%s/tasks/create", "localhost:8080")
-
-	// Incluir el token de autorización si es necesario
+	// Opcional: header con token
 	header := http.Header{}
 	header.Set("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("JWT_TOKEN")))
 
-	// Abrimos la conexión WebSocket
 	c, resp, err := websocket.DefaultDialer.DialContext(ctx, wsURL, header)
 	if err != nil {
 		t.Fatalf("Error al abrir WebSocket: %v", err)
@@ -51,68 +44,98 @@ func TestCreateTask(t *testing.T) {
 	defer c.Close()
 	defer resp.Body.Close()
 
-	// Enviamos el objeto JSON con la información de la tarea
-	if err := c.WriteJSON(taskReq); err != nil {
+	// Preparamos el payload de creación
+	taskReq := createTaskRequest{
+		Name:         "test-task-WS",
+		Image:        "posts_mpv-remote-process",
+		Command:      []string{"echo", "Hola desde WebSocket test"},
+		Env:          map[string]string{"EXAMPLE_KEY": "example_value"},
+		WorkingDir:   "/",
+		InstanceType: "docker",
+	}
+
+	// Enviamos mensaje con "Action" = "create_task"
+	msg := WSMessage{
+		Action:  "create_task",
+		Payload: taskReq,
+	}
+	if err := c.WriteJSON(msg); err != nil {
 		t.Fatalf("Error al enviar JSON por WebSocket: %v", err)
 	}
 
-	// Leemos mensajes desde el WebSocket hasta que recibamos "done"
+	// Leemos los mensajes devueltos hasta encontrar "task_completed" o error
 	for {
-		var msg map[string]interface{}
-		if err := c.ReadJSON(&msg); err != nil {
-			// Si se cierra la conexión, salimos
-			t.Logf("Conexión cerrada: %v", err)
+		var response WSMessage
+		if err := c.ReadJSON(&response); err != nil {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+				t.Log("Conexión cerrada normalmente")
+				break
+			}
+			t.Logf("Error leyendo mensaje: %v", err)
 			break
 		}
-		t.Logf("Mensaje recibido: %+v", msg)
+		t.Logf("Mensaje recibido: %+v", response)
 
-		// Verificamos si es el mensaje final
-		if doneVal, ok := msg["done"].(bool); ok && doneVal {
-			t.Log("La tarea ha finalizado correctamente.")
-			break
+		switch response.Action {
+		case "task_created":
+			t.Log("Tarea creada correctamente")
+		case "task_output":
+			t.Log("Recibido output de la tarea")
+		case "task_completed":
+			t.Log("La tarea ha finalizado correctamente")
+			return
+		case "task_error":
+			t.Errorf("Error en la tarea: %+v", response)
+			return
 		}
 	}
-
-	// Agrega las validaciones que necesites, por ejemplo:
-	// if msg["message"] != "Process completed successfully" { ... } etc.
 }
 
-func TestListTasks(t *testing.T) {
+func TestListTasksViaWS(t *testing.T) {
+	// Ejemplo de test que envía un mensaje "list_tasks" al mismo /ws y
+	// lee la lista de tareas en la respuesta.
+
+	type WSMessage struct {
+		Action  string      `json:"action"`
+		Payload interface{} `json:"payload"`
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	url := fmt.Sprintf("%s/tasks", apiBaseURL)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		t.Fatalf("Error creando request: %v", err)
-	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("JWT_TOKEN")))
+	wsURL := fmt.Sprintf("ws://%s/ws", "localhost:8080")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	c, resp, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
-		t.Fatalf("Error ejecutando la petición: %v", err)
+		t.Fatalf("Error abriendo WebSocket para listar tareas: %v", err)
 	}
+	defer c.Close()
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("Código de estado inesperado en /tasks: %d (queríamos 200)", resp.StatusCode)
+	// Enviamos mensaje con "Action" = "list_tasks"
+	listRequest := WSMessage{Action: "list_tasks"}
+	if err := c.WriteJSON(listRequest); err != nil {
+		t.Fatalf("Error al enviar list_tasks: %v", err)
 	}
 
-	var tasks []map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&tasks); err != nil {
-		t.Errorf("Error al decodificar lista de tareas: %v", err)
+	// Leemos respuesta
+	var response WSMessage
+	if err := c.ReadJSON(&response); err != nil {
+		t.Errorf("Error al leer respuesta de list_tasks: %v", err)
 		return
 	}
+	t.Logf("Respuesta list_tasks: %+v", response)
 
-	log.Printf("Lista de tareas: %+v", tasks)
-	if len(tasks) == 0 {
-		t.Log("No hay tareas registradas o la lista está vacía.")
+	if response.Action != "task_list" {
+		t.Errorf("Se esperaba respuesta con action=task_list, se obtuvo %v", response.Action)
 	}
-}
 
-func TestCreateAndListTasks(t *testing.T) {
-	// Crea una nueva tarea y luego listamos las tareas
-	t.Run("CreateTask", TestCreateTask)
-	t.Run("ListTasks", TestListTasks)
+	// Decodificar la lista de tareas
+	// Dependiendo cómo se envíe, puede ser un slice u otro formato
+	var tasks []map[string]interface{}
+	payloadBytes, _ := json.Marshal(response.Payload)
+	if err := json.Unmarshal(payloadBytes, &tasks); err != nil {
+		t.Errorf("Error decodificando tareas: %v", err)
+	}
+	t.Logf("Tareas recibidas: %v", tasks)
 }

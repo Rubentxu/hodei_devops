@@ -132,7 +132,7 @@ k8s-secrets: certs-dev
 	@echo "✅ Kubernetes secrets generated in k8s/"
 
 .PHONY: run-remote_process
-run-remote_process: build
+run-remote_process: stop-remote_process build
 	@echo "🚀 Starting remote_process with TLS and JWT in development mode..."
 	@SERVER_CERT_PATH=$(DEV_CERT_DIR)/$(SERVER_CERT) \
 	SERVER_KEY_PATH=$(DEV_CERT_DIR)/$(SERVER_KEY) \
@@ -144,7 +144,7 @@ run-remote_process: build
 
 
 .PHONY: run-worker
-run-worker: build
+run-worker: stop-worker build
 	@echo "🚀 Starting worker with TLS and JWT in development mode..."
 	@CLIENT_CERT_PATH=$(DEV_CERT_DIR)/$(CLIENT_CERT) \
 	CLIENT_KEY_PATH=$(DEV_CERT_DIR)/$(CLIENT_KEY) \

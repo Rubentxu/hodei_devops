@@ -151,6 +151,7 @@ func (s *ServerAdapter) Start(tlsConfig *tls.Config, authInterceptor *security.A
 		grpc.StreamInterceptor(authInterceptor.Stream()),
 	}
 
+	log.Printf("starting with options: %v", opts)
 	grpcServer := grpc.NewServer(opts...)
 	s.server = grpcServer
 
@@ -160,6 +161,7 @@ func (s *ServerAdapter) Start(tlsConfig *tls.Config, authInterceptor *security.A
 	// Registrar el servicio de reflexión en entorno de desarrollo
 	if env == "development" {
 		reflection.Register(grpcServer)
+		log.Println("gRPC reflection service registered in development environment")
 	}
 
 	// Registrar el servicio de salud gRPC

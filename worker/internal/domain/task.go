@@ -7,20 +7,17 @@ import (
 )
 
 type Task struct {
-	ID    uuid.UUID
-	Name  string
-	State State
-	// Configuración de la instancia donde se ejecutará la tarea
-	WorkerInstanceSpec WorkerInstanceSpec
-
-	// En caso de que quieras guardar el tiempo de finalización
-	FinishTime time.Time
+	ID         uuid.UUID
+	Name       string
+	State      State
+	WorkerSpec WorkerSpec
 	Status     Status
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 type Status struct {
-	Result   TaskResult
-	WorkerID *WorkerID
+	Endpoint *WorkerEndpoint
 }
 
 type TaskEvent struct {

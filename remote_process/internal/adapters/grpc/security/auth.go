@@ -3,6 +3,7 @@ package security
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -48,11 +49,18 @@ func (m *JWTManager) GenerateToken(username, role string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(m.secretKey))
+	signedToken, err := token.SignedString([]byte(m.secretKey))
+	if err != nil {
+		log.Printf("Error generando token para usuario %s con rol %s: %v", username, role, err)
+		return "", err
+	}
+	log.Printf("Token generado para usuario %s con rol %s", username, role)
+	return signedToken, nil
 }
 
 // ValidateToken valida y extrae la información del token
 func (m *JWTManager) ValidateToken(accessToken string) (*UserClaims, error) {
+	log.Printf("Validando token de acceso: %s******", accessToken[:6])
 	token, err := jwt.ParseWithClaims(
 		accessToken,
 		&UserClaims{},
@@ -66,14 +74,17 @@ func (m *JWTManager) ValidateToken(accessToken string) (*UserClaims, error) {
 	)
 
 	if err != nil {
+		log.Printf("Token inválido: %v", err)
 		return nil, fmt.Errorf("invalid token: %v", err)
 	}
 
 	claims, ok := token.Claims.(*UserClaims)
 	if !ok {
+		log.Println("Token claims inválidos")
 		return nil, fmt.Errorf("invalid token claims")
 	}
 
+	log.Printf("Token validado para usuario %s con rol %s", claims.Username, claims.Role)
 	return claims, nil
 }
 
@@ -98,9 +109,12 @@ func (i *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 		info *grpc.UnaryServerInfo,
 		handler grpc.UnaryHandler,
 	) (interface{}, error) {
+		log.Printf("Interceptando método unario: %s", info.FullMethod)
 		if err := i.authorize(ctx, info.FullMethod); err != nil {
+			log.Printf("Autorización fallida para método unario: %s, error: %v", info.FullMethod, err)
 			return nil, err
 		}
+		log.Printf("Autorización exitosa para método unario: %s", info.FullMethod)
 		return handler(ctx, req)
 	}
 }
@@ -113,32 +127,43 @@ func (i *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 		info *grpc.StreamServerInfo,
 		handler grpc.StreamHandler,
 	) error {
+		log.Printf("Interceptando método streaming: %s", info.FullMethod)
 		if err := i.authorize(stream.Context(), info.FullMethod); err != nil {
+			log.Printf("Autorización fallida para método streaming: %s, error: %v", info.FullMethod, err)
 			return err
 		}
+		log.Printf("Autorización exitosa para método streaming: %s", info.FullMethod)
 		return handler(srv, stream)
 	}
 }
 
 func (i *AuthInterceptor) authorize(ctx context.Context, method string) error {
+	log.Printf("Autorizando método: %s", method)
 	accessibleRoles, ok := i.accessibleRoles[method]
+	log.Printf("Roles permitidos para método %s: %v", method, accessibleRoles)
 	if !ok {
 		// Si el método no está en el mapa, permitir acceso por defecto
+		log.Printf("Método %s no requiere autorización", method)
 		return nil
 	}
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
+		log.Println("Metadata no proporcionada")
 		return status.Errorf(codes.Unauthenticated, "metadata is not provided")
 	}
+	log.Printf("Metadatos de contexto: %v", md)
 
 	values := md.Get(authHeader)
 	if len(values) == 0 {
+		log.Println("Token de autorización no proporcionado")
 		return status.Errorf(codes.Unauthenticated, "authorization token is not provided")
 	}
+	log.Printf("Token de autorización: %s******", values[0][:6])
 
 	accessToken := values[0]
 	if !strings.HasPrefix(strings.ToLower(accessToken), bearer) {
+		log.Println("Tipo de autenticación inválido")
 		return status.Errorf(codes.Unauthenticated, "invalid auth type")
 	}
 
@@ -147,14 +172,20 @@ func (i *AuthInterceptor) authorize(ctx context.Context, method string) error {
 
 	claims, err := i.jwtManager.ValidateToken(accessToken)
 	if err != nil {
+		log.Printf("Token de acceso inválido: %v", err)
 		return status.Errorf(codes.Unauthenticated, "access token is invalid: %v", err)
 	}
+	log.Printf("Token de acceso válido para usuario %s con rol %s", claims.Username, claims.Role)
 
 	for _, role := range accessibleRoles {
+		log.Printf("Revisando si el rol %s es permitido para el usuario %s", role, claims.Username)
 		if role == claims.Role {
+			log.Printf("Acceso autorizado para usuario %s con rol %s al método %s", claims.Username, claims.Role, method)
 			return nil
 		}
+
 	}
 
+	log.Printf("Permiso denegado para usuario %s con rol %s al método %s", claims.Username, claims.Role, method)
 	return status.Errorf(codes.PermissionDenied, "no permission to access this RPC")
 }
