@@ -1,10 +1,12 @@
 package factories
 
 import (
-	"dev.rubentxu.devops-platform/worker/config"
-	"dev.rubentxu.devops-platform/worker/internal/domain"
 	"fmt"
 	"log"
+	"time"
+
+	"dev.rubentxu.devops-platform/worker/config"
+	"dev.rubentxu.devops-platform/worker/internal/domain"
 
 	"dev.rubentxu.devops-platform/worker/internal/ports"
 )
@@ -42,4 +44,9 @@ func (f *WorkerInstanceFactoryImpl) Create(task domain.Task) (ports.WorkerInstan
 	default:
 		return nil, fmt.Errorf("unknown InstanceType: %s", task.WorkerSpec.Type)
 	}
+}
+
+// GetStopDelay retorna el tiempo de espera configurado antes de parar el worker
+func (f *WorkerInstanceFactoryImpl) GetStopDelay() time.Duration {
+	return f.appConfig.Providers.Docker.StopDelay
 }

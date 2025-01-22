@@ -15,6 +15,17 @@ import (
 	"github.com/golang-collections/collections/queue"
 )
 
+// Constantes para los tipos de mensaje
+const (
+	prefixSetup  = "SETUP"
+	prefixInfo   = "INFO"
+	prefixError  = "ERROR"
+	prefixWarn   = "WARN"
+	prefixDebug  = "DEBUG"
+	prefixStdout = "STDOUT"
+	prefixStderr = "STDERR"
+)
+
 type TaskContext struct {
 	Task       domain.Task
 	outputChan chan<- *domain.ProcessOutput
@@ -82,27 +93,34 @@ func (w *Worker) taskDispatcher() {
 	}
 }
 
+// sendOutput es una función auxiliar para enviar mensajes formateados al canal de salida
+func sendOutput(outputChan chan<- *domain.ProcessOutput, processID string, messageType string, message string, isError bool) {
+	formattedMessage := fmt.Sprintf("[WORKER CLIENT][%s] %s", messageType, message)
+	outputChan <- &domain.ProcessOutput{
+		ProcessID: processID,
+		Output:    formattedMessage,
+		IsError:   isError,
+	}
+}
+
 func (w *Worker) processTask(taskCtx TaskContext) {
 	defer w.releaseSlot()
-
-	// No cerramos el canal aquí, lo haremos después de enviar el último mensaje
-	// defer close(taskCtx.outputChan)
+	defer close(taskCtx.outputChan)
 
 	// Actualizar estado de la tarea
 	task := taskCtx.Task
 	task.State = domain.Running
 	w.db.Put(task.ID.String(), task)
+	sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
+		fmt.Sprintf("Tarea en estado: %s", task.State), false)
 
 	// Ejecutar la tarea
 	workerInstance, err := w.workerFactory.Create(task)
 	if err != nil {
 		task.State = domain.Failed
 		w.db.Put(task.ID.String(), task)
-		taskCtx.outputChan <- &domain.ProcessOutput{
-			Output:  fmt.Sprintf("Error creando worker instance: %v", err),
-			IsError: true,
-		}
-		close(taskCtx.outputChan)
+		sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
+			fmt.Sprintf("Error creando worker instance: %v", err), true)
 		return
 	}
 
@@ -112,39 +130,126 @@ func (w *Worker) processTask(taskCtx TaskContext) {
 	endpoint, err := workerInstance.Start(taskCtx.ctx, taskCtx.outputChan)
 	if err != nil {
 		task.State = domain.Failed
-		taskCtx.outputChan <- &domain.ProcessOutput{
-			Output:  fmt.Sprintf("Error iniciando tarea: %v no se resolvio el enpoint", err),
-			IsError: true,
-		}
-		close(taskCtx.outputChan)
+		sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
+			fmt.Sprintf("Error iniciando tarea: %v no se resolvio el enpoint", err), true)
 		return
 	}
-	taskCtx.outputChan <- &domain.ProcessOutput{
-		Output:  fmt.Sprintf("Tarea iniciada en %s", endpoint),
-		IsError: false,
-	}
+	sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
+		fmt.Sprintf("Tarea iniciada en %s", endpoint), false)
 
-	// Ejecutar y monitorear
-	if err := workerInstance.Run(taskCtx.ctx, task, taskCtx.outputChan); err != nil {
+	// Canal para recibir actualizaciones de estado
+	healthChan := make(chan *domain.ProcessHealthStatus, 10)
+	defer close(healthChan)
+
+	// Iniciar monitorización de salud
+	if err := workerInstance.StartMonitoring(taskCtx.ctx, 5, healthChan); err != nil {
 		task.State = domain.Failed
-		taskCtx.outputChan <- &domain.ProcessOutput{
-			Output:  fmt.Sprintf("Error ejecutando tarea: %v", err),
-			IsError: true,
-		}
-	} else {
-		task.State = domain.Completed
-		taskCtx.outputChan <- &domain.ProcessOutput{
-			Output:  "Tarea completada exitosamente",
-			IsError: false,
+		sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
+			fmt.Sprintf("Error iniciando monitorización: %v", err), true)
+		return
+	}
+
+	// Ejecutar la tarea en una goroutine separada
+	runErrChan := make(chan error, 1)
+	runDoneChan := make(chan struct{})
+	runCtx, runCancel := context.WithCancel(taskCtx.ctx)
+	defer runCancel()
+
+	go func() {
+		defer close(runDoneChan)
+		err := workerInstance.Run(runCtx, task, taskCtx.outputChan)
+		runErrChan <- err
+	}()
+
+	// Monitorear el estado de la tarea
+	var lastStatus domain.HealthStatus
+	processTimeout := time.After(5 * time.Minute) // Timeout de seguridad
+	taskCompleted := false
+
+	for !taskCompleted {
+		select {
+		case <-runDoneChan:
+			// El proceso ha terminado, esperamos el error del canal
+			if err := <-runErrChan; err != nil {
+				task.State = domain.Failed
+				sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
+					fmt.Sprintf("Error ejecutando tarea: %v", err), true)
+				w.db.Put(task.ID.String(), task)
+				taskCompleted = true
+			} else {
+				// Si no hay error, esperamos el estado FINISHED del health check
+				sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
+					"Proceso completado, esperando confirmación de estado", false)
+			}
+
+		case status := <-healthChan:
+			if status == nil {
+				continue
+			}
+
+			// Enviar el estado recibido al canal de salida
+			sendOutput(taskCtx.outputChan, task.ID.String(), prefixDebug,
+				fmt.Sprintf("Estado recibido: %v -> %s", status.Status, status.Message), false)
+
+			// Solo procesar cambios de estado
+			if status.Status != lastStatus {
+				lastStatus = status.Status
+				sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
+					fmt.Sprintf("Cambio de estado: %v -> %s", status.Status, status.Message), false)
+
+				switch status.Status {
+				case domain.FINISHED:
+					task.State = domain.Completed
+					sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
+						fmt.Sprintf("Tarea completada: %s", status.Message), false)
+
+					// Esperar el tiempo configurado antes de parar el worker
+					time.Sleep(w.workerFactory.GetStopDelay())
+					if stopped, msg, err := workerInstance.Stop(taskCtx.ctx); err != nil {
+						sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
+							fmt.Sprintf("Error deteniendo worker: %v", err), true)
+					} else if stopped {
+						sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
+							fmt.Sprintf("Worker detenido: %s", msg), false)
+					}
+					w.db.Put(task.ID.String(), task)
+					taskCompleted = true
+
+				case domain.ERROR:
+					task.State = domain.Failed
+					sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
+						fmt.Sprintf("Error en la tarea: %s", status.Message), true)
+					w.db.Put(task.ID.String(), task)
+					taskCompleted = true
+
+				case domain.STOPPED:
+					task.State = domain.Stopped
+					sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
+						fmt.Sprintf("Tarea detenida: %s", status.Message), false)
+					w.db.Put(task.ID.String(), task)
+					taskCompleted = true
+				}
+			}
+
+		case <-processTimeout:
+			task.State = domain.Failed
+			sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
+				"Tarea cancelada por timeout", true)
+			w.db.Put(task.ID.String(), task)
+			taskCompleted = true
+
+		case <-taskCtx.ctx.Done():
+			task.State = domain.Stopped
+			sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
+				"Tarea cancelada por contexto", true)
+			w.db.Put(task.ID.String(), task)
+			taskCompleted = true
 		}
 	}
 
-	// Actualizar estado final y cerrar el canal
-	w.db.Put(task.ID.String(), task)
-	close(taskCtx.outputChan)
-
-	// Procesar siguiente tarea pendiente
-	w.processPendingQueue()
+	// Enviar mensaje final antes de cerrar
+	sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
+		fmt.Sprintf("Tarea finalizada con estado: %s", task.State), false)
 }
 
 func (w *Worker) acquireSlot() bool {
@@ -195,11 +300,10 @@ func (w *Worker) scalingListener() {
 
 // API pública
 func (w *Worker) AddTask(ctx context.Context, task domain.Task) (<-chan *domain.ProcessOutput, error) {
-	outputChan := make(chan *domain.ProcessOutput, 100) // Buffer para evitar bloqueos
+	outputChan := make(chan *domain.ProcessOutput, 100)
 	task.CreatedAt = time.Now()
 	task.UpdatedAt = time.Now()
 
-	// Guardar la tarea en la base de datos
 	if err := w.db.Put(task.ID.String(), task); err != nil {
 		close(outputChan)
 		return nil, fmt.Errorf("error guardando tarea: %w", err)
@@ -210,11 +314,8 @@ func (w *Worker) AddTask(ctx context.Context, task domain.Task) (<-chan *domain.
 		outputChan: outputChan,
 		ctx:        ctx,
 	}
-	outputChan <- &domain.ProcessOutput{
-		Output:    "Tarea encolada exitosamente",
-		IsError:   false,
-		ProcessID: task.ID.String(),
-	}
+
+	sendOutput(outputChan, task.ID.String(), prefixInfo, "Tarea encolada exitosamente", false)
 	return outputChan, nil
 }
 

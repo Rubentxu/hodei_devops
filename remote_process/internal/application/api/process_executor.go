@@ -31,6 +31,28 @@ func NewLocalProcessExecutor() *LocalProcessExecutor {
 	}
 }
 
+// Constantes para los tipos de mensaje
+const (
+	prefixSetup  = "SETUP"
+	prefixInfo   = "INFO"
+	prefixError  = "ERROR"
+	prefixWarn   = "WARN"
+	prefixDebug  = "DEBUG"
+	prefixStdout = "STDOUT"
+	prefixStderr = "STDERR"
+)
+
+// sendOutput es una función auxiliar para enviar mensajes formateados al canal de salida
+func (e *LocalProcessExecutor) sendOutput(outputChan chan ports.ProcessOutput, processID string, messageType string, message string, isError bool) {
+	formattedMessage := fmt.Sprintf("[RPC][%s] %s", messageType, message)
+	outputChan <- ports.ProcessOutput{
+		ProcessID: processID,
+		Output:    formattedMessage,
+		IsError:   isError,
+	}
+
+}
+
 // Start inicia un proceso localmente y devuelve un canal para la salida en streaming.
 func (e *LocalProcessExecutor) Start(ctx context.Context, processID string, command []string, env map[string]string, dir string) (<-chan ports.ProcessOutput, error) {
 	if len(command) == 0 {
@@ -43,45 +65,47 @@ func (e *LocalProcessExecutor) Start(ctx context.Context, processID string, comm
 	// Configurar el proceso para ejecutarse en su propio grupo
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid:   true,
-		Pdeathsig: syscall.SIGTERM, // Señal a enviar cuando el padre muere
+		Pdeathsig: syscall.SIGTERM,
 	}
 
-	// Canal para enviar la salida
-	outputChan := make(chan ports.ProcessOutput)
+	outputChan := make(chan ports.ProcessOutput, 100)
 
-	// Configura las variables de entorno solo con las proporcionadas por el usuario
+	// Configurar variables de entorno
 	userEnv := []string{}
 	for k, v := range env {
 		userEnv = append(userEnv, fmt.Sprintf("%s=%s", k, v))
 	}
 
-	go func() {
-		// Enviar la configuración del comando y las variables de entorno proporcionadas por el usuario por el canal de salida
-		line := fmt.Sprintf("Starting command: %v with user-provided env: %v with directory: %v", command, userEnv, dir)
-		outputChan <- ports.ProcessOutput{
-			ProcessID: processID,
-			Output:    line,
-			IsError:   false,
-		}
-	}()
+	// Enviar mensajes de configuración
+	e.sendOutput(outputChan, processID, prefixSetup, fmt.Sprintf("Starting command: %v", command), false)
+	e.sendOutput(outputChan, processID, prefixSetup, fmt.Sprintf("Environment variables: %v", userEnv), false)
+	e.sendOutput(outputChan, processID, prefixSetup, fmt.Sprintf("Working directory: %v", dir), false)
 
-	// Configura las variables de entorno incluyendo las del sistema operativo
+	// Configurar el entorno
 	cmd.Env = append(os.Environ(), userEnv...)
 
-	// Captura la salida estándar y de error
+	// Configurar pipes
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		e.sendOutput(outputChan, processID, prefixError, fmt.Sprintf("Failed to create stdout pipe: %v", err), true)
+		close(outputChan)
 		return nil, fmt.Errorf("failed to create stdout pipe: %v", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		e.sendOutput(outputChan, processID, prefixError, fmt.Sprintf("Failed to create stderr pipe: %v", err), true)
+		close(outputChan)
 		return nil, fmt.Errorf("failed to create stderr pipe: %v", err)
 	}
 
-	// Inicia el proceso
+	// Iniciar proceso
 	if err := cmd.Start(); err != nil {
+		e.sendOutput(outputChan, processID, prefixError, fmt.Sprintf("Failed to start command: %v", err), true)
+		close(outputChan)
 		return nil, fmt.Errorf("failed to start command: %v", err)
 	}
+
+	e.sendOutput(outputChan, processID, prefixInfo, fmt.Sprintf("Process started with PID: %d", cmd.Process.Pid), false)
 
 	e.mu.Lock()
 	e.processes[processID] = cmd
@@ -92,7 +116,7 @@ func (e *LocalProcessExecutor) Start(ctx context.Context, processID string, comm
 	e.healthStatuses[processID] = &ports.ProcessHealthStatus{
 		ProcessID: processID,
 		Status:    ports.RUNNING,
-		Message:   "Process started",
+		Message:   fmt.Sprintf("Process started with PID: %d", cmd.Process.Pid),
 	}
 	e.healthStatusMu.Unlock()
 
@@ -110,22 +134,54 @@ func (e *LocalProcessExecutor) Start(ctx context.Context, processID string, comm
 		e.readOutput(processID, stderr, outputChan, true)
 	}()
 
-	// Goroutine para esperar a que el proceso termine y cerrar el canal
+	// Goroutine para esperar a que el proceso termine
 	go func() {
 		err := cmd.Wait()
-		e.healthStatusMu.Lock()
-		if err != nil {
-			e.healthStatuses[processID].Status = ports.ERROR
-			e.healthStatuses[processID].Message = fmt.Sprintf("Process finished with error: %v", err)
-		} else {
-			e.healthStatuses[processID].Status = ports.FINISHED
-			e.healthStatuses[processID].Message = "Process finished successfully"
-		}
-		e.healthStatuses[processID].Status = ports.RUNNING
-		e.healthStatusMu.Unlock()
-
-		// Espera a que las goroutines terminen antes de cerrar el canal
 		wg.Wait()
+		log.Printf("[RPC][%s] Process wait completed for process %s", prefixInfo, processID)
+
+		e.healthStatusMu.Lock()
+		defer e.healthStatusMu.Unlock()
+
+		finalStatus := ports.FINISHED
+		var finalMessage string
+
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				finalStatus = ports.ERROR
+				finalMessage = fmt.Sprintf("Process exited with code %d: %v", exitErr.ExitCode(), err)
+				e.sendOutput(outputChan, processID, prefixError, finalMessage, true)
+			} else {
+				finalStatus = ports.ERROR
+				finalMessage = fmt.Sprintf("Process failed: %v", err)
+				e.sendOutput(outputChan, processID, prefixError, finalMessage, true)
+			}
+		} else {
+			finalMessage = "Process finished successfully"
+			e.sendOutput(outputChan, processID, prefixInfo, finalMessage, false)
+		}
+
+		// Actualizar el estado final
+		e.healthStatuses[processID] = &ports.ProcessHealthStatus{
+			ProcessID: processID,
+			Status:    finalStatus,
+			Message:   finalMessage,
+		}
+
+		// Asegurarse de que el estado final se propague
+		select {
+		case healthChan <- e.healthStatuses[processID]:
+			e.logMessage(prefixInfo, processID, "Final status sent: %s", finalStatus)
+		case <-time.After(time.Second):
+			e.logMessage(prefixWarn, processID, "Could not send final status: %s", finalStatus)
+		}
+
+		// Esperar un momento para asegurar que el estado se ha propagado
+		time.Sleep(time.Second)
+
+		e.sendOutput(outputChan, processID, prefixInfo, "Output channel closing", false)
+		time.Sleep(100 * time.Millisecond)
+		log.Printf("[RPC][%s] Output channel closing for process %s", prefixInfo, processID)
 		close(outputChan)
 	}()
 
@@ -134,21 +190,17 @@ func (e *LocalProcessExecutor) Start(ctx context.Context, processID string, comm
 
 // readOutput lee de un pipe (stdout o stderr) y envía la salida al canal outputChan.
 func (e *LocalProcessExecutor) readOutput(processID string, reader io.Reader, outputChan chan ports.ProcessOutput, isError bool) {
+	prefix := prefixStdout
+	if isError {
+		prefix = prefixStderr
+	}
+
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
-		line := scanner.Text()
-		outputChan <- ports.ProcessOutput{
-			ProcessID: processID,
-			Output:    line,
-			IsError:   isError,
-		}
+		e.sendOutput(outputChan, processID, prefix, scanner.Text(), isError)
 	}
 	if err := scanner.Err(); err != nil {
-		outputChan <- ports.ProcessOutput{
-			ProcessID: processID,
-			Output:    fmt.Sprintf("Error reading output: %v", err),
-			IsError:   true,
-		}
+		e.sendOutput(outputChan, processID, prefixError, fmt.Sprintf("Error reading output: %v", err), true)
 	}
 }
 
@@ -165,9 +217,8 @@ func (e *LocalProcessExecutor) Stop(ctx context.Context, processID string) error
 	// Actualizar el estado antes de intentar detener
 	e.healthStatusMu.Lock()
 	if status, exists := e.healthStatuses[processID]; exists {
-		status.ProcessID = processID
-		status.Status = ports.STOPPED
-		status.Message = "Process stopping"
+		status.Status = ports.STOPPING
+		status.Message = "Process stopping gracefully"
 	}
 	e.healthStatusMu.Unlock()
 
@@ -179,7 +230,7 @@ func (e *LocalProcessExecutor) Stop(ctx context.Context, processID string) error
 
 	// Primero intentar una terminación suave con SIGTERM
 	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil {
-		log.Printf("Warning: Failed to send SIGTERM to process group %d: %v", pgid, err)
+		e.logMessage(prefixWarn, processID, "Failed to send SIGTERM to process group %d: %v", pgid, err)
 	}
 
 	// Esperar un poco para que el proceso termine suavemente
@@ -188,53 +239,58 @@ func (e *LocalProcessExecutor) Stop(ctx context.Context, processID string) error
 		done <- cmd.Wait()
 	}()
 
+	var stopErr error
 	// Esperar hasta 5 segundos para que termine suavemente
 	select {
 	case err := <-done:
 		if err != nil {
-			log.Printf("Process %s exited with error: %v", processID, err)
+			e.logMessage(prefixError, processID, "Process exited with error: %v", err)
+			stopErr = err
+		} else {
+			e.logMessage(prefixInfo, processID, "Process stopped gracefully")
 		}
 	case <-time.After(5 * time.Second):
-		// Si no termina después de 5 segundos, usar SIGKILL
-		log.Printf("Process %s did not terminate after SIGTERM, sending SIGKILL", processID)
+		e.logMessage(prefixWarn, processID, "Process did not terminate after SIGTERM, sending SIGKILL")
 		if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil {
-			log.Printf("Warning: Failed to send SIGKILL to process group %d: %v", pgid, err)
+			e.logMessage(prefixError, processID, "Failed to send SIGKILL to process group %d: %v", pgid, err)
+			stopErr = err
 		}
-		// Esperar a que termine después del SIGKILL
 		<-done
 	}
 
-	// Limpiar recursos
-	delete(e.processes, processID)
+	// Actualizar el estado final después de la detención
 	e.healthStatusMu.Lock()
 	if status, exists := e.healthStatuses[processID]; exists {
-		status.ProcessID = processID
-		status.Status = ports.STOPPED
-		status.Message = "Process stopped"
+		if stopErr != nil {
+			status.Status = ports.ERROR
+			status.Message = fmt.Sprintf("Process stopped with error: %v", stopErr)
+		} else {
+			status.Status = ports.FINISHED
+			status.Message = "Process stopped successfully"
+		}
 	}
 	e.healthStatusMu.Unlock()
 
-	// Cerrar cualquier pipe o descriptor de archivo abierto
-	if cmd.ProcessState == nil {
-		if err := cmd.Process.Release(); err != nil {
-			log.Printf("Warning: Failed to release process resources: %v", err)
-		}
-	}
+	// Limpiar recursos
+	delete(e.processes, processID)
 
-	return nil
+	return stopErr
 }
 
 // MonitorHealth monitoriza el estado de un proceso.
 func (e *LocalProcessExecutor) MonitorHealth(ctx context.Context, processID string, checkInterval int64) (<-chan ports.ProcessHealthStatus, error) {
-	healthChan := make(chan ports.ProcessHealthStatus)
+	healthChan := make(chan ports.ProcessHealthStatus, 10)
 
 	go func() {
 		ticker := time.NewTicker(time.Duration(checkInterval) * time.Second)
 		defer ticker.Stop()
 
+		var lastStatus ports.ProcessStatus
+
 		for {
 			select {
 			case <-ctx.Done():
+				log.Printf("[RPC][%s] Health monitoring stopped for process %s: context cancelled", prefixInfo, processID)
 				close(healthChan)
 				return
 			case <-ticker.C:
@@ -242,18 +298,47 @@ func (e *LocalProcessExecutor) MonitorHealth(ctx context.Context, processID stri
 				healthStatus, ok := e.healthStatuses[processID]
 				if !ok {
 					e.healthStatusMu.Unlock()
-					// Si el proceso ya no está en el mapa, cierra el canal y termina
+					log.Printf("[RPC][%s] Health monitoring stopped for process %s: process not found", prefixInfo, processID)
 					close(healthChan)
 					return
 				}
+
+				// Verificar si el proceso sigue vivo
+				cmd := e.processes[processID]
+				if cmd != nil && cmd.Process != nil {
+					if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+						healthStatus.Status = ports.ERROR
+						healthStatus.Message = fmt.Sprintf("Process not responding: %v", err)
+					}
+				}
+
 				// Copia el valor actual de ProcessHealthStatus
 				currentStatus := *healthStatus
 				e.healthStatusMu.Unlock()
 
-				// Send the copy to the channel
-				healthChan <- ports.ProcessHealthStatus{
-					ProcessID: currentStatus.ProcessID,
-					Status:    ports.ProcessStatus(currentStatus.Status),
+				// Solo enviar si el estado ha cambiado o es FINISHED/ERROR
+				if currentStatus.Status != lastStatus ||
+					currentStatus.Status == ports.FINISHED ||
+					currentStatus.Status == ports.ERROR {
+
+					lastStatus = currentStatus.Status
+
+					select {
+					case healthChan <- currentStatus:
+						log.Printf("[RPC][%s] Health status sent for process %s: %s - %s",
+							prefixDebug, processID, currentStatus.Status, currentStatus.Message)
+
+						if currentStatus.Status == ports.FINISHED || currentStatus.Status == ports.ERROR {
+							time.Sleep(time.Second)
+							log.Printf("[RPC][%s] Health monitoring completed for process %s with status: %s",
+								prefixInfo, processID, currentStatus.Status)
+							close(healthChan)
+							return
+						}
+					default:
+						log.Printf("[RPC][%s] Health channel blocked for process %s, skipping update",
+							prefixWarn, processID)
+					}
 				}
 			}
 		}

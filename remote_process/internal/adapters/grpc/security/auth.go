@@ -138,12 +138,9 @@ func (i *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 }
 
 func (i *AuthInterceptor) authorize(ctx context.Context, method string) error {
-	log.Printf("Autorizando método: %s", method)
 	accessibleRoles, ok := i.accessibleRoles[method]
-	log.Printf("Roles permitidos para método %s: %v", method, accessibleRoles)
 	if !ok {
 		// Si el método no está en el mapa, permitir acceso por defecto
-		log.Printf("Método %s no requiere autorización", method)
 		return nil
 	}
 
@@ -152,7 +149,6 @@ func (i *AuthInterceptor) authorize(ctx context.Context, method string) error {
 		log.Println("Metadata no proporcionada")
 		return status.Errorf(codes.Unauthenticated, "metadata is not provided")
 	}
-	log.Printf("Metadatos de contexto: %v", md)
 
 	values := md.Get(authHeader)
 	if len(values) == 0 {

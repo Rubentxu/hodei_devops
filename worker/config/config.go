@@ -53,7 +53,8 @@ type DockerConfig struct {
 	CertsVolumePath string // Ruta al directorio de certificados (puede ser absoluta o relativa)
 	CertsMountPath  string // Punto de montaje en el contenedor (siempre /certs)
 	HealthCheck     HealthCheck
-	NetworkName     string // Para asegurar que los contenedores están en la misma red
+	NetworkName     string        // Para asegurar que los contenedores están en la misma red
+	StopDelay       time.Duration // Tiempo de espera antes de parar el worker
 }
 
 // Config específica de Kubernetes
@@ -119,6 +120,7 @@ func Load() Config {
 				CertsVolumePath: getEnv("DOCKER_CERTS_PATH", defaultCertsPath),
 				CertsMountPath:  "/certs",
 				NetworkName:     getEnv("DOCKER_NETWORK", "devops-platform_default"),
+				StopDelay:       getDurationEnv("DOCKER_STOP_DELAY", 10*time.Second),
 				HealthCheck: HealthCheck{
 					Test:     []string{"CMD", "/app/grpc_health_check.sh"},
 					Interval: getDurationEnv("DOCKER_HEALTHCHECK_INTERVAL", 3*time.Second),
