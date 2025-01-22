@@ -1,14 +1,18 @@
 package domain
 
 import (
-	"dev.rubentxu.devops-platform/protos/remote_process"
+	"log"
 	"time"
+
+	"dev.rubentxu.devops-platform/protos/remote_process"
 )
 
 type ProcessOutput struct {
 	ProcessID string
 	Output    string
 	IsError   bool
+	Type      string
+	Status    HealthStatus
 }
 
 type InspectResult struct {
@@ -26,9 +30,31 @@ const (
 	ERROR    HealthStatus = 3
 	STOPPED  HealthStatus = 4
 	FINISHED HealthStatus = 5
+	PENDING  HealthStatus = 6
 )
 
+func (hs HealthStatus) String() string {
+
+	switch hs {
+	case UNKNOWN:
+		return "MACARENA"
+	case RUNNING:
+		return "RUNNING"
+	case HEALTHY:
+		return "HEALTHY"
+	case ERROR:
+		return "ERROR"
+	case STOPPED:
+		return "STOPPED"
+	case FINISHED:
+		return "FINISHED"
+	default:
+		return "LOLAILO"
+	}
+}
+
 func ConvertProtoProcessStatusToPorts(status remote_process.ProcessStatus) HealthStatus {
+	log.Printf("Convirtiendo status: %v", status)
 	switch status {
 	case remote_process.ProcessStatus_UNKNOWN_PROCESS_STATUS:
 		return UNKNOWN
@@ -43,6 +69,7 @@ func ConvertProtoProcessStatusToPorts(status remote_process.ProcessStatus) Healt
 	case remote_process.ProcessStatus_FINISHED:
 		return FINISHED
 	default:
+		log.Printf("Status desconocido: %v", status)
 		return UNKNOWN
 	}
 }

@@ -136,39 +136,38 @@ func (h *WSHandler) handleCreateTask(ctx context.Context, conn *websocket.Conn, 
 		return
 	}
 
-	//defer close(outputChan)
-
-	// 7. Leer del canal y enviar por WebSocket
+	// Leer del canal y enviar por WebSocket
 	for output := range outputChan {
 		resp := TaskResponse{
 			TaskID:  task.ID.String(),
 			Output:  output.Output,
 			IsError: output.IsError,
-			Status:  "running",
+			Status:  output.Status.String(),
 		}
-		
+
 		payload, err := json.Marshal(resp)
 		if err != nil {
 			log.Printf("Error serializando respuesta: %v", err)
 			return
 		}
-		
+
 		msg := WSMessage{
 			Action:  "task_output",
 			Payload: json.RawMessage(payload),
 		}
-		
+
 		if err := conn.WriteJSON(msg); err != nil {
 			log.Printf("Error sending WebSocket message: %v", err)
 			return
 		}
 	}
 
-	// 8. CUANDO el proceso finaliza, enviar un mensaje final “done”
+	// CUANDO el proceso finaliza, enviar un mensaje final "done"
 	doneMsg := map[string]interface{}{
-		"done":      true, // Indicador de finalización
-		"exit_code": 0,    // Si lo conoces o deseas retornarlo
+		"done":      true,
+		"exit_code": 0,
 		"message":   "Process completed successfully",
+		"status":    domain.FINISHED.String(),
 	}
 	if err := conn.WriteJSON(doneMsg); err != nil {
 		log.Printf("Error sending done message: %v", err)
@@ -216,7 +215,7 @@ func (h *WSHandler) streamTaskOutput(ctx context.Context, conn *websocket.Conn, 
 			TaskID:  taskID,
 			Output:  output.Output,
 			IsError: output.IsError,
-			Status:  "running",
+			Status:  output.Status.String(),
 		}) {
 			log.Printf("Error enviando output, cerrando conexión para tarea %s", taskID)
 			return

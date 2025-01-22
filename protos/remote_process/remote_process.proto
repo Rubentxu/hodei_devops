@@ -46,6 +46,8 @@ message ProcessOutput {
   string process_id = 1; // Identificador del proceso
   string output = 2;    // Salida estándar o error
   bool is_error = 3; // Indica si la salida es un error
+  string type = 4; // Tipo de salida (stdout, stderr, health, logs, etc.)
+  ProcessStatus status = 5; // Estado del proceso
 }
 
 // Mensaje para detener un proceso

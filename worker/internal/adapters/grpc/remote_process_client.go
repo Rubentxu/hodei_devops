@@ -121,6 +121,8 @@ func (c *RPSClient) StartProcess(ctx context.Context, processID string, command 
 			ProcessID: output.ProcessId,
 			Output:    output.Output,
 			IsError:   output.IsError,
+			Type:      output.Type,
+			Status:    domain.ConvertProtoProcessStatusToPorts(output.Status),
 		}
 
 		select {

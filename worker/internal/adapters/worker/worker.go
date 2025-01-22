@@ -4,6 +4,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,18 +18,19 @@ import (
 
 // Constantes para los tipos de mensaje
 const (
-	prefixSetup  = "SETUP"
-	prefixInfo   = "INFO"
-	prefixError  = "ERROR"
-	prefixWarn   = "WARN"
-	prefixDebug  = "DEBUG"
-	prefixStdout = "STDOUT"
-	prefixStderr = "STDERR"
+	TypeSetup  = "SETUP"
+	TypeInfo   = "INFO"
+	TypeWarn   = "WARN"
+	TypeDebug  = "DEBUG"
+	TypeStdout = "STDOUT"
+	TypeStderr = "STDERR"
+	TypeHealth = "HEALTH"
+	TypeError  = "ERROR"
 )
 
 type TaskContext struct {
 	Task       domain.Task
-	outputChan chan<- *domain.ProcessOutput
+	outputChan chan *domain.ProcessOutput
 	ctx        context.Context
 }
 
@@ -94,13 +96,17 @@ func (w *Worker) taskDispatcher() {
 }
 
 // sendOutput es una función auxiliar para enviar mensajes formateados al canal de salida
-func sendOutput(outputChan chan<- *domain.ProcessOutput, processID string, messageType string, message string, isError bool) {
-	formattedMessage := fmt.Sprintf("[WORKER CLIENT][%s] %s", messageType, message)
+func sendOutput(outputChan chan<- *domain.ProcessOutput, processID string, messageType string, message string, isError bool, status domain.HealthStatus) {
+	formattedMessage := fmt.Sprintf("[WORKER CLIENT] %s", message)
 	outputChan <- &domain.ProcessOutput{
 		ProcessID: processID,
 		Output:    formattedMessage,
 		IsError:   isError,
+		Type:      messageType,
+		Status:    status,
 	}
+	log.Printf("Output status: %s", status)
+
 }
 
 func (w *Worker) processTask(taskCtx TaskContext) {
@@ -111,16 +117,16 @@ func (w *Worker) processTask(taskCtx TaskContext) {
 	task := taskCtx.Task
 	task.State = domain.Running
 	w.db.Put(task.ID.String(), task)
-	sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
-		fmt.Sprintf("Tarea en estado: %s", task.State), false)
+	sendOutput(taskCtx.outputChan, task.ID.String(), TypeInfo,
+		fmt.Sprintf("Tarea en estado: %s", task.State), false, domain.RUNNING)
 
 	// Ejecutar la tarea
 	workerInstance, err := w.workerFactory.Create(task)
 	if err != nil {
 		task.State = domain.Failed
 		w.db.Put(task.ID.String(), task)
-		sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
-			fmt.Sprintf("Error creando worker instance: %v", err), true)
+		sendOutput(taskCtx.outputChan, task.ID.String(), TypeError,
+			fmt.Sprintf("Error creando worker instance: %v", err), true, domain.ERROR)
 		return
 	}
 
@@ -130,24 +136,12 @@ func (w *Worker) processTask(taskCtx TaskContext) {
 	endpoint, err := workerInstance.Start(taskCtx.ctx, taskCtx.outputChan)
 	if err != nil {
 		task.State = domain.Failed
-		sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
-			fmt.Sprintf("Error iniciando tarea: %v no se resolvio el enpoint", err), true)
+		sendOutput(taskCtx.outputChan, task.ID.String(), TypeError,
+			fmt.Sprintf("Error iniciando tarea: %v no se resolvio el endpoint", err), true, domain.ERROR)
 		return
 	}
-	sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
-		fmt.Sprintf("Tarea iniciada en %s", endpoint), false)
-
-	// Canal para recibir actualizaciones de estado
-	healthChan := make(chan *domain.ProcessHealthStatus, 10)
-	defer close(healthChan)
-
-	// Iniciar monitorización de salud
-	if err := workerInstance.StartMonitoring(taskCtx.ctx, 5, healthChan); err != nil {
-		task.State = domain.Failed
-		sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
-			fmt.Sprintf("Error iniciando monitorización: %v", err), true)
-		return
-	}
+	sendOutput(taskCtx.outputChan, task.ID.String(), TypeInfo,
+		fmt.Sprintf("Tarea iniciada en %s", endpoint), false, domain.RUNNING)
 
 	// Ejecutar la tarea en una goroutine separada
 	runErrChan := make(chan error, 1)
@@ -169,87 +163,75 @@ func (w *Worker) processTask(taskCtx TaskContext) {
 	for !taskCompleted {
 		select {
 		case <-runDoneChan:
-			// El proceso ha terminado, esperamos el error del canal
 			if err := <-runErrChan; err != nil {
 				task.State = domain.Failed
-				sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
-					fmt.Sprintf("Error ejecutando tarea: %v", err), true)
+				sendOutput(taskCtx.outputChan, task.ID.String(), TypeError,
+					fmt.Sprintf("Error ejecutando tarea: %v", err), true, domain.ERROR)
 				w.db.Put(task.ID.String(), task)
 				taskCompleted = true
-			} else {
-				// Si no hay error, esperamos el estado FINISHED del health check
-				sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
-					"Proceso completado, esperando confirmación de estado", false)
 			}
 
-		case status := <-healthChan:
-			if status == nil {
-				continue
-			}
+		case output := <-taskCtx.outputChan:
+			if output.Type == TypeHealth {
+				status := output.Status
+				if status != lastStatus {
+					lastStatus = status
+					sendOutput(taskCtx.outputChan, task.ID.String(), TypeInfo,
+						fmt.Sprintf("Cambio de estado: %v -> %s", status, output.Output), false, output.Status)
 
-			// Enviar el estado recibido al canal de salida
-			sendOutput(taskCtx.outputChan, task.ID.String(), prefixDebug,
-				fmt.Sprintf("Estado recibido: %v -> %s", status.Status, status.Message), false)
+					switch status {
+					case domain.FINISHED:
+						task.State = domain.Completed
+						sendOutput(taskCtx.outputChan, task.ID.String(), TypeInfo,
+							fmt.Sprintf("Tarea completada: %s", output.Output), false, output.Status)
 
-			// Solo procesar cambios de estado
-			if status.Status != lastStatus {
-				lastStatus = status.Status
-				sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
-					fmt.Sprintf("Cambio de estado: %v -> %s", status.Status, status.Message), false)
+						time.Sleep(w.workerFactory.GetStopDelay())
+						if stopped, msg, err := workerInstance.Stop(taskCtx.ctx); err != nil {
+							sendOutput(taskCtx.outputChan, task.ID.String(), TypeError,
+								fmt.Sprintf("Error deteniendo worker: %v", err), true, output.Status)
+						} else if stopped {
+							sendOutput(taskCtx.outputChan, task.ID.String(), TypeInfo,
+								fmt.Sprintf("Worker detenido: %s", msg), false, output.Status)
+						}
+						w.db.Put(task.ID.String(), task)
+						taskCompleted = true
 
-				switch status.Status {
-				case domain.FINISHED:
-					task.State = domain.Completed
-					sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
-						fmt.Sprintf("Tarea completada: %s", status.Message), false)
+					case domain.ERROR:
+						task.State = domain.Failed
+						sendOutput(taskCtx.outputChan, task.ID.String(), TypeError,
+							fmt.Sprintf("Error en la tarea: %s", output.Output), true, output.Status)
+						w.db.Put(task.ID.String(), task)
+						taskCompleted = true
 
-					// Esperar el tiempo configurado antes de parar el worker
-					time.Sleep(w.workerFactory.GetStopDelay())
-					if stopped, msg, err := workerInstance.Stop(taskCtx.ctx); err != nil {
-						sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
-							fmt.Sprintf("Error deteniendo worker: %v", err), true)
-					} else if stopped {
-						sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
-							fmt.Sprintf("Worker detenido: %s", msg), false)
+					case domain.STOPPED:
+						task.State = domain.Stopped
+						sendOutput(taskCtx.outputChan, task.ID.String(), TypeInfo,
+							fmt.Sprintf("Tarea detenida: %s", output.Output), false, output.Status)
+						w.db.Put(task.ID.String(), task)
+						taskCompleted = true
 					}
-					w.db.Put(task.ID.String(), task)
-					taskCompleted = true
-
-				case domain.ERROR:
-					task.State = domain.Failed
-					sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
-						fmt.Sprintf("Error en la tarea: %s", status.Message), true)
-					w.db.Put(task.ID.String(), task)
-					taskCompleted = true
-
-				case domain.STOPPED:
-					task.State = domain.Stopped
-					sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
-						fmt.Sprintf("Tarea detenida: %s", status.Message), false)
-					w.db.Put(task.ID.String(), task)
-					taskCompleted = true
 				}
 			}
 
 		case <-processTimeout:
 			task.State = domain.Failed
-			sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
-				"Tarea cancelada por timeout", true)
+			sendOutput(taskCtx.outputChan, task.ID.String(), TypeError,
+				"Tarea cancelada por timeout", true, domain.ERROR)
 			w.db.Put(task.ID.String(), task)
 			taskCompleted = true
 
 		case <-taskCtx.ctx.Done():
 			task.State = domain.Stopped
-			sendOutput(taskCtx.outputChan, task.ID.String(), prefixError,
-				"Tarea cancelada por contexto", true)
+			sendOutput(taskCtx.outputChan, task.ID.String(), TypeError,
+				"Tarea cancelada por contexto", true, domain.STOPPED)
 			w.db.Put(task.ID.String(), task)
 			taskCompleted = true
 		}
 	}
 
 	// Enviar mensaje final antes de cerrar
-	sendOutput(taskCtx.outputChan, task.ID.String(), prefixInfo,
-		fmt.Sprintf("Tarea finalizada con estado: %s", task.State), false)
+	sendOutput(taskCtx.outputChan, task.ID.String(), TypeInfo,
+		fmt.Sprintf("Tarea finalizada con estado: %s", task.State), false, lastStatus)
 }
 
 func (w *Worker) acquireSlot() bool {
@@ -315,7 +297,7 @@ func (w *Worker) AddTask(ctx context.Context, task domain.Task) (<-chan *domain.
 		ctx:        ctx,
 	}
 
-	sendOutput(outputChan, task.ID.String(), prefixInfo, "Tarea encolada exitosamente", false)
+	sendOutput(outputChan, task.ID.String(), TypeInfo, "Tarea encolada exitosamente", false, domain.PENDING)
 	return outputChan, nil
 }
 

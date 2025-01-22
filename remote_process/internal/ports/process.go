@@ -16,6 +16,8 @@ type ProcessOutput struct {
 	ProcessID string
 	Output    string
 	IsError   bool
+	Type      string
+	Status    ProcessStatus
 }
 
 // Define the ProcessStatus enum

@@ -66,6 +66,8 @@ func (s *ServerAdapter) StartProcess(stream remote_process.RemoteProcessService_
 			ProcessId: output.ProcessID,
 			Output:    output.Output,
 			IsError:   output.IsError,
+			Type:      output.Type,
+			Status:    ConvertPortsProcessStatusToProto(output.Status),
 		})
 		if err != nil {
 			return status.Errorf(codes.Internal, "failed to send output: %v", err)
