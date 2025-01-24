@@ -47,9 +47,9 @@ func TestCreateTaskViaWS(t *testing.T) {
 	taskReq := createTaskRequest{
 		Name:         "test-task-WS",
 		Image:        "posts_mpv-remote-process",
-		Command:      []string{"sh", "-c", "find / -type f -o -type d"},
+		Command:      []string{"sh", "-c", "find . -type f -o -type d"},
 		Env:          map[string]string{"EXAMPLE_KEY": "example_value"},
-		WorkingDir:   "/",
+		WorkingDir:   "/etc",
 		InstanceType: "docker",
 	}
 

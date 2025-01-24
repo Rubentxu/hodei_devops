@@ -60,7 +60,7 @@ func (m *JWTManager) GenerateToken(username, role string) (string, error) {
 
 // ValidateToken valida y extrae la información del token
 func (m *JWTManager) ValidateToken(accessToken string) (*UserClaims, error) {
-	log.Printf("Validando token de acceso: %s******", accessToken[:6])
+	log.Printf("Validando token de acceso: %s******", accessToken[:9])
 	token, err := jwt.ParseWithClaims(
 		accessToken,
 		&UserClaims{},
