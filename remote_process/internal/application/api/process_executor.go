@@ -292,6 +292,8 @@ func (e *LocalProcessExecutor) Start(ctx context.Context, processID string, comm
 		delete(e.healthStatuses, processID)
 		e.healthStatusMu.Unlock()
 
+		// Enviar el estado final de FINISHED
+		e.sendHealthStatus(outputChan, processID, ports.FINISHED, "Process finished")
 		// Cerrar el canal de salida
 		close(outputChan)
 	}()

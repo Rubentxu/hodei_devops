@@ -4,6 +4,7 @@ import (
 	"dev.rubentxu.devops-platform/protos/remote_process"
 	"dev.rubentxu.devops-platform/remote_process/internal/domain"
 	"dev.rubentxu.devops-platform/remote_process/internal/ports"
+	"log"
 )
 
 type MetricsHandler struct {
@@ -33,10 +34,12 @@ func (h *MetricsHandler) CollectMetrics(stream remote_process.RemoteProcessServi
 	if err != nil {
 		return err
 	}
+	log.Printf("Iniciando la recolección de métricas para el worker %s", req.WorkerId)
 
 	// Enviar métricas al cliente
 	for metrics := range metricsChan {
 		protoMetrics := convertToProtoMetrics(metrics)
+		log.Printf("Enviando métricas al cliente: %v", protoMetrics)
 		if err := stream.Send(protoMetrics); err != nil {
 			return err
 		}
@@ -63,6 +66,7 @@ func convertCPUMetrics(cpu *domain.CPUMetrics) *remote_process.CPUMetrics {
 	if cpu == nil {
 		return nil
 	}
+	log.Printf("Converting CPU metrics: %v", cpu)
 
 	cores := make([]*remote_process.CPUCoreMetrics, len(cpu.Cores))
 	for i, core := range cpu.Cores {

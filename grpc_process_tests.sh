@@ -89,36 +89,53 @@ run_tests() {
     echo -n "Payload: " && echo "${jwt_token}" | cut -d '.' -f 2 | base64 -d 2>/dev/null
     echo -e "Token: \033[35m${jwt_token:0:50}...\033[0m\n"
 
-     declare -a COMMANDS=(
-         # --- 1. Comandos Básicos ---
-         '{"command": ["echo", "Test Básico"], "environment": {}, "working_directory": "/tmp", "process_id": "basic-1"}'
-         '{"command": ["pwd"], "environment": {}, "working_directory": "/etc", "process_id": "basic-2"}'
+    declare -a COMMANDS=(
+        # --- 1. Comandos Básicos ---
+        '{"command": ["echo", "Test Básico"], "environment": {}, "working_directory": "/tmp", "process_id": "basic-1"}'
+        '{"command": ["pwd"], "environment": {}, "working_directory": "/etc", "process_id": "basic-2"}'
 
-         # --- 2. Expansión Variables ---
-         '{"command": ["bash", "-c", "echo $USER"], "environment": {"USER": "test_user"}, "working_directory": "/tmp", "process_id": "var-1"}'
-         '{"command": ["bash", "-c", "echo ${VAR_CON_ESPACIOS}"], "environment": {"VAR_CON_ESPACIOS": "Hola Mundo"}, "working_directory": "/tmp", "process_id": "var-2"}'
+        # --- 2. Expansión Variables ---
+        '{"command": ["bash", "-c", "echo $USER"], "environment": {"USER": "test_user"}, "working_directory": "/tmp", "process_id": "var-1"}'
+        '{"command": ["bash", "-c", "echo ${VAR_CON_ESPACIOS}"], "environment": {"VAR_CON_ESPACIOS": "Hola Mundo"}, "working_directory": "/tmp", "process_id": "var-2"}'
 
-         # --- 3. Manejo de Errores ---
-         '{"command": ["comando_inexistente"], "environment": {}, "working_directory": "/tmp", "process_id": "error-1"}'
-         '{"command": ["ls", "/directorio/inexistente"], "environment": {}, "working_directory": "/tmp", "process_id": "error-2"}'
+        # --- 3. Manejo de Errores ---
+        '{"command": ["comando_inexistente"], "environment": {}, "working_directory": "/tmp", "process_id": "error-1"}'
+        '{"command": ["ls", "/directorio/inexistente"], "environment": {}, "working_directory": "/tmp", "process_id": "error-2"}'
 
-         # --- 4. Comandos Complejos ---
-         '{"command": ["bash", "-c", "for i in {1..5}; do echo \"Iteración $i\"; sleep 0.1; done"], "environment": {}, "working_directory": "/tmp", "process_id": "complex-1"}'
-         '{"command": ["bash", "-c", "curl -s ifconfig.me"], "environment": {}, "working_directory": "/tmp", "process_id": "complex-2"}'
+        # --- 4. Comandos Complejos ---
+        '{"command": ["bash", "-c", "for i in {1..5}; do echo \"Iteración $i\"; sleep 0.1; done"], "environment": {}, "working_directory": "/tmp", "process_id": "complex-1"}'
+        '{"command": ["bash", "-c", "curl -s ifconfig.me"], "environment": {}, "working_directory": "/tmp", "process_id": "complex-2"}'
 
-         # --- 5. Operaciones Filesystem ---
-         '{"command": ["bash", "-c", "mkdir -p test_dir && touch test_dir/file{1..3}.txt"], "environment": {}, "working_directory": "/tmp", "process_id": "fs-1"}'
-         '{"command": ["bash", "-c", "tar -czf archive.tar.gz test_dir"], "environment": {}, "working_directory": "/tmp", "process_id": "fs-2"}'
+        # --- 5. Operaciones Filesystem ---
+        '{"command": ["bash", "-c", "mkdir -p test_dir && touch test_dir/file{1..3}.txt"], "environment": {}, "working_directory": "/tmp", "process_id": "fs-1"}'
+        '{"command": ["bash", "-c", "tar -czf archive.tar.gz test_dir"], "environment": {}, "working_directory": "/tmp", "process_id": "fs-2"}'
 
-         # --- 6. Procesos Concurrentes ---
-         '{"command": ["bash", "-c", "for i in {1..3}; do echo \"Proceso $i\" & done; wait"], "environment": {}, "working_directory": "/tmp", "process_id": "concurrent-1"}'
+        # --- 6. Procesos Concurrentes ---
+        '{"command": ["bash", "-c", "for i in {1..3}; do echo \"Proceso $i\" & done; wait"], "environment": {}, "working_directory": "/tmp", "process_id": "concurrent-1"}'
 
-         # --- 7. Manejo de Señales ---
-#         '{"command": ["bash", "-c", "trap \"echo SEÑAL RECIBIDA; exit 0\" SIGTERM; while true; do sleep 1; done"], "environment": {}, "working_directory": "/tmp", "process_id": "signal-1"}'
+#        # --- 7. Manejo de Señales ---
+#            '{"command": ["bash", "-c", "timeout 5 bash -c 'trap \"echo SIGNAL RECIBIDA; exit 0\" SIGTERM; while true; do sleep 1; done\"], "environment": {}, "working_directory": "/tmp", "process_id": "signal-1"}'
 
-         # --- 8. Entrada/Salida ---
-         '{"command": ["bash", "-c", "read input && echo \"Leíste: $input\""], "environment": {}, "working_directory": "/tmp", "process_id": "io-1"}'
-     )
+
+        # --- 8. Entrada/Salida ---
+        '{"command": ["bash", "-c", "read input && echo \"Leíste: $input\""], "environment": {}, "working_directory": "/tmp", "process_id": "io-1"}'
+
+        # --- 9. Comandos de Red ---
+        '{"command": ["ping", "-c", "4", "google.com"], "environment": {}, "working_directory": "/tmp", "process_id": "network-1"}'
+        '{"command": ["curl", "-I", "https://www.example.com"], "environment": {}, "working_directory": "/tmp", "process_id": "network-2"}'
+
+        # --- 10. Manipulación de Archivos ---
+        '{"command": ["bash", "-c", "echo \"Contenido de prueba\" > test_file.txt"], "environment": {}, "working_directory": "/tmp", "process_id": "file-1"}'
+        '{"command": ["cat", "test_file.txt"], "environment": {}, "working_directory": "/tmp", "process_id": "file-2"}'
+
+        # --- 11. Comandos de Sistema ---
+        '{"command": ["uptime"], "environment": {}, "working_directory": "/tmp", "process_id": "system-1"}'
+        '{"command": ["df", "-h"], "environment": {}, "working_directory": "/tmp", "process_id": "system-2"}'
+
+        # --- 12. Comandos de Usuario ---
+        '{"command": ["whoami"], "environment": {}, "working_directory": "/tmp", "process_id": "user-1"}'
+        '{"command": ["id"], "environment": {}, "working_directory": "/tmp", "process_id": "user-2"}'
+    )
 
 
     for CMD in "${COMMANDS[@]}"; do
@@ -146,6 +163,18 @@ run_tests() {
             echo -e "\033[32mSalida:\n$(cat "${TMP_OUTPUT}" | jq -r .output)\033[0m"
             TEST_RESULTS+=("PASS: ${process_id}")
         fi
+
+               # Verificar que el último mensaje tenga el estado FINISHED
+     # Verificar que el último mensaje tenga el estado FINISHED
+     local last_message=$(jq -s '.[-1]' "${TMP_OUTPUT}")
+     echo -e "\033[1;36mÚltimo mensaje:\033[0m"
+     echo -e "\033[34m${last_message}\033[0m"
+     if echo "$last_message" | jq -e '.status == "FINISHED"' > /dev/null; then
+         success "Último mensaje con estado FINISHED para ${process_id}"
+     else
+         error "Último mensaje no tiene estado FINISHED para ${process_id}"
+         TEST_RESULTS+=("FAIL: ${process_id} - Último mensaje no tiene estado FINISHED")
+     fi
     done
 }
 

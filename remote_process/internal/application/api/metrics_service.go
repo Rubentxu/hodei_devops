@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"log"
+	"strings"
 	"time"
 
 	"dev.rubentxu.devops-platform/remote_process/internal/domain"
@@ -21,7 +22,7 @@ func NewMetricsService(collector ports.MetricsCollector) *MetricsService {
 
 func (s *MetricsService) StreamMetrics(ctx context.Context, workerID string, metricTypes []string, interval int64) (<-chan domain.WorkerMetrics, error) {
 	metricsChan := make(chan domain.WorkerMetrics)
-
+	log.Printf("Iniciando la recolección de métricas para el worker %s", workerID)
 	go func() {
 		defer close(metricsChan)
 		ticker := time.NewTicker(time.Duration(interval) * time.Second)
@@ -42,6 +43,7 @@ func (s *MetricsService) StreamMetrics(ctx context.Context, workerID string, met
 					if err := s.collectMetricByType(ctx, metricType, &metrics); err != nil {
 						log.Printf("Error collecting %s metrics: %v", metricType, err)
 					}
+					log.Printf("Métricas recolectadas: %v", metrics)
 				}
 
 				select {
@@ -58,8 +60,8 @@ func (s *MetricsService) StreamMetrics(ctx context.Context, workerID string, met
 
 func (s *MetricsService) collectMetricByType(ctx context.Context, metricType string, metrics *domain.WorkerMetrics) error {
 	var err error
-
-	switch metricType {
+	log.Printf("Recolectando métricas de tipo: %s", metricType)
+	switch strings.ToLower(metricType) {
 	case "cpu":
 		metrics.CPU, err = s.collector.CollectCPUMetrics(ctx)
 	case "memory":

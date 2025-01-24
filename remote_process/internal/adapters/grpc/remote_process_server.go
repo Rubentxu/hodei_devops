@@ -2,7 +2,6 @@ package grpc
 
 import (
 	"context"
-
 	"dev.rubentxu.devops-platform/protos/remote_process"
 	"dev.rubentxu.devops-platform/remote_process/internal/adapters/grpc/security"
 	"dev.rubentxu.devops-platform/remote_process/internal/ports"
