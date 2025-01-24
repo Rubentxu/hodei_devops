@@ -1,0 +1,83 @@
+basePath: /
+definitions:
+  internal_adapters_websockets.ErrorResponse:
+    properties:
+      code:
+        description: |-
+          Código de error
+          Example: invalid_request
+        type: string
+      message:
+        description: |-
+          Mensaje de error
+          Example: Invalid request parameters
+        type: string
+    type: object
+  internal_adapters_websockets.HealthResponse:
+    properties:
+      status:
+        description: |-
+          Estado del servicio
+          Example: healthy
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: your.email@example.com
+    name: API Support
+  description: API para gestionar tareas y procesos remotos
+  license:
+    name: MIT
+    url: http://opensource.org/licenses/MIT
+  termsOfService: http://swagger.io/terms/
+  title: Worker API
+  version: "1.0"
+paths:
+  /health:
+    get:
+      consumes:
+      - application/json
+      description: Retorna el estado de salud del servicio
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_adapters_websockets.HealthResponse'
+      summary: Endpoint de health check
+      tags:
+      - health
+  /ws:
+    get:
+      consumes:
+      - application/json
+      description: |-
+        Endpoint WebSocket para gestionar tareas en tiempo real. Soporta las siguientes acciones:
+        - create_task: Crear una nueva tarea
+        - stop_task: Detener una tarea en ejecución
+        - list_tasks: Listar todas las tareas
+      parameters:
+      - description: ID del cliente para tracking
+        in: query
+        name: client_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "101":
+          description: Switching Protocols
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_adapters_websockets.ErrorResponse'
+      summary: Gestiona conexiones WebSocket para tareas
+      tags:
+      - WebSocket
+schemes:
+- http
+- ws
+swagger: "2.0"

@@ -41,31 +41,24 @@ func NewWSHandler(w *worker.Worker) *WSHandler {
 	return &WSHandler{worker: w}
 }
 
-type WSMessage struct {
-	Action  string          `json:"action"`
-	Payload json.RawMessage `json:"payload"`
-}
+// @title Worker WebSocket API
+// @version 1.0
+// @description API WebSocket para gestionar tareas
+// @BasePath /
 
-type TaskRequest struct {
-	Name         string            `json:"name"`
-	Image        string            `json:"image"`
-	Command      []string          `json:"command,omitempty"`
-	Env          map[string]string `json:"env,omitempty"`
-	WorkingDir   string            `json:"working_dir,omitempty"`
-	InstanceType string            `json:"instance_type,omitempty"`
-	Timeout      int               `json:"timeout,omitempty"`
-}
-
-type TaskResponse struct {
-	TaskID      string `json:"task_id"`
-	Status      string `json:"status"`
-	Output      string `json:"output,omitempty"`
-	Error       string `json:"error,omitempty"`
-	IsError     bool   `json:"is_error"`
-	ExitCode    string `json:"exit_code,omitempty"`
-	CompletedAt string `json:"completed_at,omitempty"`
-}
-
+// HandleConnection godoc
+// @Summary Gestiona conexiones WebSocket para tareas
+// @Description Endpoint WebSocket para gestionar tareas en tiempo real. Soporta las siguientes acciones:
+// @Description - create_task: Crear una nueva tarea
+// @Description - stop_task: Detener una tarea en ejecución
+// @Description - list_tasks: Listar todas las tareas
+// @Tags WebSocket
+// @Accept json
+// @Produce json
+// @Param client_id query string false "ID del cliente para tracking"
+// @Success 101 {string} string "Switching Protocols"
+// @Failure 400 {object} ErrorResponse
+// @Router /ws [get]
 func (h *WSHandler) HandleConnection(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -124,7 +117,7 @@ func (h *WSHandler) handleCreateTask(ctx context.Context, conn *websocket.Conn, 
 		return
 	}
 
-	if req.Image == "" || req.Name == "" {
+	if req.Name == "" || req.Image == "" {
 		h.sendError(conn, "validation_error", "Name and Image are required fields")
 		return
 	}
@@ -332,6 +325,13 @@ func (h *WSHandler) sendError(conn *websocket.Conn, code string, message string)
 	})
 }
 
+// @Summary Endpoint de health check
+// @Description Retorna el estado de salud del servicio
+// @Tags health
+// @Accept json
+// @Produce json
+// @Success 200 {object} HealthResponse
+// @Router /health [get]
 func HealthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -354,4 +354,111 @@ func HandleSignals() {
 		log.Println("Signal received, shutting down...")
 		os.Exit(0)
 	}
+}
+
+// WSMessage representa un mensaje WebSocket
+// swagger:model
+type WSMessage struct {
+	// Acción a realizar (create_task, stop_task, list_tasks)
+	// Required: true
+	// Enum: create_task,stop_task,list_tasks
+	// Example: create_task
+	Action string `json:"action" example:"create_task"`
+
+	// Payload de la acción
+	// Example: {"name":"hello-world","image":"posts_mpv-remote-process","command":["echo","Hello, World!"],"env":{"GREETING":"Hello"},"working_dir":"/tmp","instance_type":"docker"}
+	Payload json.RawMessage `json:"payload"`
+}
+
+// TaskRequest representa una solicitud de tarea
+// swagger:model
+type TaskRequest struct {
+	// Nombre de la tarea
+	// Required: true
+	// Example: hello-world
+	Name string `json:"name" example:"hello-world"`
+
+	// Imagen Docker a usar
+	// Required: true
+	// Example: posts_mpv-remote-process
+	Image string `json:"image" example:"posts_mpv-remote-process"`
+
+	// Comando a ejecutar
+	// Example: ["echo","Hello, World!"]
+	Command []string `json:"command,omitempty" example:"[\"echo\",\"Hello, World!\"]"`
+
+	// Variables de entorno
+	// Example: {"GREETING":"Hello"}
+	Env map[string]string `json:"env,omitempty" example:"{\"GREETING\":\"Hello\"}"`
+
+	// Directorio de trabajo
+	// Example: /tmp
+	WorkingDir string `json:"working_dir,omitempty" example:"/tmp"`
+
+	// Tipo de instancia (docker, kubernetes)
+	// Example: docker
+	InstanceType string `json:"instance_type,omitempty" example:"docker"`
+
+	// Timeout en segundos
+	// Example: 60
+	Timeout int `json:"timeout,omitempty" example:"60"`
+}
+
+// TaskResponse representa la respuesta de una tarea
+// swagger:model
+type TaskResponse struct {
+	// ID único de la tarea
+	// Example: task-123
+	TaskID string `json:"task_id" example:"task-123"`
+
+	// Estado actual de la tarea (pending, running, completed, failed, stopped)
+	// Example: completed
+	Status string `json:"status" example:"completed"`
+
+	// Salida de la tarea
+	// Example: Hello, World!
+	Output string `json:"output,omitempty" example:"Hello, World!"`
+
+	// Error si ocurrió alguno
+	// Example: 
+	Error string `json:"error,omitempty"`
+
+	// Indica si hubo error
+	// Example: false
+	IsError bool `json:"is_error" example:"false"`
+
+	// Código de salida
+	// Example: 0
+	ExitCode string `json:"exit_code,omitempty" example:"0"`
+
+	// Fecha de finalización
+	// Example: 2025-01-24T19:06:51Z
+	CompletedAt string `json:"completed_at,omitempty" example:"2025-01-24T19:06:51Z"`
+}
+
+// TaskListResponse representa la lista de tareas
+// swagger:model
+type TaskListResponse struct {
+	// Lista de tareas
+	Tasks []TaskResponse `json:"tasks"`
+}
+
+// HealthResponse representa la respuesta del health check
+// swagger:model
+type HealthResponse struct {
+	// Estado del servicio
+	// Example: healthy
+	Status string `json:"status"`
+}
+
+// ErrorResponse representa un error en la API
+// swagger:model
+type ErrorResponse struct {
+	// Código de error
+	// Example: invalid_request
+	Code string `json:"code"`
+
+	// Mensaje de error
+	// Example: Invalid request parameters
+	Message string `json:"message"`
 }
