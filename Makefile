@@ -29,6 +29,11 @@ JWT_TOKEN = $(JWT_HEADER_B64).$(JWT_PAYLOAD_B64).$(JWT_SIGNATURE)
 # Agregar variable para el socket de Docker
 DOCKER_SOCKET ?= /var/run/docker.sock
 
+# Swagger configuration
+SWAGGER_UI_VERSION ?= v4.15.5
+SWAGGER_UI_DIR = worker/swagger-ui
+API_DOCS_DIR = worker/api
+
 .PHONY: proto
 proto:
 	@echo "🔨 Generando código desde archivos proto..."
@@ -194,6 +199,38 @@ help-certs:
 	@echo "  make run-remote_process   - Run remote_process with TLS in development"
 	@echo "  make run-worker   - Run worker with TLS in development"
 	@echo "  make docker-compose-dev - Run all services with TLS in development"
+
+.PHONY: install-swagger
+install-swagger:
+	@echo "📚 Installing swagger..."
+	@go install github.com/go-swagger/go-swagger/cmd/swagger@latest
+
+.PHONY: swagger-ui
+swagger-ui:
+	@echo "📚 Setting up Swagger UI..."
+	@mkdir -p $(SWAGGER_UI_DIR)
+	@rm -rf $(SWAGGER_UI_DIR)/*
+	@curl -L -o $(SWAGGER_UI_DIR)/swagger-ui.tar.gz https://github.com/swagger-api/swagger-ui/archive/$(SWAGGER_UI_VERSION).tar.gz
+	@tar -xzf $(SWAGGER_UI_DIR)/swagger-ui.tar.gz -C $(SWAGGER_UI_DIR) --strip-components=2 swagger-ui-$(SWAGGER_UI_VERSION:v%=%)/dist
+	@rm $(SWAGGER_UI_DIR)/swagger-ui.tar.gz
+	@sed -i 's|https://petstore.swagger.io/v2/swagger.json|/swagger.json|g' $(SWAGGER_UI_DIR)/swagger-initializer.js
+	@echo "✅ Swagger UI setup complete at $(SWAGGER_UI_DIR)"
+
+.PHONY: swagger-gen
+swagger-gen: install-swagger
+	@echo "📚 Generating Swagger documentation..."
+	@mkdir -p $(API_DOCS_DIR)
+	@swagger generate spec -o $(API_DOCS_DIR)/swagger.json --scan-models
+	@echo "✅ Swagger spec generated at $(API_DOCS_DIR)/swagger.json"
+
+.PHONY: swagger-serve
+swagger-serve: swagger-gen
+	@echo "📚 Serving Swagger documentation..."
+	@swagger serve -F=swagger $(API_DOCS_DIR)/swagger.json
+
+.PHONY: swagger
+swagger: swagger-gen swagger-ui
+	@echo "✅ Swagger setup complete"
 
 .PHONY: stop-remote_process
 stop-remote_process:
