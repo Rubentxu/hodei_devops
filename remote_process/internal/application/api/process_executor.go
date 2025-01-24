@@ -50,7 +50,7 @@ func (e *LocalProcessExecutor) sendOutput(outputChan chan ports.ProcessOutput, p
 
 	// Obtener el estado actual del proceso
 	e.healthStatusMu.Lock()
-	currentStatus := ports.UNKNOWN
+	currentStatus := ports.HEALTHY
 	if status, exists := e.healthStatuses[processID]; exists {
 		currentStatus = status.Status
 	}

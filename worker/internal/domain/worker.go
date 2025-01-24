@@ -36,8 +36,8 @@ const (
 func (hs HealthStatus) String() string {
 
 	switch hs {
-	case UNKNOWN:
-		return "MACARENA"
+	case PENDING:
+		return "PENDING"
 	case RUNNING:
 		return "RUNNING"
 	case HEALTHY:
@@ -49,7 +49,7 @@ func (hs HealthStatus) String() string {
 	case FINISHED:
 		return "FINISHED"
 	default:
-		return "LOLAILO"
+		return "UNKNOWN"
 	}
 }
 

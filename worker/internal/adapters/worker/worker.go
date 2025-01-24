@@ -109,39 +109,158 @@ func sendOutput(outputChan chan<- *domain.ProcessOutput, processID string, messa
 
 }
 
+type StateTransition struct {
+	FromState domain.HealthStatus
+	ToState   domain.HealthStatus
+	Action    func() error
+}
+
+type WorkerState struct {
+	mu           sync.RWMutex
+	currentState domain.HealthStatus
+	transitions  map[domain.HealthStatus][]StateTransition
+	stateChanged chan domain.HealthStatus
+}
+
+func NewWorkerState(workerInstance ports.WorkerInstance, taskID string) *WorkerState {
+	ws := &WorkerState{
+		currentState: domain.UNKNOWN,
+		transitions:  make(map[domain.HealthStatus][]StateTransition),
+		stateChanged: make(chan domain.HealthStatus, 1),
+	}
+
+	// Definir transiciones permitidas
+	ws.AddTransition(domain.UNKNOWN, domain.RUNNING, nil)
+	ws.AddTransition(domain.RUNNING, domain.HEALTHY, nil)
+	ws.AddTransition(domain.RUNNING, domain.ERROR, nil)
+	ws.AddTransition(domain.HEALTHY, domain.ERROR, nil)
+	ws.AddTransition(domain.HEALTHY, domain.STOPPED, nil)
+
+	// Función para detener el worker
+	stopWorker := func() error {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if stopped, msg, err := workerInstance.Stop(stopCtx); err != nil {
+			log.Printf("[%s] Error deteniendo worker: %v", taskID, err)
+			return err
+		} else if stopped {
+			log.Printf("[%s] Worker detenido: %s", taskID, msg)
+		}
+		return nil
+	}
+
+	// Transiciones que requieren detener el worker
+	ws.AddTransition(domain.RUNNING, domain.FINISHED, stopWorker)
+	ws.AddTransition(domain.HEALTHY, domain.FINISHED, stopWorker)
+
+	return ws
+}
+
+func (ws *WorkerState) AddTransition(from, to domain.HealthStatus, action func() error) {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	if ws.transitions[from] == nil {
+		ws.transitions[from] = make([]StateTransition, 0)
+	}
+	ws.transitions[from] = append(ws.transitions[from], StateTransition{
+		FromState: from,
+		ToState:   to,
+		Action:    action,
+	})
+}
+
+func (ws *WorkerState) GetState() domain.HealthStatus {
+	ws.mu.RLock()
+	defer ws.mu.RUnlock()
+	return ws.currentState
+}
+
+func (ws *WorkerState) SetState(newState domain.HealthStatus) error {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	currentState := ws.currentState
+	if currentState == newState {
+		return nil
+	}
+
+	// Verificar si la transición está permitida
+	transitions := ws.transitions[currentState]
+	for _, t := range transitions {
+		if t.ToState == newState {
+			if t.Action != nil {
+				if err := t.Action(); err != nil {
+					return fmt.Errorf("error en transición de estado %v -> %v: %w", currentState, newState, err)
+				}
+			}
+			ws.currentState = newState
+			select {
+			case ws.stateChanged <- newState:
+			default:
+				// El canal está lleno, lo vaciamos y enviamos el nuevo estado
+				select {
+				case <-ws.stateChanged:
+				default:
+				}
+				ws.stateChanged <- newState
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("transición de estado no permitida: %v -> %v", currentState, newState)
+}
+
 func (w *Worker) processTask(taskCtx TaskContext) {
-	defer w.releaseSlot()
+	taskID := taskCtx.Task.ID.String()
+	workerRemoved := make(chan struct{})
+
+	defer func() {
+		w.releaseSlot()
+		w.activeWorkers.Delete(taskID)
+		close(workerRemoved)
+		// Intentar procesar la cola pendiente después de liberar un slot
+		go w.processPendingQueue()
+	}()
 	defer close(taskCtx.outputChan)
 
-	// Actualizar estado de la tarea
-	task := taskCtx.Task
-	task.State = domain.Running
-	w.db.Put(task.ID.String(), task)
-	sendOutput(taskCtx.outputChan, task.ID.String(), TypeInfo,
-		fmt.Sprintf("Tarea en estado: %s", task.State), false, domain.RUNNING)
-
 	// Ejecutar la tarea
-	workerInstance, err := w.workerFactory.Create(task)
+	workerInstance, err := w.workerFactory.Create(taskCtx.Task)
 	if err != nil {
-		task.State = domain.Failed
-		w.db.Put(task.ID.String(), task)
-		sendOutput(taskCtx.outputChan, task.ID.String(), TypeError,
+		sendOutput(taskCtx.outputChan, taskID, TypeError,
 			fmt.Sprintf("Error creando worker instance: %v", err), true, domain.ERROR)
 		return
 	}
 
-	w.activeWorkers.Store(task.ID.String(), workerInstance)
-	defer w.activeWorkers.Delete(task.ID.String())
+	// Defer para detener el worker al salir de processTask
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if stopped, msg, err := workerInstance.Stop(stopCtx); err != nil {
+			log.Printf("[%s] Error deteniendo worker en defer: %v", taskID, err)
+		} else if stopped {
+			log.Printf("[%s] Worker detenido en defer: %s", taskID, msg)
+		}
+	}()
+
+	// Inicializar la máquina de estados
+	state := NewWorkerState(workerInstance, taskID)
+	if err := state.SetState(domain.RUNNING); err != nil {
+		log.Printf("[%s] Error estableciendo estado inicial: %v", taskID, err)
+		return
+	}
+
+	w.activeWorkers.Store(taskID, workerInstance)
 
 	endpoint, err := workerInstance.Start(taskCtx.ctx, taskCtx.outputChan)
 	if err != nil {
-		task.State = domain.Failed
-		sendOutput(taskCtx.outputChan, task.ID.String(), TypeError,
+		state.SetState(domain.ERROR)
+		sendOutput(taskCtx.outputChan, taskID, TypeError,
 			fmt.Sprintf("Error iniciando tarea: %v no se resolvio el endpoint", err), true, domain.ERROR)
 		return
 	}
-	sendOutput(taskCtx.outputChan, task.ID.String(), TypeInfo,
-		fmt.Sprintf("Tarea iniciada en %s", endpoint), false, domain.RUNNING)
+
+	log.Printf("[%s] Tarea iniciada en %s", taskID, endpoint)
 
 	// Ejecutar la tarea en una goroutine separada
 	runErrChan := make(chan error, 1)
@@ -151,87 +270,128 @@ func (w *Worker) processTask(taskCtx TaskContext) {
 
 	go func() {
 		defer close(runDoneChan)
-		err := workerInstance.Run(runCtx, task, taskCtx.outputChan)
+		err := workerInstance.Run(runCtx, taskCtx.Task, taskCtx.outputChan)
 		runErrChan <- err
 	}()
 
 	// Monitorear el estado de la tarea
-	var lastStatus domain.HealthStatus
-	processTimeout := time.After(5 * time.Minute) // Timeout de seguridad
+	processTimeout := time.After(5 * time.Minute)
 	taskCompleted := false
 
 	for !taskCompleted {
 		select {
 		case <-runDoneChan:
 			if err := <-runErrChan; err != nil {
-				task.State = domain.Failed
-				sendOutput(taskCtx.outputChan, task.ID.String(), TypeError,
+				state.SetState(domain.ERROR)
+				sendOutput(taskCtx.outputChan, taskID, TypeError,
 					fmt.Sprintf("Error ejecutando tarea: %v", err), true, domain.ERROR)
-				w.db.Put(task.ID.String(), task)
 				taskCompleted = true
 			}
 
 		case output := <-taskCtx.outputChan:
 			if output.Type == TypeHealth {
-				status := output.Status
-				if status != lastStatus {
-					lastStatus = status
-					sendOutput(taskCtx.outputChan, task.ID.String(), TypeInfo,
-						fmt.Sprintf("Cambio de estado: %v -> %s", status, output.Output), false, output.Status)
-
-					switch status {
-					case domain.FINISHED:
-						task.State = domain.Completed
-						sendOutput(taskCtx.outputChan, task.ID.String(), TypeInfo,
-							fmt.Sprintf("Tarea completada: %s", output.Output), false, output.Status)
-
-						time.Sleep(w.workerFactory.GetStopDelay())
-						if stopped, msg, err := workerInstance.Stop(taskCtx.ctx); err != nil {
-							sendOutput(taskCtx.outputChan, task.ID.String(), TypeError,
-								fmt.Sprintf("Error deteniendo worker: %v", err), true, output.Status)
-						} else if stopped {
-							sendOutput(taskCtx.outputChan, task.ID.String(), TypeInfo,
-								fmt.Sprintf("Worker detenido: %s", msg), false, output.Status)
-						}
-						w.db.Put(task.ID.String(), task)
-						taskCompleted = true
-
-					case domain.ERROR:
-						task.State = domain.Failed
-						sendOutput(taskCtx.outputChan, task.ID.String(), TypeError,
-							fmt.Sprintf("Error en la tarea: %s", output.Output), true, output.Status)
-						w.db.Put(task.ID.String(), task)
-						taskCompleted = true
-
-					case domain.STOPPED:
-						task.State = domain.Stopped
-						sendOutput(taskCtx.outputChan, task.ID.String(), TypeInfo,
-							fmt.Sprintf("Tarea detenida: %s", output.Output), false, output.Status)
-						w.db.Put(task.ID.String(), task)
-						taskCompleted = true
-					}
+				if err := state.SetState(output.Status); err != nil {
+					log.Printf("[%s] Error en transición de estado: %v", taskID, err)
+					continue
 				}
+
+				// Actualizar estado en BD y enviar notificación
+				taskCtx.Task.State = convertHealthStatusToTaskState(output.Status)
+				w.db.Put(taskID, taskCtx.Task)
+				sendOutput(taskCtx.outputChan, taskID, TypeInfo,
+					fmt.Sprintf("Estado actualizado: %s", output.Status), false, output.Status)
+
+				if output.Status == domain.FINISHED || output.Status == domain.ERROR || output.Status == domain.STOPPED {
+					taskCompleted = true
+				}
+			} else {
+				// Reenviar otros tipos de mensajes
+				taskCtx.outputChan <- output
+			}
+
+		case newState := <-state.stateChanged:
+			log.Printf("[%s] Cambio de estado detectado: %v", taskID, newState)
+			if newState == domain.FINISHED || newState == domain.ERROR || newState == domain.STOPPED {
+				taskCompleted = true
 			}
 
 		case <-processTimeout:
-			task.State = domain.Failed
-			sendOutput(taskCtx.outputChan, task.ID.String(), TypeError,
+			state.SetState(domain.ERROR)
+			sendOutput(taskCtx.outputChan, taskID, TypeError,
 				"Tarea cancelada por timeout", true, domain.ERROR)
-			w.db.Put(task.ID.String(), task)
 			taskCompleted = true
 
 		case <-taskCtx.ctx.Done():
-			task.State = domain.Stopped
-			sendOutput(taskCtx.outputChan, task.ID.String(), TypeError,
+			state.SetState(domain.STOPPED)
+			sendOutput(taskCtx.outputChan, taskID, TypeError,
 				"Tarea cancelada por contexto", true, domain.STOPPED)
-			w.db.Put(task.ID.String(), task)
 			taskCompleted = true
 		}
 	}
 
-	// Enviar mensaje final antes de cerrar
-	sendOutput(taskCtx.outputChan, task.ID.String(), TypeInfo,
-		fmt.Sprintf("Tarea finalizada con estado: %s", task.State), false, lastStatus)
+	// Asegurarse de que el worker se elimine
+	select {
+	case <-workerRemoved:
+		log.Printf("[%s] Worker eliminado correctamente", taskID)
+	case <-time.After(5 * time.Second):
+		log.Printf("[%s] Warning: No se pudo confirmar la eliminación del worker", taskID)
+	}
+}
+
+func convertHealthStatusToTaskState(status domain.HealthStatus) domain.State {
+	switch status {
+	case domain.RUNNING:
+		return domain.Running
+	case domain.FINISHED:
+		return domain.Completed
+	case domain.ERROR:
+		return domain.Failed
+	case domain.STOPPED:
+		return domain.Stopped
+	default:
+		return domain.Unknown
+	}
+}
+
+func (w *Worker) processPendingQueue() {
+	// Intentar procesar tantas tareas como slots disponibles haya
+	for {
+		w.pendingMutex.Lock()
+		if w.pendingQueue.Len() == 0 {
+			w.pendingMutex.Unlock()
+			return
+		}
+
+		// Intentar adquirir un slot
+		if !w.acquireSlot() {
+			w.pendingMutex.Unlock()
+			return
+		}
+
+		// Obtener la siguiente tarea y liberamos el lock inmediatamente
+		taskCtx := w.pendingQueue.Dequeue().(TaskContext)
+		w.pendingMutex.Unlock()
+
+		// Procesar la tarea en una goroutine separada
+		go func(ctx TaskContext) {
+			w.processTask(ctx)
+			// No necesitamos llamar a processPendingQueue aquí porque ya se llama en processTask
+		}(taskCtx)
+	}
+}
+
+func (w *Worker) retryStop(taskID string, instance ports.WorkerInstance) {
+	retryCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for retries := 0; retries < 3; retries++ {
+		if stopped, _, err := instance.Stop(retryCtx); err == nil && stopped {
+			log.Printf("Worker %s detenido exitosamente después de %d reintentos", taskID, retries+1)
+			return
+		}
+		time.Sleep(time.Second * time.Duration(retries+1))
+	}
+	log.Printf("No se pudo detener el worker %s después de 3 intentos", taskID)
 }
 
 func (w *Worker) acquireSlot() bool {
@@ -246,16 +406,6 @@ func (w *Worker) acquireSlot() bool {
 
 func (w *Worker) releaseSlot() {
 	atomic.AddInt32(&w.currentTasks, -1)
-}
-
-func (w *Worker) processPendingQueue() {
-	for w.pendingQueue.Len() > 0 {
-		if !w.acquireSlot() {
-			break
-		}
-		taskCtx := w.pendingQueue.Dequeue().(TaskContext)
-		go w.processTask(taskCtx)
-	}
 }
 
 // Control de concurrencia dinámico

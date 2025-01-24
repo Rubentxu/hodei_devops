@@ -290,6 +290,7 @@ func (d *DockerWorker) sendLogsMessage(outputChan chan<- *domain.ProcessOutput, 
 		IsError:   false,
 		Output:    msg,
 		ProcessID: d.task.ID.String(),
+		Status:    domain.PENDING,
 	}
 }
 
