@@ -4,11 +4,14 @@ package remote_process;
 
 option go_package = "dev.rubentxu.devops-platform/protos/remote_process";
 
+import "google/protobuf/struct.proto";
+
 // RemoteProcessService proporciona capacidades para la ejecución remota de procesos
 service RemoteProcessService {
   // Gestión de Procesos
   rpc StartProcess(stream ProcessStartRequest) returns (stream ProcessOutput);
   rpc StopProcess(ProcessStopRequest) returns (ProcessStopResponse);
+  rpc ExecuteCommand(ExecuteCommandRequest) returns (ExecuteCommandResponse);
 
   // Monitorización
   rpc MonitorHealth(stream HealthCheckRequest) returns (stream ProcessHealthStatus);
@@ -438,4 +441,28 @@ message DeltaBlock {
     bytes data = 4;
     int64 match_ref = 5;
     bool is_literal = 6;
+}
+
+message ExecuteCommandRequest {
+  repeated string command = 1;         // Ej: ["ifconfig", "eth0"] o ["ls", "-l"] ...
+  map<string, string> environment = 2; // Variables de entorno
+  string working_directory = 3;
+
+  // Opciones de "análisis" (abstracción de jc)
+  StructuredAnalysisOptions analysis_options = 4;
+}
+
+message StructuredAnalysisOptions {
+  // método/modo de análisis: "magic" o "classic" o lo que tú definas
+  string parse_mode = 1;
+
+  // Argumentos del parser (p.ej. ["ifconfig", "eth0"] en modo mágico, o ["--ifconfig"] en modo clásico)
+  repeated string arguments = 2;
+}
+
+message ExecuteCommandResponse {
+  bool success = 1;
+  int32 exit_code = 2;
+  string error_output = 3;
+  google.protobuf.Struct structured_analysis = 4;
 }

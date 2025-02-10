@@ -31,6 +31,7 @@ const (
 	STOPPED  HealthStatus = 4
 	FINISHED HealthStatus = 5
 	PENDING  HealthStatus = 6
+	DONE     HealthStatus = 7
 )
 
 func (hs HealthStatus) String() string {
@@ -48,6 +49,8 @@ func (hs HealthStatus) String() string {
 		return "STOPPED"
 	case FINISHED:
 		return "FINISHED"
+	case DONE:
+		return "DONE"
 	default:
 		return "UNKNOWN"
 	}

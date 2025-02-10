@@ -1,10 +1,13 @@
 package grpc
 
 import (
+	"bytes"
 	"context"
 	"dev.rubentxu.devops-platform/protos/remote_process"
 	"dev.rubentxu.devops-platform/remote_process/internal/adapters/grpc/security"
 	"dev.rubentxu.devops-platform/remote_process/internal/ports"
+	"encoding/json"
+	"fmt"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -12,6 +15,9 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
+	"os"
+	"os/exec"
 
 	"crypto/tls"
 	"log"
@@ -202,4 +208,276 @@ func ConvertPortsProcessStatusToProto(status ports.ProcessStatus) remote_process
 	default:
 		return remote_process.ProcessStatus_UNKNOWN_PROCESS_STATUS
 	}
+}
+
+// ExecuteCommand: Ejecuta un comando remoto, lee stdout/stderr y parsea stdout con jc.
+func (s *ServerAdapter) ExecuteCommand(ctx context.Context, req *remote_process.ExecuteCommandRequest) (*remote_process.ExecuteCommandResponse, error) {
+	// 1. Validaciones iniciales
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "Request cannot be nil")
+	}
+
+	// Validar que al menos hay un comando o análisis
+	if len(req.Command) == 0 {
+		// Si no hay comando, debe haber opciones de análisis válidas
+		if req.AnalysisOptions == nil {
+			return createErrorResponse("No command or analysis options specified", -1)
+		}
+		if err := validateAnalysisOptions(req.AnalysisOptions); err != nil {
+			return createErrorResponse(fmt.Sprintf("Invalid analysis options: %v", err), -1)
+		}
+		// En modo classic necesitamos entrada, así que no es válido sin comando
+		if req.AnalysisOptions.ParseMode == "classic" {
+			return createErrorResponse("Classic parse mode requires command output as input", -1)
+		}
+		// En modo magic, ejecutamos directamente jc con los argumentos
+		return executeJcCommand(ctx, req.AnalysisOptions.Arguments)
+	}
+
+	// 2. Validar el directorio de trabajo si está especificado
+	if req.WorkingDirectory != "" {
+		if _, err := os.Stat(req.WorkingDirectory); err != nil {
+			return createErrorResponse(fmt.Sprintf("Invalid working directory: %v", err), -1)
+		}
+	}
+
+	// 3. Validar variables de entorno
+	for k, v := range req.Environment {
+		if k == "" {
+			return createErrorResponse("Environment variable key cannot be empty", -1)
+		}
+		if v == "" {
+			return createErrorResponse(fmt.Sprintf("Environment variable value cannot be empty for key: %s", k), -1)
+		}
+	}
+
+	// 4. Validar opciones de análisis si existen
+	if req.AnalysisOptions != nil {
+		if err := validateAnalysisOptions(req.AnalysisOptions); err != nil {
+			return createErrorResponse(fmt.Sprintf("Invalid analysis options: %v", err), -1)
+		}
+	}
+
+	// 5. Preparar y ejecutar el comando
+	cmd := exec.CommandContext(ctx, req.Command[0], req.Command[1:]...)
+	cmd.Dir = req.WorkingDirectory
+
+	// Variables de entorno
+	env := os.Environ()
+	for k, v := range req.Environment {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+	cmd.Env = env
+
+	// Capturar stdout y stderr
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Ejecutar el comando
+	cmdErr := cmd.Run()
+	exitCode := 0
+	success := true
+	var errorDetails map[string]interface{}
+
+	if cmdErr != nil {
+		if exitErr, ok := cmdErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+			success = false
+			errorDetails = map[string]interface{}{
+				"type":      "command_error",
+				"exit_code": exitCode,
+				"error":     cmdErr.Error(),
+				"stderr":    stderr.String(),
+				"stdout":    stdout.String(),
+			}
+		} else {
+			return nil, status.Errorf(codes.Internal, "Failed to execute command: %v", cmdErr)
+		}
+	}
+
+	// 6. Procesar la salida estructurada si se solicitó
+	var structured *structpb.Struct
+	if req.AnalysisOptions != nil && req.AnalysisOptions.ParseMode != "" && stdout.Len() > 0 {
+		parseMode := req.AnalysisOptions.GetParseMode()
+		parseArgs := req.AnalysisOptions.GetArguments()
+
+		var parseErr error
+		switch parseMode {
+		case "magic":
+			structured, parseErr = parseWithMagicSyntax(parseArgs)
+		case "classic":
+			structured, parseErr = parseWithClassicSyntax(parseArgs, stdout.Bytes())
+		default:
+			parseErr = fmt.Errorf("unsupported parse mode: %s", parseMode)
+		}
+
+		if parseErr != nil {
+			success = false
+			errorDetails = map[string]interface{}{
+				"type":        "parse_error",
+				"parse_mode":  parseMode,
+				"error":       parseErr.Error(),
+				"exit_code":   exitCode,
+				"stderr":      stderr.String(),
+				"stdout":      stdout.String(),
+				"stdout_size": stdout.Len(),
+			}
+		}
+	}
+
+	// Convertir errorDetails a JSON si existe
+	var errorOutput string
+	if errorDetails != nil {
+		errorJSON, err := json.Marshal(errorDetails)
+		if err != nil {
+			log.Printf("Error marshaling error details: %v", err)
+			errorOutput = fmt.Sprintf("Error interno: %v", err)
+		} else {
+			errorOutput = string(errorJSON)
+		}
+	}
+
+	return &remote_process.ExecuteCommandResponse{
+		Success:            success,
+		ExitCode:           int32(exitCode),
+		ErrorOutput:        errorOutput,
+		StructuredAnalysis: structured,
+	}, nil
+}
+
+// createErrorResponse crea una respuesta de error estructurada
+func createErrorResponse(message string, exitCode int) (*remote_process.ExecuteCommandResponse, error) {
+	errorDetails := map[string]interface{}{
+		"type":      "validation_error",
+		"error":     message,
+		"exit_code": exitCode,
+	}
+
+	errorJSON, err := json.Marshal(errorDetails)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Error creating error response: %v", err)
+	}
+
+	return &remote_process.ExecuteCommandResponse{
+		Success:     false,
+		ExitCode:    int32(exitCode),
+		ErrorOutput: string(errorJSON),
+	}, nil
+}
+
+// executeJcCommand ejecuta jc directamente con los argumentos proporcionados
+func executeJcCommand(ctx context.Context, args []string) (*remote_process.ExecuteCommandResponse, error) {
+	structured, err := parseWithMagicSyntax(args)
+	if err != nil {
+		errorDetails := map[string]interface{}{
+			"type":       "jc_error",
+			"error":      err.Error(),
+			"arguments":  args,
+			"exit_code": -1,
+		}
+
+		errorJSON, jsonErr := json.Marshal(errorDetails)
+		if jsonErr != nil {
+			return nil, status.Errorf(codes.Internal, "Error creating error response: %v", jsonErr)
+		}
+
+		return &remote_process.ExecuteCommandResponse{
+			Success:     false,
+			ExitCode:    -1,
+			ErrorOutput: string(errorJSON),
+		}, nil
+	}
+
+	return &remote_process.ExecuteCommandResponse{
+		Success:            true,
+		ExitCode:           0,
+		StructuredAnalysis: structured,
+	}, nil
+}
+
+// validateAnalysisOptions valida las opciones de análisis
+func validateAnalysisOptions(opts *remote_process.StructuredAnalysisOptions) error {
+	if opts.ParseMode != "" && opts.ParseMode != "magic" && opts.ParseMode != "classic" {
+		return fmt.Errorf("invalid parse_mode: %s (must be 'magic' or 'classic')", opts.ParseMode)
+	}
+	if len(opts.Arguments) == 0 {
+		return fmt.Errorf("analysis arguments cannot be empty when parse_mode is set")
+	}
+	return nil
+}
+
+// parseWithMagicSyntax ejecuta jc en modo "mágico", ej: `jc ifconfig eth0`
+func parseWithMagicSyntax(args []string) (*structpb.Struct, error) {
+	cmd := exec.Command("jc", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			code := exitErr.ExitCode()
+			switch {
+			case code < 100:
+				return nil, fmt.Errorf("command error (exit=%d): %s", code, stderr.String())
+			case code == 100:
+				return nil, fmt.Errorf("jc internal error: %s", stderr.String())
+			default:
+				cmdCode := code - 100
+				return nil, fmt.Errorf("combined error (jc=100, cmd=%d): %s", cmdCode, stderr.String())
+			}
+		}
+		return nil, fmt.Errorf("execution error: %v", err)
+	}
+
+	return convertJSONToStruct(stdout.Bytes())
+}
+
+// parseWithClassicSyntax usa la forma `jc --<parser>` con stdout como stdin
+func parseWithClassicSyntax(args []string, input []byte) (*structpb.Struct, error) {
+	cmd := exec.Command("jc", args...)
+	cmd.Stdin = bytes.NewReader(input)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			code := exitErr.ExitCode()
+			if code == 100 {
+				return nil, fmt.Errorf("jc parsing error: %s", stderr.String())
+			}
+			return nil, fmt.Errorf("jc error (exit=%d): %s", code, stderr.String())
+		}
+		return nil, fmt.Errorf("execution error: %v", err)
+	}
+
+	return convertJSONToStruct(stdout.Bytes())
+}
+
+// convertJSONToStruct ayuda a mapear []byte (JSON) a google.protobuf.Struct
+func convertJSONToStruct(jsonData []byte) (*structpb.Struct, error) {
+	var data interface{}
+	if err := json.Unmarshal(jsonData, &data); err != nil {
+		return nil, fmt.Errorf("error unmarshal json: %w", err)
+	}
+
+	val, err := structpb.NewValue(data)
+	if err != nil {
+		return nil, fmt.Errorf("error creando structpb.Value: %w", err)
+	}
+
+	// Si es objeto => struct_value. Si es array => list_value => lo envolvemos
+	if sVal, ok := val.GetKind().(*structpb.Value_StructValue); ok {
+		return sVal.StructValue, nil
+	}
+	// Envolver la lista/valor primitivo en un struct con campo "items"
+	wrap := &structpb.Struct{
+		Fields: map[string]*structpb.Value{
+			"items": val,
+		},
+	}
+	return wrap, nil
 }

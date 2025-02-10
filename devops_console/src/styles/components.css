@@ -1,0 +1,123 @@
+/* Card styles */
+.card {
+  width: 100%;
+  max-width: var(--size-11);
+  border-radius: var(--radius-3);
+  border: 1px solid var(--gray-a4);
+}
+
+/* Grid layouts */
+.grid-container {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.grid-cols-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+/* Input styles */
+.input {
+  height: var(--space-6);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-2);
+  border: 1px solid var(--gray-a6);
+  background-color: var(--color-background);
+  font-size: var(--font-size-2);
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--accent-9);
+  box-shadow: 0 0 0 2px var(--accent-a8);
+}
+
+/* Task card styles */
+.task-card {
+  position: relative;
+  perspective: 1000px;
+  transition: transform 0.6s;
+}
+
+.task-card.flipped {
+  transform: rotateY(180deg);
+}
+
+.card-face {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  backface-visibility: hidden;
+  padding: var(--space-4);
+}
+
+.card-back {
+  transform: rotateY(180deg);
+}
+
+/* Task content layout */
+.task-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.task-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.task-body {
+  flex: 1;
+}
+
+.task-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* Console styles */
+.console {
+  height: 400px;
+  width: 100%;
+  border-radius: var(--radius-3);
+  border: 1px solid var(--gray-a6);
+  padding: var(--space-4);
+  background-color: var(--gray-1);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2);
+  color: var(--gray-12);
+  overflow: auto;
+}
+
+/* Utility classes */
+.flex {
+  display: flex;
+}
+
+.flex-col {
+  flex-direction: column;
+}
+
+.items-center {
+  align-items: center;
+}
+
+.justify-between {
+  justify-content: space-between;
+}
+
+.gap-2 {
+  gap: var(--space-2);
+}
+
+.gap-3 {
+  gap: var(--space-3);
+}
+
+.gap-4 {
+  gap: var(--space-4);
+}

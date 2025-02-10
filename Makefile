@@ -26,6 +26,12 @@ JWT_PAYLOAD_B64 = $(shell echo -n '{"sub":"test-user","role":"admin","exp":46838
 JWT_SIGNATURE = $(shell echo -n "$(JWT_HEADER_B64).$(JWT_PAYLOAD_B64)" | openssl dgst -binary -sha256 -hmac "$(JWT_SECRET)" | base64 | tr -d '\n' | tr '/+' '_-' | tr -d '=')
 JWT_TOKEN = $(JWT_HEADER_B64).$(JWT_PAYLOAD_B64).$(JWT_SIGNATURE)
 
+show-jwt:
+	@echo "JWT Header: $(JWT_HEADER_B64)"
+	@echo "JWT Payload	: $(JWT_PAYLOAD_B64)"
+	@echo "JWT Signature: $(JWT_SIGNATURE)"
+	@echo "JWT	: $(JWT_TOKEN)"
+
 # Agregar variable para el socket de Docker
 DOCKER_SOCKET ?= /var/run/docker.sock
 

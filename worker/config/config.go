@@ -94,7 +94,7 @@ func Load() Config {
 		Env:                getEnv("ENV", "development"),
 		Port:               getIntEnv("HTTP_PORT", 8080),
 		WorkerName:         getEnv("WORKER_NAME", "default-worker"),
-		MaxConcurrentTasks: getIntEnv("MAX_CONCURRENT_TASKS", 5),
+		MaxConcurrentTasks: getIntEnv("MAX_CONCURRENT_TASKS", 3),
 		StorageType:        getEnv("STORAGE_TYPE", "memory"),
 
 		GRPC: GRPCConfig{

@@ -153,24 +153,39 @@ func (h *WSHandler) handleCreateTask(ctx context.Context, conn *websocket.Conn, 
 			log.Printf("Error sending WebSocket message: %v", err)
 			return
 		}
+
+		// Dar tiempo para que el mensaje se envíe
+		time.Sleep(10 * time.Millisecond)
 	}
 
-	// CUANDO el proceso finaliza, enviar un mensaje final "done"
-	doneMsg := map[string]interface{}{
-		"done":      true,
-		"exit_code": 0,
-		"message":   "Process completed successfully",
-		"status":    domain.FINISHED.String(),
+	// Enviar mensaje de finalización
+	doneResp := TaskResponse{
+		TaskID:  task.ID.String(),
+		Status:  domain.STOPPED.String(),
+		Output:  "[WORKER CLIENT] Process completed successfully",
+		IsError: false,
 	}
+
+	payload2, err := json.Marshal(doneResp)
+	if err != nil {
+		log.Printf("Error serializando mensaje de finalización: %v", err)
+		return
+	}
+
+	doneMsg := WSMessage{
+		Action:  "task_output",
+		Payload: json.RawMessage(payload2),
+	}
+
+	// Asegurar que el mensaje se envíe antes de cerrar
+	conn.SetWriteDeadline(time.Now().Add(writeWait))
 	if err := conn.WriteJSON(doneMsg); err != nil {
 		log.Printf("Error sending done message: %v", err)
+		return
 	}
 
-	// (Opcional) Enviar un CloseMessage indicando cierre normal
-	_ = conn.WriteMessage(
-		websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Process finished"),
-	)
+	// Esperar un momento antes de cerrar
+	time.Sleep(100 * time.Millisecond)
 }
 
 func (h *WSHandler) createTaskFromRequest(parent context.Context, req TaskRequest) (domain.Task, context.Context) {
@@ -420,7 +435,7 @@ type TaskResponse struct {
 	Output string `json:"output,omitempty" example:"Hello, World!"`
 
 	// Error si ocurrió alguno
-	// Example: 
+	// Example:
 	Error string `json:"error,omitempty"`
 
 	// Indica si hubo error

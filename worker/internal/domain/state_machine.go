@@ -12,6 +12,7 @@ const (
 	Failed
 	Stopped
 	Unknown
+	Done
 )
 
 func (s State) String() []string {
@@ -22,7 +23,7 @@ var stateTransitionMap = map[State][]State{
 	Pending:   []State{Scheduled},
 	Scheduled: []State{Scheduled, Running, Failed, Stopped},
 	Running:   []State{Running, Completed, Failed, Scheduled, Stopped},
-	Completed: []State{},
+	Completed: []State{Done},
 	Failed:    []State{Scheduled},
 	Stopped:   []State{Scheduled},
 	Unknown:   []State{Pending, Scheduled, Running, Completed, Failed, Stopped},
