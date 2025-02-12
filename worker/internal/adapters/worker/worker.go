@@ -30,14 +30,6 @@ const (
 type TaskContext struct {
 }
 
-type taskOperation struct {
-	//task       TaskContext
-	task       domain.Task
-	outputChan chan *domain.ProcessOutput
-	ctx        context.Context
-	errChan    chan error
-}
-
 type workerOperation struct {
 	op     string
 	taskID string
@@ -47,11 +39,11 @@ type workerOperation struct {
 
 type Worker struct {
 	name          string
-	db            store.Store[domain.Task]
+	db            store.Store[domain.TaskExecution]
 	workerFactory ports.WorkerFactory
 
-	// Channels for task management
-	taskQueue     chan taskOperation
+	// Channels for Task management
+	taskQueue     chan ports.TaskOperation
 	activeWorkers sync.Map // Cambiado a sync.Map para evitar race conditions
 	workerChan    chan workerOperation
 
@@ -73,7 +65,7 @@ func NewWorker(name string, initialMaxConcurrent int, storeType string, workerFa
 	w := &Worker{
 		name:                 name,
 		workerFactory:        workerFactory,
-		taskQueue:            make(chan taskOperation, 100),
+		taskQueue:            make(chan ports.TaskOperation, 100),
 		workerChan:           make(chan workerOperation, 10),
 		concurrencyLimitChan: make(chan int),
 		workerSlots:          make(chan struct{}, initialMaxConcurrent),
@@ -100,10 +92,10 @@ func NewWorker(name string, initialMaxConcurrent int, storeType string, workerFa
 func (w *Worker) initStore(storeType string) {
 	switch storeType {
 	case "memory":
-		w.db = store.NewInMemoryStore[domain.Task]()
+		w.db = store.NewInMemoryStore[domain.TaskExecution]()
 	case "bolt":
 		filename := fmt.Sprintf("%s_tasks.db", w.name)
-		store, err := store.NewBoltDBStore[domain.Task](filename, 0600, "tasks")
+		store, err := store.NewBoltDBStore[domain.TaskExecution](filename, 0600, "tasks")
 		if err != nil {
 			panic(err)
 		}
@@ -118,7 +110,7 @@ func (w *Worker) Stop() {
 
 func (w *Worker) taskDispatcher() {
 	defer w.wg.Done()
-	pendingTasks := make([]taskOperation, 0)
+	pendingTasks := make([]ports.TaskOperation, 0)
 
 	for {
 		select {
@@ -127,7 +119,7 @@ func (w *Worker) taskDispatcher() {
 		case task := <-w.taskQueue:
 			select {
 			case <-w.workerSlots:
-				// Slot available, process task
+				// Slot available, process Task
 				go w.processTask(task)
 			default:
 				// No slots available, add to pending
@@ -135,7 +127,7 @@ func (w *Worker) taskDispatcher() {
 			}
 
 		case <-w.workerSlots:
-			// A slot became available, process pending task if any
+			// A slot became available, process pending Task if any
 			if len(pendingTasks) > 0 {
 				task := pendingTasks[0]
 				pendingTasks = pendingTasks[1:]
@@ -162,13 +154,13 @@ func sendOutput(outputChan chan<- *domain.ProcessOutput, processID string, messa
 
 }
 
-func (w *Worker) processTask(op taskOperation) {
-	taskID := op.task.ID.String()
+func (w *Worker) processTask(op ports.TaskOperation) {
+	taskID := op.Task.ID.String()
 	doneChan := make(chan struct{})
 	defer close(doneChan)
 
 	// Crear un contexto con timeout para toda la operación
-	ctx, cancel := context.WithTimeout(op.ctx, 30*time.Minute)
+	ctx, cancel := context.WithTimeout(op.Ctx, 30*time.Minute)
 	defer cancel()
 
 	// Release slot when done
@@ -178,11 +170,11 @@ func (w *Worker) processTask(op taskOperation) {
 	_, instanceCancel := context.WithTimeout(ctx, 1*time.Minute)
 	defer instanceCancel()
 
-	workerInstance, err := w.workerFactory.Create(op.task)
+	workerInstance, err := w.workerFactory.Create(op.Task)
 	if err != nil {
-		sendOutput(op.outputChan, taskID, TypeError,
+		sendOutput(op.OutputChan, taskID, TypeError,
 			fmt.Sprintf("Error creating worker instance: %v", err), true, domain.ERROR)
-		op.errChan <- err
+		op.ErrChan <- err
 		return
 	}
 
@@ -191,19 +183,11 @@ func (w *Worker) processTask(op taskOperation) {
 	defer w.activeWorkers.Delete(taskID)
 
 	// Notificar que la tarea está iniciando
-	sendOutput(op.outputChan, taskID, TypeInfo,
+	sendOutput(op.OutputChan, taskID, TypeInfo,
 		"Iniciando preparación del worker...", false, domain.PENDING)
 
-	// Ejecutar la tarea
-	workerInstance, err = w.workerFactory.Create(op.task)
-	if err != nil {
-		sendOutput(op.outputChan, taskID, TypeError,
-			fmt.Sprintf("Error creando worker instance: %v", err), true, domain.ERROR)
-		return
-	}
-
 	// Notificar que el worker se ha creado
-	sendOutput(op.outputChan, taskID, TypeInfo,
+	sendOutput(op.OutputChan, taskID, TypeInfo,
 		"Worker creado, iniciando configuración...", false, domain.PENDING)
 
 	// Defer para detener el worker al salir de processTask
@@ -212,11 +196,11 @@ func (w *Worker) processTask(op taskOperation) {
 		defer cancel()
 		if stopped, msg, err := workerInstance.Stop(stopCtx); err != nil {
 			log.Printf("[%s] Error deteniendo worker en defer: %v", taskID, err)
-			sendOutput(op.outputChan, taskID, TypeWarn,
+			sendOutput(op.OutputChan, taskID, TypeWarn,
 				fmt.Sprintf("Error deteniendo worker: %v", err), true, domain.ERROR)
 		} else if stopped {
 			log.Printf("[%s] Worker detenido en defer: %s", taskID, msg)
-			sendOutput(op.outputChan, taskID, TypeInfo,
+			sendOutput(op.OutputChan, taskID, TypeInfo,
 				"Worker detenido correctamente", false, domain.DONE)
 		}
 	}()
@@ -225,7 +209,7 @@ func (w *Worker) processTask(op taskOperation) {
 	state := NewWorkerState(workerInstance, taskID)
 	if err := state.SetState(domain.RUNNING); err != nil {
 		log.Printf("[%s] Error estableciendo estado inicial: %v", taskID, err)
-		sendOutput(op.outputChan, taskID, TypeError,
+		sendOutput(op.OutputChan, taskID, TypeError,
 			fmt.Sprintf("Error estableciendo estado inicial: %v", err), true, domain.ERROR)
 		return
 	}
@@ -233,30 +217,30 @@ func (w *Worker) processTask(op taskOperation) {
 	w.activeWorkers.Store(taskID, workerInstance)
 
 	// Notificar que el worker está iniciando
-	sendOutput(op.outputChan, taskID, TypeInfo,
+	sendOutput(op.OutputChan, taskID, TypeInfo,
 		"Iniciando worker...", false, domain.RUNNING)
 
-	endpoint, err := workerInstance.Start(op.ctx, op.outputChan)
+	endpoint, err := workerInstance.Start(op.Ctx, op.OutputChan)
 	if err != nil {
 		state.SetState(domain.ERROR)
-		sendOutput(op.outputChan, taskID, TypeError,
+		sendOutput(op.OutputChan, taskID, TypeError,
 			fmt.Sprintf("Error iniciando worker: %v", err), true, domain.ERROR)
 		return
 	}
 
 	log.Printf("[%s] Tarea iniciada en %s", taskID, endpoint)
-	sendOutput(op.outputChan, taskID, TypeInfo,
+	sendOutput(op.OutputChan, taskID, TypeInfo,
 		fmt.Sprintf("Worker iniciado en %s", endpoint), false, domain.RUNNING)
 
 	// Ejecutar la tarea en una goroutine separada
 	runErrChan := make(chan error, 1)
 	runDoneChan := make(chan struct{})
-	runCtx, runCancel := context.WithCancel(op.ctx)
+	runCtx, runCancel := context.WithCancel(op.Ctx)
 	defer runCancel()
 
 	go func() {
 		defer close(runDoneChan)
-		err := workerInstance.Run(runCtx, op.task, op.outputChan)
+		err := workerInstance.Run(runCtx, op.Task, op.OutputChan)
 		runErrChan <- err
 	}()
 
@@ -269,12 +253,12 @@ func (w *Worker) processTask(op taskOperation) {
 		case <-runDoneChan:
 			if err := <-runErrChan; err != nil {
 				state.SetState(domain.ERROR)
-				sendOutput(op.outputChan, taskID, TypeError,
+				sendOutput(op.OutputChan, taskID, TypeError,
 					fmt.Sprintf("Error ejecutando tarea: %v", err), true, domain.ERROR)
 				taskCompleted = true
 			}
 
-		case output := <-op.outputChan:
+		case output := <-op.OutputChan:
 			if output.Type == TypeHealth {
 				if err := state.SetState(output.Status); err != nil {
 					log.Printf("[%s] Error en transición de estado: %v", taskID, err)
@@ -282,13 +266,13 @@ func (w *Worker) processTask(op taskOperation) {
 				}
 
 				// Actualizar estado en BD y enviar notificación
-				op.task.State = convertHealthStatusToTaskState(output.Status)
-				w.db.Put(taskID, op.task)
+				op.Task.State = convertHealthStatusToTaskState(output.Status)
+				w.db.Put(taskID, op.Task)
 
 				// Solo enviar notificación si el estado ha cambiado significativamente
 				if output.Status == domain.FINISHED || output.Status == domain.ERROR ||
 					output.Status == domain.STOPPED || output.Status == domain.HEALTHY {
-					sendOutput(op.outputChan, taskID, TypeInfo,
+					sendOutput(op.OutputChan, taskID, TypeInfo,
 						fmt.Sprintf("Estado actualizado: %s", output.Status), false, output.Status)
 				}
 
@@ -299,7 +283,7 @@ func (w *Worker) processTask(op taskOperation) {
 			} else {
 				// Enviar el mensaje al websocket sin reenviarlo al canal
 				select {
-				case op.outputChan <- output:
+				case op.OutputChan <- output:
 					// Mensaje enviado exitosamente
 				default:
 					// Canal lleno, loguear y continuar
@@ -315,13 +299,13 @@ func (w *Worker) processTask(op taskOperation) {
 
 		case <-processTimeout:
 			state.SetState(domain.ERROR)
-			sendOutput(op.outputChan, taskID, TypeError,
+			sendOutput(op.OutputChan, taskID, TypeError,
 				"Tarea cancelada por timeout", true, domain.ERROR)
 			taskCompleted = true
 
-		case <-op.ctx.Done():
+		case <-op.Ctx.Done():
 			state.SetState(domain.STOPPED)
-			sendOutput(op.outputChan, taskID, TypeError,
+			sendOutput(op.OutputChan, taskID, TypeError,
 				"Tarea cancelada por contexto", true, domain.STOPPED)
 			taskCompleted = true
 		}
@@ -331,11 +315,11 @@ func (w *Worker) processTask(op taskOperation) {
 	select {
 	case <-doneChan:
 		log.Printf("[%s] Worker eliminado correctamente", taskID)
-		sendOutput(op.outputChan, taskID, TypeInfo,
+		sendOutput(op.OutputChan, taskID, TypeInfo,
 			"Worker eliminado correctamente", false, domain.DONE)
 	case <-time.After(5 * time.Second):
 		log.Printf("[%s] Warning: No se pudo confirmar la eliminación del worker", taskID)
-		sendOutput(op.outputChan, taskID, TypeWarn,
+		sendOutput(op.OutputChan, taskID, TypeWarn,
 			"No se pudo confirmar la eliminación del worker", false, domain.ERROR)
 	}
 }
@@ -384,27 +368,11 @@ func (w *Worker) workerManager() {
 	}
 }
 
-func (w *Worker) AddTask(ctx context.Context, task domain.Task) (<-chan *domain.ProcessOutput, error) {
-	outputChan := make(chan *domain.ProcessOutput, 100)
-	errChan := make(chan error, 1)
+func (w *Worker) AddTask(operation ports.TaskOperation) error {
+	w.taskQueue <- operation
 
-	task.CreatedAt = time.Now()
-	task.UpdatedAt = time.Now()
-
-	if err := w.db.Put(task.ID.String(), task); err != nil {
-		close(outputChan)
-		return nil, fmt.Errorf("error saving task: %w", err)
-	}
-
-	w.taskQueue <- taskOperation{
-		task:       task,
-		outputChan: outputChan,
-		ctx:        ctx,
-		errChan:    errChan,
-	}
-
-	sendOutput(outputChan, task.ID.String(), TypeInfo, "Task queued successfully", false, domain.PENDING)
-	return outputChan, nil
+	sendOutput(operation.OutputChan, operation.Task.ID.String(), TypeInfo, "Task queued successfully", false, domain.PENDING)
+	return nil
 }
 
 func (w *Worker) SetConcurrencyLimit(newLimit int) {
@@ -427,7 +395,7 @@ func getCPUUsage() float64    { return 45.0 }
 func getMemoryUsage() float64 { return 60.0 }
 
 // GetTasks retorna un slice con todas las tareas almacenadas.
-func (w *Worker) GetTasks() ([]domain.Task, error) {
+func (w *Worker) GetTasks() ([]domain.TaskExecution, error) {
 	taskList, err := w.db.List()
 	if err != nil {
 		return nil, fmt.Errorf("[WORKER CLIENT] error obteniendo lista de tareas: %w", err)
@@ -436,10 +404,10 @@ func (w *Worker) GetTasks() ([]domain.Task, error) {
 }
 
 // GetTask retorna la tarea con el id dado.
-func (w *Worker) GetTask(taskID string) (domain.Task, error) {
+func (w *Worker) GetTask(taskID string) (domain.TaskExecution, error) {
 	t, err := w.db.Get(taskID)
 	if err != nil {
-		return domain.Task{}, fmt.Errorf("[WORKER CLIENT] no se encontró la tarea con ID %s", taskID)
+		return domain.TaskExecution{}, fmt.Errorf("[WORKER CLIENT] no se encontró la tarea con ID %s", taskID)
 	}
 	return t, nil
 }

@@ -28,14 +28,14 @@ import (
 
 // DockerWorker implementa WorkerInstance para Docker
 type DockerWorker struct {
-	task       domain.Task
+	task       domain.TaskExecution
 	endpoint   *domain.WorkerEndpoint
 	grpcConfig config.GRPCConfig
 	dockerCfg  config.DockerConfig
 	client     *dockerclient.Client
 }
 
-func NewDockerWorker(task domain.Task, grpcCfg config.GRPCConfig, dockerCfg config.DockerConfig) (ports.WorkerInstance, error) {
+func NewDockerWorker(task domain.TaskExecution, grpcCfg config.GRPCConfig, dockerCfg config.DockerConfig) (ports.WorkerInstance, error) {
 
 	// Ejemplo: usar dockerCfg.Host para crear el cliente
 	var opts []dockerclient.Opt
@@ -316,7 +316,7 @@ func mergeEnvs(base, override map[string]string) map[string]string {
 }
 
 // Run levantará el contenedor Docker y llamará a StartProcess.
-func (d *DockerWorker) Run(ctx context.Context, t domain.Task, outputChan chan<- *domain.ProcessOutput) error {
+func (d *DockerWorker) Run(ctx context.Context, t domain.TaskExecution, outputChan chan<- *domain.ProcessOutput) error {
 	log.Printf("Iniciando Run para tarea: %s", t.ID)
 
 	grpcClient, err := d.createGRPCClient()

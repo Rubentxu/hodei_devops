@@ -22,7 +22,7 @@ import (
 
 // K8sWorker implementa WorkerInstance para ejecutar un Pod que contenga el servidor gRPC.
 type K8sWorker struct {
-	task       domain.Task
+	task       domain.TaskExecution
 	endpoint   *domain.WorkerEndpoint
 	grpcConfig config.GRPCConfig
 	k8sCfg     config.K8sConfig
@@ -30,7 +30,7 @@ type K8sWorker struct {
 }
 
 // NewK8sWorker crea una instancia de K8sWorker con la misma firma que DockerWorker
-func NewK8sWorker(task domain.Task, grpcConfig config.GRPCConfig, k8sCfg config.K8sConfig) (ports.WorkerInstance, error) {
+func NewK8sWorker(task domain.TaskExecution, grpcConfig config.GRPCConfig, k8sCfg config.K8sConfig) (ports.WorkerInstance, error) {
 	// Crear el clientset de Kubernetes
 	cs, err := getK8sClient(k8sCfg)
 	if err != nil {
@@ -137,7 +137,7 @@ func (k *K8sWorker) sendErrorMessage(outputChan chan<- *domain.ProcessOutput, er
 }
 
 // Run crea un cliente gRPC y llama StartProcess, enviando la salida a outputChan
-func (k *K8sWorker) Run(ctx context.Context, t domain.Task, outputChan chan<- *domain.ProcessOutput) error {
+func (k *K8sWorker) Run(ctx context.Context, t domain.TaskExecution, outputChan chan<- *domain.ProcessOutput) error {
 	grpcClient, err := k.createGRPCClient()
 	if err != nil {
 		return fmt.Errorf("error creando cliente gRPC: %w", err)

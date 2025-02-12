@@ -9,11 +9,24 @@ import (
 type Task struct {
 	ID         uuid.UUID
 	Name       string
-	State      State
 	WorkerSpec WorkerSpec
-	Status     Status
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+}
+
+type TaskExecution struct {
+	ID         uuid.UUID
+	Name       string
+	TaskID     uuid.UUID // Referencia a la TaskDefinition
+	State      State
+	StartTime  *time.Time
+	FinishTime *time.Time
+	WorkerID   string // ID del contenedor/pod
+	HostPorts  []string
+	Status     Status
+	Error      string    // Para almacenar detalles del error, si lo hay
+	CreatedAt  time.Time //Podria no ser necesario, se puede obtener de StartTime
+	WorkerSpec WorkerSpec
 }
 
 type Status struct {
