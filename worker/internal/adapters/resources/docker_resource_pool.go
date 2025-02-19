@@ -4,6 +4,7 @@ import (
 	"context"
 	"dev.rubentxu.devops-platform/worker/config"
 	"dev.rubentxu.devops-platform/worker/internal/domain"
+	"dev.rubentxu.devops-platform/worker/internal/ports"
 	"encoding/json"
 	"fmt"
 	"github.com/docker/docker/api/types/container"
@@ -12,25 +13,31 @@ import (
 )
 
 type DockerResourcePool struct {
-	cli    *client.Client
-	config config.DockerConfig
+	id     string
+	client ports.ResourceIntanceClient
 }
 
-func NewDockerResourcePool(config config.DockerConfig) (*DockerResourcePool, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation(), client.WithHost(config.Host)) //Usar el host de la configuracion.
+func (d *DockerResourcePool) GetID() string {
+	return d.id
+}
+
+func (d *DockerResourcePool) GetResourceInstanceClient() ports.ResourceIntanceClient {
+	return d.client
+}
+
+func NewDockerResourcePool(config config.DockerConfig, id string) (ports.ResourcePool, error) {
+
+	nativeClient, err := NewDockerClientAdapter(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Docker client: %w", err)
 	}
-	return &DockerResourcePool{cli: cli, config: config}, nil
-}
-
-func (d *DockerResourcePool) GetConfig() any {
-	return d.config // Devolver la configuración de Docker
+	return &DockerResourcePool{client: nativeClient, id: id}, nil
 }
 
 func (d *DockerResourcePool) GetStats() (*domain.Stats, error) {
 	ctx := context.Background()
-	containers, err := d.cli.ContainerList(ctx, container.ListOptions{})
+	dockerClient := d.client.GetNativeClient().(client.Client)
+	containers, err := dockerClient.ContainerList(ctx, container.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
@@ -68,7 +75,7 @@ func (d *DockerResourcePool) GetStats() (*domain.Stats, error) {
 		totalCPUIdle += (containerStats.CPUStats.CPUUsage.TotalUsage - containerStats.CPUStats.CPUUsage.UsageInUsermode - containerStats.CPUStats.CPUUsage.UsageInKernelmode)
 
 		//Disco no se puede obtener de stats. Lo obtendremos de la info del contenedor.
-		containerInfo, err := d.cli.ContainerInspect(ctx, container.ID)
+		containerInfo, err := dockerClient.ContainerInspect(ctx, container.ID)
 		if err != nil {
 			continue // o log
 		}
@@ -86,7 +93,8 @@ func (d *DockerResourcePool) GetStats() (*domain.Stats, error) {
 }
 
 func (d *DockerResourcePool) getContainerStats(ctx context.Context, containerID string) (*container.StatsResponse, error) {
-	statsResp, err := d.cli.ContainerStats(ctx, containerID, false) // false para no hacer streaming
+	dockerClient := d.client.GetNativeClient().(client.Client)
+	statsResp, err := dockerClient.ContainerStats(ctx, containerID, false) // false para no hacer streaming
 	if err != nil {
 		return nil, err
 	}

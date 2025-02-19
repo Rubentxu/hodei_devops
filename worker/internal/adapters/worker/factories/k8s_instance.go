@@ -29,6 +29,21 @@ type K8sWorker struct {
 	clientset  *kubernetes.Clientset
 }
 
+func (k *K8sWorker) GetID() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (k *K8sWorker) GetName() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (k *K8sWorker) GetType() string {
+	//TODO implement me
+	panic("implement me")
+}
+
 // NewK8sWorker crea una instancia de K8sWorker con la misma firma que DockerWorker
 func NewK8sWorker(task domain.TaskExecution, grpcConfig config.GRPCConfig, k8sCfg config.K8sConfig) (ports.WorkerInstance, error) {
 	// Crear el clientset de Kubernetes
@@ -45,7 +60,7 @@ func NewK8sWorker(task domain.TaskExecution, grpcConfig config.GRPCConfig, k8sCf
 }
 
 // Start crea el Pod en Kubernetes y espera a que esté en Running, luego setea k.endpoint
-func (k *K8sWorker) Start(ctx context.Context, outputChan chan<- *domain.ProcessOutput) (*domain.WorkerEndpoint, error) {
+func (k *K8sWorker) Start(ctx context.Context, outputChan chan<- domain.ProcessOutput) (*domain.WorkerEndpoint, error) {
 	log.Printf("Iniciando K8sWorker con spec=%v", k.task.WorkerSpec)
 
 	// Determinar la imagen
@@ -125,11 +140,11 @@ func (k *K8sWorker) Start(ctx context.Context, outputChan chan<- *domain.Process
 }
 
 // sendErrorMessage reenvía un mensaje de error al outputChan si está disponible
-func (k *K8sWorker) sendErrorMessage(outputChan chan<- *domain.ProcessOutput, errMsg string) {
+func (k *K8sWorker) sendErrorMessage(outputChan chan<- domain.ProcessOutput, errMsg string) {
 	if outputChan == nil {
 		return
 	}
-	outputChan <- &domain.ProcessOutput{
+	outputChan <- domain.ProcessOutput{
 		IsError:   true,
 		Output:    errMsg,
 		ProcessID: k.task.ID.String(),
@@ -137,7 +152,7 @@ func (k *K8sWorker) sendErrorMessage(outputChan chan<- *domain.ProcessOutput, er
 }
 
 // Run crea un cliente gRPC y llama StartProcess, enviando la salida a outputChan
-func (k *K8sWorker) Run(ctx context.Context, t domain.TaskExecution, outputChan chan<- *domain.ProcessOutput) error {
+func (k *K8sWorker) Run(ctx context.Context, t domain.TaskExecution, outputChan chan<- domain.ProcessOutput) error {
 	grpcClient, err := k.createGRPCClient()
 	if err != nil {
 		return fmt.Errorf("error creando cliente gRPC: %w", err)

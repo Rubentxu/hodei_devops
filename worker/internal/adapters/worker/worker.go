@@ -141,9 +141,9 @@ func (w *Worker) taskDispatcher() {
 }
 
 // sendOutput es una función auxiliar para enviar mensajes formateados al canal de salida
-func sendOutput(outputChan chan<- *domain.ProcessOutput, processID string, messageType string, message string, isError bool, status domain.HealthStatus) {
+func sendOutput(outputChan chan<- domain.ProcessOutput, processID string, messageType string, message string, isError bool, status domain.HealthStatus) {
 	formattedMessage := fmt.Sprintf("[WORKER CLIENT] %s", message)
-	outputChan <- &domain.ProcessOutput{
+	outputChan <- domain.ProcessOutput{
 		ProcessID: processID,
 		Output:    formattedMessage,
 		IsError:   isError,

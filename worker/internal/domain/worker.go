@@ -95,12 +95,40 @@ const (
 // WorkerSpec describe cómo y dónde se va a ejecutar la tarea.
 // Por ejemplo, "docker" vs "k8s", parámetros, etc.
 type WorkerSpec struct {
-	Type                 InstanceType      `json:"instance_type"`
-	Image                string            `json:"image,omitempty"`
-	Command              []string          `json:"command,omitempty"`
-	Env                  map[string]string `json:"env,omitempty"`
-	WorkingDir           string            `json:"working_dir,omitempty"`
-	ConnectionParameters map[string]string `json:"connection_parameters,omitempty"`
+	Type        InstanceType         `json:"instance_type"`
+	Image       string               `json:"image,omitempty"`
+	Command     []string             `json:"command,omitempty"`
+	Env         map[string]string    `json:"env,omitempty"`
+	WorkingDir  string               `json:"working_dir,omitempty"`
+	Resources   ResourceRequirements `json:"resources,omitempty"`
+	Volumes     []VolumeMount
+	Ports       []PortMapping
+	Labels      map[string]string
+	HealthCheck *HealthCheckConfig
+}
+
+type ResourceRequirements struct {
+	CPU    float64
+	Memory string
+}
+
+type VolumeMount struct {
+	HostPath      string
+	ContainerPath string
+	ReadOnly      bool
+}
+
+type PortMapping struct {
+	HostPort      int
+	ContainerPort int
+	Protocol      string
+}
+
+type HealthCheckConfig struct {
+	Type     string
+	Endpoint string
+	Interval time.Duration
+	Timeout  time.Duration
 }
 
 type WorkerConfig struct {

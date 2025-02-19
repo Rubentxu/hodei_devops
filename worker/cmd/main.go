@@ -17,6 +17,8 @@
 package main
 
 import (
+	"dev.rubentxu.devops-platform/worker/internal/adapters/manager"
+	"dev.rubentxu.devops-platform/worker/internal/adapters/resources"
 	"fmt"
 	"log"
 	"net/http"
@@ -42,8 +44,18 @@ func main() {
 		cfg.StorageType,
 		workerFactory,
 	)
+	manager, err := manager.New("greedy", cfg.StorageType, w)
+	if err != nil {
+		log.Fatalf("Error creando el manager: %v", err)
+	}
+	dockerResourcePool, err := resources.NewDockerResourcePool(cfg.Providers.Docker, "defaultDockerPool")
+	if err != nil {
+		log.Fatalf("Error creando el pool de recursos Docker: %v", err)
+	}
+	manager.AddResourcePool(dockerResourcePool)
+	go manager.ProcessTasks()
 
-	wsHandler := websockets.NewWSHandler(w)
+	wsHandler := websockets.NewWSHandler(manager)
 
 	// Obtener el directorio base de la aplicación
 	baseDir, err := filepath.Abs(".")

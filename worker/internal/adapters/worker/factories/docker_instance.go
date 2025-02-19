@@ -35,6 +35,21 @@ type DockerWorker struct {
 	client     *dockerclient.Client
 }
 
+func (d *DockerWorker) GetID() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d *DockerWorker) GetName() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d *DockerWorker) GetType() string {
+	//TODO implement me
+	panic("implement me")
+}
+
 func NewDockerWorker(task domain.TaskExecution, grpcCfg config.GRPCConfig, dockerCfg config.DockerConfig) (ports.WorkerInstance, error) {
 
 	// Ejemplo: usar dockerCfg.Host para crear el cliente
@@ -56,10 +71,11 @@ func NewDockerWorker(task domain.TaskExecution, grpcCfg config.GRPCConfig, docke
 		grpcConfig: grpcCfg,
 		dockerCfg:  dockerCfg,
 		client:     cli,
+		endpoint:   nil,
 	}, nil
 }
 
-func (d *DockerWorker) Start(ctx context.Context, outputChan chan<- *domain.ProcessOutput) (*domain.WorkerEndpoint, error) {
+func (d *DockerWorker) Start(ctx context.Context, outputChan chan<- domain.ProcessOutput) (*domain.WorkerEndpoint, error) {
 	log.Printf("Iniciando DockerWorker con spec=%v", d.task.WorkerSpec)
 
 	// Obtener ruta absoluta para el directorio de certificados
@@ -271,22 +287,22 @@ func (d *DockerWorker) Start(ctx context.Context, outputChan chan<- *domain.Proc
 }
 
 // sendErrorMessage reenvía un mensaje de error al outputChan si está disponible
-func (d *DockerWorker) sendErrorMessage(outputChan chan<- *domain.ProcessOutput, errMsg string) {
+func (d *DockerWorker) sendErrorMessage(outputChan chan<- domain.ProcessOutput, errMsg string) {
 	if outputChan == nil {
 		return
 	}
-	outputChan <- &domain.ProcessOutput{
+	outputChan <- domain.ProcessOutput{
 		IsError:   true,
 		Output:    errMsg,
 		ProcessID: d.task.ID.String(),
 	}
 }
 
-func (d *DockerWorker) sendLogsMessage(outputChan chan<- *domain.ProcessOutput, msg string) {
+func (d *DockerWorker) sendLogsMessage(outputChan chan<- domain.ProcessOutput, msg string) {
 	if outputChan == nil {
 		return
 	}
-	outputChan <- &domain.ProcessOutput{
+	outputChan <- domain.ProcessOutput{
 		IsError:   false,
 		Output:    msg,
 		ProcessID: d.task.ID.String(),
@@ -316,7 +332,7 @@ func mergeEnvs(base, override map[string]string) map[string]string {
 }
 
 // Run levantará el contenedor Docker y llamará a StartProcess.
-func (d *DockerWorker) Run(ctx context.Context, t domain.TaskExecution, outputChan chan<- *domain.ProcessOutput) error {
+func (d *DockerWorker) Run(ctx context.Context, t domain.TaskExecution, outputChan chan<- domain.ProcessOutput) error {
 	log.Printf("Iniciando Run para tarea: %s", t.ID)
 
 	grpcClient, err := d.createGRPCClient()

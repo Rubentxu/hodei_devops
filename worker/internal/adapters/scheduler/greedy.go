@@ -1,8 +1,8 @@
 package scheduler
 
 import (
-	"dev.rubentxu.devops-platform/worker/internal/adapters/resources"
 	"dev.rubentxu.devops-platform/worker/internal/domain"
+	"dev.rubentxu.devops-platform/worker/internal/ports"
 	"fmt"
 	"math"
 )
@@ -15,8 +15,8 @@ func NewGreedy() *Greedy {
 	return &Greedy{Name: "greedy"}
 }
 
-func (g *Greedy) SelectCandidateNodes(t domain.Task, pools []*resources.ResourcePool) []*resources.ResourcePool {
-	candidates := []*resources.ResourcePool{}
+func (g *Greedy) SelectCandidateNodes(t domain.Task, pools []*ports.ResourcePool) []*ports.ResourcePool {
+	candidates := []*ports.ResourcePool{}
 	for _, pool := range pools {
 		if (*pool).Matches(t) {
 			candidates = append(candidates, pool)
@@ -25,7 +25,7 @@ func (g *Greedy) SelectCandidateNodes(t domain.Task, pools []*resources.Resource
 	return candidates
 }
 
-func (g *Greedy) Score(t domain.Task, pools []*resources.ResourcePool) map[string]float64 {
+func (g *Greedy) Score(t domain.Task, pools []*ports.ResourcePool) map[string]float64 {
 	scores := make(map[string]float64)
 	for _, pool := range pools {
 		stats, err := (*pool).GetStats()
@@ -44,12 +44,12 @@ func (g *Greedy) Score(t domain.Task, pools []*resources.ResourcePool) map[strin
 	return scores
 }
 
-func (g *Greedy) Pick(scores map[string]float64, candidates []*resources.ResourcePool) *resources.ResourcePool {
+func (g *Greedy) Pick(scores map[string]float64, candidates []*ports.ResourcePool) *ports.ResourcePool {
 	if len(candidates) == 0 {
 		return nil
 	}
 
-	var bestPool *resources.ResourcePool
+	var bestPool *ports.ResourcePool
 	maxScore := -math.MaxFloat64 // Inicializar con el valor más bajo posible
 
 	for _, pool := range candidates {

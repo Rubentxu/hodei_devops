@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+
 	"time"
 
 	"dev.rubentxu.devops-platform/worker/internal/domain"
@@ -23,17 +24,26 @@ type WorkerFactory interface {
 }
 
 type WorkerInstance interface {
-	Start(ctx context.Context, outputChan chan<- *domain.ProcessOutput) (*domain.WorkerEndpoint, error)
-	Run(ctx context.Context, t domain.TaskExecution, outputChan chan<- *domain.ProcessOutput) error
+	GetID() string
+	GetName() string
+	GetType() string
+	Start(ctx context.Context, outputChan chan<- domain.ProcessOutput) (*domain.WorkerEndpoint, error)
+	Run(ctx context.Context, t domain.TaskExecution, outputChan chan<- domain.ProcessOutput) error
 	Stop(ctx context.Context) (bool, string, error)
 	StartMonitoring(ctx context.Context, checkInterval int64, healthChan chan<- *domain.ProcessHealthStatus) error
 	GetEndpoint() *domain.WorkerEndpoint
 }
 
+type ResourceIntanceClient interface {
+	GetNativeClient() any
+	GetConfig() any
+}
+
 type TaskOperation struct {
-	//Task       TaskContext
 	Task       domain.TaskExecution
-	OutputChan chan *domain.ProcessOutput
+	OutputChan chan domain.ProcessOutput
+	StateChan  chan<- domain.State // Nuevo canal para el estado
+	ErrChan    chan<- error        // Nuevo canal para errores
 	Ctx        context.Context
-	ErrChan    chan error
+	Client     ResourceIntanceClient
 }

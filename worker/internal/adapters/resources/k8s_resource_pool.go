@@ -6,65 +6,41 @@ import (
 	"dev.rubentxu.devops-platform/worker/internal/domain"
 	"dev.rubentxu.devops-platform/worker/internal/ports"
 	"fmt"
-	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/kubernetes"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
-	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	//"k8s.io/client-go/kubernetes"
-	//"k8s.io/client-go/rest"
-	//
-	//"k8s.io/metrics/pkg/apis/metrics/v1beta1"
-	//metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-
 	"k8s.io/metrics/pkg/apis/metrics/v1beta1"
-	metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 type KubernetesResourcePool struct {
-	clientset     *kubernetes.Clientset
-	metricsClient *metricsclientset.Clientset
-	config        config.K8sConfig
+	id     string
+	client *KubernetesClientAdapter
 }
 
-func NewKubernetesResourcePool(config config.K8sConfig) (ports.ResourcePool, error) {
-	var kubeConfig *rest.Config
-	var err error
-
-	if config.InCluster {
-		kubeConfig, err = rest.InClusterConfig()
-	} else {
-		kubeConfig, err = clientcmd.BuildConfigFromFlags("", config.KubeConfig)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Kubernetes config: %w", err)
-	}
-
-	clientset, err := kubernetes.NewForConfig(kubeConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Kubernetes client: %w", err)
-	}
-
-	metricsClient, err := metricsclientset.NewForConfig(kubeConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Metrics client: %w", err)
-	}
-
-	return &KubernetesResourcePool{clientset: clientset, metricsClient: metricsClient, config: config}, nil
+func (d *KubernetesResourcePool) GetID() string {
+	return d.id
 }
 
-func (k *KubernetesResourcePool) GetConfig() any {
-	return k.config // Devolver la configuración de Kubernetes
+func NewKubernetesResourcePool(config config.K8sConfig, id string) (ports.ResourcePool, error) {
+	nativeClient, err := NewKubernetesClientAdapter(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Docker client: %w", err)
+	}
+	return &KubernetesResourcePool{client: nativeClient.(*KubernetesClientAdapter), id: id}, nil
+}
+
+func (d *KubernetesResourcePool) GetResourceInstanceClient() ports.ResourceIntanceClient {
+	return d.client
 }
 
 func (k *KubernetesResourcePool) monitorTask(ctx context.Context, taskExecution *domain.TaskExecution, namespace string) {
 	timeout := time.After(5 * time.Minute)
-	podsClient := k.clientset.CoreV1().Pods(namespace) // Usar el namespace
+	k8sClient := k.client.GetNativeClient().(kubernetes.Clientset)
+	podsClient := k8sClient.CoreV1().Pods(namespace) // Usar el namespace
 
 	watcher, err := podsClient.Watch(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("app=%s", taskExecution.WorkerID), //Usar el workerID que es el nombre
@@ -79,7 +55,7 @@ func (k *KubernetesResourcePool) monitorTask(ctx context.Context, taskExecution 
 		select {
 		case <-timeout:
 			now := time.Now()
-			taskExecution.FinishTime = &now
+			taskExecution.FinishTime = now
 			taskExecution.State = domain.Failed
 			return
 		case event, ok := <-watcher.ResultChan():
@@ -95,9 +71,9 @@ func (k *KubernetesResourcePool) monitorTask(ctx context.Context, taskExecution 
 			switch pod.Status.Phase {
 			case apiv1.PodSucceeded:
 				now := time.Now()
-				taskExecution.FinishTime = &now
+				taskExecution.FinishTime = now
 				taskExecution.State = domain.Completed
-				if svc, err := k.clientset.CoreV1().Services(namespace).Get(ctx, taskExecution.WorkerID+"-service", metav1.GetOptions{}); err == nil {
+				if svc, err := k8sClient.CoreV1().Services(namespace).Get(ctx, taskExecution.WorkerID+"-service", metav1.GetOptions{}); err == nil {
 					for _, port := range svc.Spec.Ports {
 						taskExecution.HostPorts = append(taskExecution.HostPorts, fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, port.Port))
 					}
@@ -109,7 +85,7 @@ func (k *KubernetesResourcePool) monitorTask(ctx context.Context, taskExecution 
 				return
 			case apiv1.PodFailed:
 				now := time.Now()
-				taskExecution.FinishTime = &now
+				taskExecution.FinishTime = now
 				taskExecution.State = domain.Failed
 				return
 			case apiv1.PodRunning:
@@ -130,13 +106,16 @@ func (k *KubernetesResourcePool) monitorTask(ctx context.Context, taskExecution 
 
 func (k *KubernetesResourcePool) GetStats() (*domain.Stats, error) {
 	ctx := context.Background()
-	namespace := k.config.Namespace // Usar el namespace de la configuración.
+	config := k.client.GetConfig().(config.K8sConfig)
+	k8sClient := k.client.GetNativeClient().(kubernetes.Clientset)
+	k8sMetricsClient := k.client.GetNativeMetricsClient()
+	namespace := config.Namespace // Usar el namespace de la configuración.
 	if namespace == "" {
 		namespace = apiv1.NamespaceDefault // Namespace por defecto.
 	}
 
 	// Obtener todos los Pods en todos los namespaces.  Podrías filtrar por namespace si fuera necesario.
-	pods, err := k.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	pods, err := k8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list pods: %w", err)
 	}
@@ -150,7 +129,7 @@ func (k *KubernetesResourcePool) GetStats() (*domain.Stats, error) {
 	}
 
 	// Obtener métricas de los Pods
-	podMetricsList, err := k.metricsClient.MetricsV1beta1().PodMetricses(namespace).List(ctx, metav1.ListOptions{})
+	podMetricsList, err := k8sMetricsClient.MetricsV1beta1().PodMetricses(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		// Si no puedes obtener métricas, continúa, pero registra el error (podrías querer ser más estricto aquí)
 		fmt.Printf("failed to get pod metrics: %v\n", err)
@@ -160,7 +139,7 @@ func (k *KubernetesResourcePool) GetStats() (*domain.Stats, error) {
 	}
 
 	// Obtener información de los nodos para el disco, pero solo de los nodos en este namespace.
-	nodes, err := k.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	nodes, err := k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list nodes: %w", err)
 	}

@@ -86,9 +86,15 @@ func (c *RPSClient) createAuthContext(ctx context.Context) context.Context {
 }
 
 // StartProcess envía una solicitud para iniciar un proceso en el servidor
-func (c *RPSClient) StartProcess(ctx context.Context, processID string, command []string, env map[string]string, workingDir string, outputChan chan<- *domain.ProcessOutput) error {
-	ctx = c.createAuthContext(ctx)
+func (c *RPSClient) StartProcess(
+	ctx context.Context,
+	processID string,
+	command []string,
+	env map[string]string,
+	workingDir string,
+	outputChan chan<- domain.ProcessOutput) error {
 
+	ctx = c.createAuthContext(ctx)
 	// Crear el stream
 	stream, err := c.client.StartProcess(ctx)
 	if err != nil {
@@ -117,7 +123,7 @@ func (c *RPSClient) StartProcess(ctx context.Context, processID string, command 
 		}
 
 		// Convertir remote_process.ProcessOutput a domain.ProcessOutput
-		domainOutput := &domain.ProcessOutput{
+		domainOutput := domain.ProcessOutput{
 			ProcessID: output.ProcessId,
 			Output:    output.Output,
 			IsError:   output.IsError,

@@ -22,7 +22,7 @@ func NewWorkerInstanceFactory(appCfg config.Config) ports.WorkerFactory {
 	}
 }
 
-func (f *WorkerInstanceFactoryImpl) Create(task domain.Task) (ports.WorkerInstance, error) {
+func (f *WorkerInstanceFactoryImpl) Create(task domain.TaskExecution) (ports.WorkerInstance, error) {
 	log.Printf("[factory] Creating WorkerInstance w/ type=%s", task.WorkerSpec.Type)
 	switch task.WorkerSpec.Type {
 	case "docker":

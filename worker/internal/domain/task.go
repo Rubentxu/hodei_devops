@@ -19,8 +19,8 @@ type TaskExecution struct {
 	Name       string
 	TaskID     uuid.UUID // Referencia a la TaskDefinition
 	State      State
-	StartTime  *time.Time
-	FinishTime *time.Time
+	StartTime  time.Time
+	FinishTime time.Time
 	WorkerID   string // ID del contenedor/pod
 	HostPorts  []string
 	Status     Status

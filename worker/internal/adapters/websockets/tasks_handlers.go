@@ -2,6 +2,7 @@ package websockets
 
 import (
 	"context"
+	"dev.rubentxu.devops-platform/worker/internal/adapters/manager"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"dev.rubentxu.devops-platform/worker/internal/adapters/worker"
 	"dev.rubentxu.devops-platform/worker/internal/domain"
 
 	"github.com/google/uuid"
@@ -34,11 +34,11 @@ var upgrader = websocket.Upgrader{
 }
 
 type WSHandler struct {
-	worker *worker.Worker
+	manager *manager.Manager
 }
 
-func NewWSHandler(w *worker.Worker) *WSHandler {
-	return &WSHandler{worker: w}
+func NewWSHandler(w *manager.Manager) *WSHandler {
+	return &WSHandler{manager: w}
 }
 
 // @title Worker WebSocket API
@@ -123,14 +123,14 @@ func (h *WSHandler) handleCreateTask(ctx context.Context, conn *websocket.Conn, 
 	}
 
 	task, taskCtx := h.createTaskFromRequest(ctx, req)
-	outputChan, err := h.worker.AddTask(taskCtx, task)
+	outputChan, err := h.manager.AddTask(task, taskCtx)
 	if err != nil {
 		h.sendError(conn, "create_error", fmt.Sprintf("Error creating task: %v", err))
 		return
 	}
 
 	// Leer del canal y enviar por WebSocket
-	for output := range outputChan {
+	for output := range outputChan.OutputChan {
 		resp := TaskResponse{
 			TaskID:  task.ID.String(),
 			Output:  output.Output,
@@ -200,9 +200,8 @@ func (h *WSHandler) createTaskFromRequest(parent context.Context, req TaskReques
 	}()
 
 	return domain.Task{
-		ID:    uuid.New(),
-		Name:  req.Name,
-		State: domain.Scheduled,
+		ID:   uuid.New(),
+		Name: req.Name,
 		WorkerSpec: domain.WorkerSpec{
 			Type:       domain.InstanceType(req.InstanceType),
 			Image:      req.Image,
@@ -214,56 +213,34 @@ func (h *WSHandler) createTaskFromRequest(parent context.Context, req TaskReques
 	}, taskCtx
 }
 
-func (h *WSHandler) streamTaskOutput(ctx context.Context, conn *websocket.Conn, taskID string, outputChan <-chan *domain.ProcessOutput) {
-	defer h.sendTaskCompletion(ctx, conn, taskID)
-
-	for output := range outputChan {
-		// Enviar cada output inmediatamente por el WebSocket
-		if !h.sendJSON(conn, "task_output", TaskResponse{
-			TaskID:  taskID,
-			Output:  output.Output,
-			IsError: output.IsError,
-			Status:  output.Status.String(),
-		}) {
-			log.Printf("Error enviando output, cerrando conexión para tarea %s", taskID)
-			return
-		}
-
-		// Verificar periodicamente si el contexto fue cancelado
-		select {
-		case <-ctx.Done():
-			log.Printf("Contexto cancelado durante streaming de tarea %s", taskID)
-			h.worker.StopTask(taskID)
-			return
-		default:
-			// Mantener conexión activa con ping
-			conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait))
-		}
-	}
-}
-
-func (h *WSHandler) sendTaskCompletion(ctx context.Context, conn *websocket.Conn, taskID string) {
-	task, err := h.worker.GetTask(taskID)
-	if err != nil {
-		h.sendError(conn, "task_error", fmt.Sprintf("Error getting task status: %v", err))
-		return
-	}
-
-	resp := TaskResponse{
-		TaskID:      taskID,
-		Status:      string(task.State),
-		CompletedAt: time.Now().Format(time.RFC3339),
-	}
-
-	if task.State == domain.Completed {
-		resp.ExitCode = "COMPLETED"
-	} else {
-		resp.ExitCode = "1"
-		resp.Error = "Task failed to complete"
-	}
-
-	h.sendJSON(conn, "task_completed", resp)
-}
+//
+//func (h *WSHandler) streamTaskOutput(ctx context.Context, conn *websocket.Conn, taskID string, outputChan <-chan *domain.ProcessOutput) {
+//	defer h.sendTaskCompletion(ctx, conn, taskID)
+//
+//	for output := range outputChan {
+//		// Enviar cada output inmediatamente por el WebSocket
+//		if !h.sendJSON(conn, "task_output", TaskResponse{
+//			TaskID:  taskID,
+//			Output:  output.Output,
+//			IsError: output.IsError,
+//			Status:  output.Status.String(),
+//		}) {
+//			log.Printf("Error enviando output, cerrando conexión para tarea %s", taskID)
+//			return
+//		}
+//
+//		// Verificar periodicamente si el contexto fue cancelado
+//		select {
+//		case <-ctx.Done():
+//			log.Printf("Contexto cancelado durante streaming de tarea %s", taskID)
+//			h.manager.StopTask(taskID)
+//			return
+//		default:
+//			// Mantener conexión activa con ping
+//			conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait))
+//		}
+//	}
+//}
 
 func (h *WSHandler) handleStopTask(ctx context.Context, conn *websocket.Conn, payload json.RawMessage) {
 	var req struct {
@@ -274,7 +251,7 @@ func (h *WSHandler) handleStopTask(ctx context.Context, conn *websocket.Conn, pa
 		return
 	}
 
-	if err := h.worker.StopTask(req.TaskID); err != nil {
+	if err := h.manager.StopTask(req.TaskID); err != nil {
 		h.sendError(conn, "stop_error", err.Error())
 		return
 	}
@@ -286,7 +263,7 @@ func (h *WSHandler) handleStopTask(ctx context.Context, conn *websocket.Conn, pa
 }
 
 func (h *WSHandler) handleListTasks(ctx context.Context, conn *websocket.Conn) {
-	tasks, err := h.worker.GetTasks()
+	tasks, err := h.manager.GetTasks()
 	if err != nil {
 		h.sendError(conn, "list_error", "Error retrieving tasks")
 		return
