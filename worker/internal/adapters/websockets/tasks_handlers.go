@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	writeWait      = 10 * time.Second
-	pongWait       = 60 * time.Second
+	writeWait      = 30 * time.Second
+	pongWait       = 120 * time.Second
 	pingPeriod     = (pongWait * 9) / 10
 	maxMessageSize = 1024
 )
@@ -65,16 +65,6 @@ func (h *WSHandler) HandleConnection(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WebSocket upgrade error: %v", err)
 		return
 	}
-	defer func() {
-		// Cierre gradual con timeout extendido
-		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		conn.WriteControl(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Closing normally"),
-			time.Now().Add(3*time.Second),
-		)
-		conn.Close()
-	}()
 
 	ctx, cancel := context.WithCancelCause(r.Context())
 	defer cancel(nil)
@@ -123,6 +113,11 @@ func (h *WSHandler) handleCreateTask(ctx context.Context, conn *websocket.Conn, 
 	}
 
 	task, taskCtx := h.createTaskFromRequest(ctx, req)
+	if task.ID == uuid.Nil || taskCtx == nil {
+		h.sendError(conn, "validation_error", "Invalid task request")
+		return
+	}
+	log.Printf("Creating task in task.handlers %s", task.ID)
 	outputChan, err := h.manager.AddTask(task, taskCtx)
 	if err != nil {
 		h.sendError(conn, "create_error", fmt.Sprintf("Error creating task: %v", err))
@@ -130,35 +125,57 @@ func (h *WSHandler) handleCreateTask(ctx context.Context, conn *websocket.Conn, 
 	}
 
 	// Leer del canal y enviar por WebSocket
-	for output := range outputChan.OutputChan {
-		resp := TaskResponse{
-			TaskID:  task.ID.String(),
-			Output:  output.Output,
-			IsError: output.IsError,
-			Status:  output.Status.String(),
-		}
+	for {
+		select {
+		case output, ok := <-outputChan.OutputChan:
+			if !ok {
+				log.Printf("Canal cerrado para la tarea %s", task.ID)
+				// Cierre limpio al final de la tarea
+				h.closeConnection(conn, websocket.CloseNormalClosure, "task completed")
+				return
+			}
 
-		payload, err := json.Marshal(resp)
-		if err != nil {
-			log.Printf("Error serializando respuesta: %v", err)
+			// Verificar conexión activa
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait)); err != nil {
+				log.Printf("[DEBUG] Ping fallido para %s: %v", task.ID, err)
+				// Cierre limpio si el ping falla
+				h.closeConnection(conn, websocket.CloseAbnormalClosure, "Ping failed")
+				return // Salir inmediatamente
+			}
+
+			resp := TaskResponse{
+				TaskID:  task.ID.String(),
+				Output:  output.Output,
+				IsError: output.IsError,
+				Status:  output.Status.String(),
+			}
+			payloadRes, _ := json.Marshal(resp)
+
+			if err := conn.WriteJSON(WSMessage{
+				Action:  "task_output",
+				Payload: json.RawMessage(payloadRes),
+			}); err != nil {
+				log.Printf("Error enviando output: %v", err)
+				// Cierre limpio si falla la escritura
+				h.closeConnection(conn, websocket.CloseAbnormalClosure, "Write failed")
+				return
+			}
+
+		case <-taskCtx.Done():
+			log.Printf("Contexto cancelado para la tarea %s", task.ID)
+			// Cierre limpio si el contexto de la tarea se cancela
+			h.closeConnection(conn, websocket.CloseNormalClosure, "Task context cancelled")
+			return
+
+		case <-ctx.Done():
+			log.Printf("Conexión WebSocket cerrada durante la tarea %s", task.ID)
+			// Cierre limpio si la conexión principal se cierra
+			h.closeConnection(conn, websocket.CloseNormalClosure, "WebSocket connection closed")
 			return
 		}
-
-		msg := WSMessage{
-			Action:  "task_output",
-			Payload: json.RawMessage(payload),
-		}
-
-		if err := conn.WriteJSON(msg); err != nil {
-			log.Printf("Error sending WebSocket message: %v", err)
-			return
-		}
-
-		// Dar tiempo para que el mensaje se envíe
-		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Enviar mensaje de finalización
+	// Enviar mensaje de finalización (redundante, pero por seguridad)
 	doneResp := TaskResponse{
 		TaskID:  task.ID.String(),
 		Status:  domain.STOPPED.String(),
@@ -169,6 +186,8 @@ func (h *WSHandler) handleCreateTask(ctx context.Context, conn *websocket.Conn, 
 	payload2, err := json.Marshal(doneResp)
 	if err != nil {
 		log.Printf("Error serializando mensaje de finalización: %v", err)
+		// Cierre limpio si falla la serialización
+		h.closeConnection(conn, websocket.CloseAbnormalClosure, "Serialization failed")
 		return
 	}
 
@@ -177,14 +196,33 @@ func (h *WSHandler) handleCreateTask(ctx context.Context, conn *websocket.Conn, 
 		Payload: json.RawMessage(payload2),
 	}
 
-	// Asegurar que el mensaje se envíe antes de cerrar
 	conn.SetWriteDeadline(time.Now().Add(writeWait))
 	if err := conn.WriteJSON(doneMsg); err != nil {
 		log.Printf("Error sending done message: %v", err)
+		// Cierre limpio si falla el envío
+		h.closeConnection(conn, websocket.CloseAbnormalClosure, "Sending done message failed")
 		return
 	}
+	conn.SetWriteDeadline(time.Time{}) // Reset deadline
 
 	// Esperar un momento antes de cerrar
+	time.Sleep(100 * time.Millisecond)
+
+	// Cierre controlado al final (redundante, pero por seguridad)
+	h.closeConnection(conn, websocket.CloseNormalClosure, "Task completed successfully")
+}
+
+func (h *WSHandler) closeConnection(conn *websocket.Conn, closeCode int, message string) {
+	defer conn.Close()
+
+	msg := websocket.FormatCloseMessage(closeCode, message)
+	conn.SetWriteDeadline(time.Now().Add(writeWait))
+	if err := conn.WriteMessage(websocket.CloseMessage, msg); err != nil {
+		log.Printf("Error sending CloseMessage: %v", err)
+		return // No hay nada más que podamos hacer
+	}
+
+	// Esperar un poco para que el mensaje de cierre se envíe
 	time.Sleep(100 * time.Millisecond)
 }
 
@@ -199,48 +237,30 @@ func (h *WSHandler) createTaskFromRequest(parent context.Context, req TaskReques
 		cancel()
 	}()
 
-	return domain.Task{
+	// Validate task request
+	if req.Name == "" {
+		log.Println("Task name is required")
+		return domain.Task{}, nil // Return an empty task and nil context
+	}
+	if req.Image == "" {
+		log.Println("Task image is required")
+		return domain.Task{}, nil // Return an empty task and nil context
+	}
+
+	task := domain.Task{
 		ID:   uuid.New(),
 		Name: req.Name,
 		WorkerSpec: domain.WorkerSpec{
-			Type:       domain.InstanceType(req.InstanceType),
 			Image:      req.Image,
 			Command:    req.Command,
 			Env:        req.Env,
 			WorkingDir: req.WorkingDir,
+			Type:       domain.InstanceType(req.InstanceType),
 		},
-		CreatedAt: time.Now(),
-	}, taskCtx
-}
+	}
 
-//
-//func (h *WSHandler) streamTaskOutput(ctx context.Context, conn *websocket.Conn, taskID string, outputChan <-chan *domain.ProcessOutput) {
-//	defer h.sendTaskCompletion(ctx, conn, taskID)
-//
-//	for output := range outputChan {
-//		// Enviar cada output inmediatamente por el WebSocket
-//		if !h.sendJSON(conn, "task_output", TaskResponse{
-//			TaskID:  taskID,
-//			Output:  output.Output,
-//			IsError: output.IsError,
-//			Status:  output.Status.String(),
-//		}) {
-//			log.Printf("Error enviando output, cerrando conexión para tarea %s", taskID)
-//			return
-//		}
-//
-//		// Verificar periodicamente si el contexto fue cancelado
-//		select {
-//		case <-ctx.Done():
-//			log.Printf("Contexto cancelado durante streaming de tarea %s", taskID)
-//			h.manager.StopTask(taskID)
-//			return
-//		default:
-//			// Mantener conexión activa con ping
-//			conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait))
-//		}
-//	}
-//}
+	return task, taskCtx
+}
 
 func (h *WSHandler) handleStopTask(ctx context.Context, conn *websocket.Conn, payload json.RawMessage) {
 	var req struct {

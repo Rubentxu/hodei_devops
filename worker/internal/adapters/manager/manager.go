@@ -10,10 +10,10 @@ import (
 
 	"fmt"
 	"log"
+	"sync"
 
 	"time"
 
-	"github.com/golang-collections/collections/queue"
 	"github.com/google/uuid"
 )
 
@@ -21,16 +21,17 @@ import (
 //
 //go:generate mockery --name=Manager --output=mocks --case=underscore
 type Manager struct {
-	pendingTasks    queue.Queue
-	taskDb          store.Store[domain.Task]
-	taskOperationDb store.Store[ports.TaskOperation]
-	resourcePools   map[string]*ports.ResourcePool
-	scheduler       ports.Scheduler
-	worker          *worker.Worker
+	mu               sync.Mutex
+	pendingTasksChan chan uuid.UUID
+	taskDb           store.Store[domain.Task]
+	taskOperationDb  store.Store[ports.TaskOperation]
+	resourcePools    map[string]*ports.ResourcePool
+	scheduler        ports.Scheduler
+	worker           *worker.Worker
 }
 
 // New creates a new Manager instance.
-func New(schedulerType string, dbType string, worker *worker.Worker) (*Manager, error) { // Recibe el Worker
+func New(schedulerType string, dbType string, worker *worker.Worker, sizePendingsTask int) (*Manager, error) { // Recibe el Worker
 	// ... (Creación del Scheduler y los Stores, como antes) ...
 	// Crear Scheduler
 	var currentSheduler ports.Scheduler
@@ -64,12 +65,12 @@ func New(schedulerType string, dbType string, worker *worker.Worker) (*Manager, 
 	taskOperationDb = store.NewInMemoryStore[ports.TaskOperation]()
 
 	m := Manager{
-		pendingTasks:    *queue.New(),
-		taskDb:          taskDb,
-		taskOperationDb: taskOperationDb,
-		resourcePools:   make(map[string]*ports.ResourcePool), // Se inicializa vacío
-		scheduler:       currentSheduler,
-		worker:          worker, // Guardar la instancia del Worker
+		pendingTasksChan: make(chan uuid.UUID, sizePendingsTask), // Buffer para 1000 tareas
+		taskDb:           taskDb,
+		taskOperationDb:  taskOperationDb,
+		resourcePools:    make(map[string]*ports.ResourcePool), // Se inicializa vacío
+		scheduler:        currentSheduler,
+		worker:           worker, // Guardar la instancia del Worker
 	}
 
 	return &m, nil
@@ -82,6 +83,9 @@ func (m *Manager) AddResourcePool(pool ports.ResourcePool) {
 
 // AddTask añade una nueva Task a la cola de pendientes.
 func (m *Manager) AddTask(taskDef domain.Task, ctx context.Context) (ports.TaskOperation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	log.Printf("Añadiendo tarea en manager %s", taskDef.ID)
 	outputChan := make(chan domain.ProcessOutput, 100)
 	stateChan := make(chan domain.State, 10) // Canal para el estado
 	errChan := make(chan error, 1)           // Canal para errores
@@ -106,13 +110,19 @@ func (m *Manager) AddTask(taskDef domain.Task, ctx context.Context) (ports.TaskO
 	if err != nil {
 		return ports.TaskOperation{}, fmt.Errorf("error al guardar la task operation: %w", err)
 	}
+	log.Printf("Tarea %s añadida al registro de tareas operables", taskDef.ID)
 
 	err = m.taskDb.Put(taskDef.ID.String(), taskDef)
 	if err != nil {
 		return ports.TaskOperation{}, fmt.Errorf("error al guardar la tarea: %w", err)
 	}
 
-	m.pendingTasks.Enqueue(taskDef.ID)
+	select {
+	case m.pendingTasksChan <- taskDef.ID: // Enviar ID al channel
+		log.Printf("Tarea %s enviada al channel", taskDef.ID)
+	default:
+		return ports.TaskOperation{}, fmt.Errorf("cola llena")
+	}
 
 	return operation, nil
 }
@@ -131,28 +141,31 @@ func (m *Manager) SelectWorker(taskDefID uuid.UUID) (*ports.ResourcePool, error)
 	if err != nil {
 		return nil, fmt.Errorf("tarea no encontrada: %w", err)
 	}
+	log.Printf("Seleccionando un worker para la tarea %s", taskDef.ID)
 	listPools := []*ports.ResourcePool{}
 	for _, pool := range m.resourcePools {
 		listPools = append(listPools, pool)
 	}
 	candidatePools := m.scheduler.SelectCandidateNodes(taskDef, listPools)
+	log.Printf("Candidate pools: %v", candidatePools)
 
 	scores := m.scheduler.Score(taskDef, candidatePools)
+	log.Printf("Scores: %v", scores)
 
 	selectedPool := m.scheduler.Pick(scores, candidatePools)
 
 	if selectedPool == nil {
 		return nil, fmt.Errorf("no se pudo seleccionar un ResourcePool")
 	}
-
+	log.Printf("Worker seleccionado: %s", (*selectedPool).GetID())
 	return selectedPool, nil
 }
 
 // ProcessTasks procesa las tareas pendientes.
 func (m *Manager) ProcessTasks() {
-	for m.pendingTasks.Len() > 0 {
-		taskDefID := m.pendingTasks.Dequeue().(uuid.UUID)
-		go m.processTask(taskDefID)
+	for taskID := range m.pendingTasksChan { // Escuchar el channel
+		log.Printf("Procesando: %s", taskID)
+		go m.processTask(taskID)
 	}
 }
 
@@ -174,6 +187,7 @@ func (m *Manager) processTask(taskDefID uuid.UUID) {
 		log.Printf("Error seleccionando un worker para la tarea %s: %v", taskDefID, err)
 		return
 	}
+	log.Printf("Worker seleccionado: %s", (*selectedPool).GetID())
 
 	// 3. Obtener la configuración del ResourcePool
 	if selectedPool == nil {
@@ -187,15 +201,18 @@ func (m *Manager) processTask(taskDefID uuid.UUID) {
 		log.Printf("Error obteniendo la tarea %s: %v", taskDefID, err)
 		return
 	}
+	log.Printf("Tarea %s asignada al worker %s", taskDefID, (*selectedPool).GetID())
 
 	resourceClient := (*selectedPool).GetResourceInstanceClient()
 	operation.Client = resourceClient
 	m.taskOperationDb.Put(taskDefID.String(), operation)
 	// 5. Delegar la ejecución al Worker
 	result := m.worker.AddTask(operation)
+	log.Printf("Tarea %s enviada al worker", taskDefID)
+	log.Printf("Result: %v", result)
 
 	// 6. Actualizar el estado de la tarea
-	if result.Error != nil {
+	if result != nil {
 		log.Printf("Error al iniciar la tarea %s en el worker: %v", taskDefID, result.Error)
 		operation.Task.State = domain.Failed
 		operation.Task.Error = result.Error()

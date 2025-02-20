@@ -6,6 +6,7 @@ type Stats struct {
 	CpuStats  *CPUStat
 	LoadStats *LoadAvg
 	TaskCount int
+	HostInfo  map[string]interface{}
 }
 
 func (s *Stats) MemUsedKb() uint64 {

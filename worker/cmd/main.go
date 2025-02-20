@@ -44,7 +44,7 @@ func main() {
 		cfg.StorageType,
 		workerFactory,
 	)
-	manager, err := manager.New("greedy", cfg.StorageType, w)
+	manager, err := manager.New("greedy", cfg.StorageType, w, 100)
 	if err != nil {
 		log.Fatalf("Error creando el manager: %v", err)
 	}
@@ -52,10 +52,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error creando el pool de recursos Docker: %v", err)
 	}
-	manager.AddResourcePool(dockerResourcePool)
-	go manager.ProcessTasks()
 
 	wsHandler := websockets.NewWSHandler(manager)
+
+	manager.AddResourcePool(dockerResourcePool)
+	go manager.ProcessTasks()
 
 	// Obtener el directorio base de la aplicación
 	baseDir, err := filepath.Abs(".")

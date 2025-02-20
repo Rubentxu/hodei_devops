@@ -217,11 +217,13 @@ func TestParallelTasks(t *testing.T) {
 				// Leer respuestas
 				go func() {
 					defer close(taskFinished)
+					defer c.Close() // Cerrar la conexión cuando esta gorutina termine
+
 					for {
 						var response WSMessage
 						err := c.ReadJSON(&response)
 						if err != nil {
-							if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+							if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
 								t.Logf("[%s] Conexión cerrada por el servidor", tc.Name)
 								return
 							}
