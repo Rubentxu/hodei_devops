@@ -225,21 +225,6 @@ func (m *Manager) processTask(taskDefID uuid.UUID) {
 	log.Printf("Tarea %s procesada", taskDefID)
 }
 
-func (m *Manager) UpdateTasks() {
-
-}
-
-//// GetTasks devuelve todas las TaskExecutions.
-//func (m *Manager) GetTaskExecutions() []domain.TaskExecution {
-//	executions := []domain.TaskExecution{}
-//
-//	for _, id := range m.executionDb.Keys() {
-//		exec, _ := m.executionDb.Get(id)
-//		executions = append(executions, exec)
-//	}
-//
-//	return executions
-//}
 
 // GetTasks devuelve todas las Tasks (para la UI, por ejemplo).
 func (m *Manager) GetTasks() ([]domain.Task, error) {

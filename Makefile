@@ -161,7 +161,7 @@ run-worker: stop-worker build
 	CLIENT_KEY_PATH=$(DEV_CERT_DIR)/$(CLIENT_KEY) \
 	CA_CERT_PATH=$(DEV_CERT_DIR)/$(CA_CERT) \
 	JWT_TOKEN="$(JWT_TOKEN)" \
-	./bin/worker > ./bin/worker.log 2>&1 & echo $$! > ./bin/worker.pid
+	./bin/worker serve --dir="./test_pb_data" > ./bin/worker.log 2>&1 & echo $$! > ./bin/worker.pid
 
 .PHONY: test-tls
 test-tls: certs-dev

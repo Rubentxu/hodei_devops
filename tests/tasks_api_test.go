@@ -44,7 +44,7 @@ func TestCreateTaskViaWS(t *testing.T) {
 	defer cancel()
 
 	// Nueva URL de WebSocket -> /ws
-	wsURL := fmt.Sprintf("ws://%s/ws", "localhost:8080")
+	wsURL := fmt.Sprintf("ws://%s/ws", "localhost:8090")
 
 	// Opcional: header con token
 	header := http.Header{}
@@ -179,7 +179,7 @@ func TestParallelTasks(t *testing.T) {
 				defer cancel()
 
 				// Establecer conexión WebSocket
-				wsURL := fmt.Sprintf("ws://%s/ws", "localhost:8080")
+				wsURL := fmt.Sprintf("ws://%s/ws", "localhost:8090")
 				header := http.Header{}
 				header.Set("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("JWT_TOKEN")))
 

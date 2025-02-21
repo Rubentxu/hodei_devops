@@ -1,4 +1,4 @@
- package resources
+package resources
 
 import (
 	"context"
@@ -17,8 +17,9 @@ import (
 )
 
 type KubernetesResourcePool struct {
-	id     string
-	client *KubernetesClientAdapter
+	id        string
+	client    *KubernetesClientAdapter
+	namespace string
 }
 
 func (d *KubernetesResourcePool) GetID() string {
@@ -28,9 +29,13 @@ func (d *KubernetesResourcePool) GetID() string {
 func NewKubernetesResourcePool(config config.K8sConfig, id string) (ports.ResourcePool, error) {
 	nativeClient, err := NewKubernetesClientAdapter(config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Docker client: %w", err)
+		return nil, fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
-	return &KubernetesResourcePool{client: nativeClient.(*KubernetesClientAdapter), id: id}, nil
+	return &KubernetesResourcePool{
+		client:    nativeClient.(*KubernetesClientAdapter),
+		id:        id,
+		namespace: config.Namespace, // Asigna el namespace desde la configuración
+	}, nil
 }
 
 func (d *KubernetesResourcePool) GetResourceInstanceClient() ports.ResourceIntanceClient {

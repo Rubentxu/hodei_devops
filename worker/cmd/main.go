@@ -1,93 +1,111 @@
-// Package main Worker API.
-//
-// @title Worker API
-// @version 1.0
-// @description API para gestionar tareas y procesos remotos
-// @termsOfService http://swagger.io/terms/
-//
-// @contact.name API Support
-// @contact.email your.email@example.com
-//
-// @license.name MIT
-// @license.url http://opensource.org/licenses/MIT
-//
-// @host localhost:8080
-// @BasePath /
-// @schemes http ws
 package main
 
 import (
-	"dev.rubentxu.devops-platform/worker/internal/adapters/manager"
-	"dev.rubentxu.devops-platform/worker/internal/adapters/resources"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 
+	"github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/apis"
+	"github.com/pocketbase/pocketbase/core"
+	httpSwagger "github.com/swaggo/http-swagger"
+
 	"dev.rubentxu.devops-platform/worker/config"
+	"dev.rubentxu.devops-platform/worker/internal/adapters/manager"
+	"dev.rubentxu.devops-platform/worker/internal/adapters/resources"
 	"dev.rubentxu.devops-platform/worker/internal/adapters/websockets"
 	"dev.rubentxu.devops-platform/worker/internal/adapters/worker"
 	"dev.rubentxu.devops-platform/worker/internal/adapters/worker/factories"
 
-	_ "dev.rubentxu.devops-platform/worker/docs" // Import generado por swag
-	httpSwagger "github.com/swaggo/http-swagger"
+	_ "dev.rubentxu.devops-platform/worker/docs"
 )
 
 func main() {
+	// Crear nueva instancia de PocketBase
+	app := pocketbase.New()
+
+	// Cargar configuración
 	cfg := config.Load()
 	log.Printf("Configuración cargada en worker api: %+v", cfg)
-	workerFactory := factories.NewWorkerInstanceFactory(cfg)
 
+	// Inicializar componentes del worker
+	workerFactory := factories.NewWorkerInstanceFactory(cfg)
 	w := worker.NewWorker(
 		cfg.WorkerName,
 		cfg.MaxConcurrentTasks,
 		cfg.StorageType,
 		workerFactory,
 	)
+
+	// Crear manager
 	manager, err := manager.New("greedy", cfg.StorageType, w, 100)
 	if err != nil {
 		log.Fatalf("Error creando el manager: %v", err)
 	}
+
+	// Crear pool de recursos Docker
 	dockerResourcePool, err := resources.NewDockerResourcePool(cfg.Providers.Docker, "defaultDockerPool")
 	if err != nil {
 		log.Fatalf("Error creando el pool de recursos Docker: %v", err)
 	}
 
+	// Inicializar WebSocket handler
 	wsHandler := websockets.NewWSHandler(manager)
 
+	// Añadir pool de recursos y comenzar procesamiento de tareas
 	manager.AddResourcePool(dockerResourcePool)
 	go manager.ProcessTasks()
 
-	// Obtener el directorio base de la aplicación
-	baseDir, err := filepath.Abs(".")
-	if err != nil {
-		log.Fatalf("Error obteniendo directorio base: %v", err)
+	// Configurar rutas en PocketBase
+	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		// Obtener directorio base
+		baseDir, err := filepath.Abs(".")
+		if err != nil {
+			return fmt.Errorf("error obteniendo directorio base: %w", err)
+		}
+
+		// Configurar rutas estáticas
+		e.Router.GET("/static/{path...}", apis.Static(os.DirFS("./pb_public"), false))
+
+		// Configurar endpoints del worker
+		setupWorkerRoutes(e, wsHandler, baseDir)
+
+		return e.Next()
+	})
+
+	// Iniciar PocketBase
+	if err := app.Start(); err != nil {
+		log.Fatal(err)
 	}
-
-	// Configurar rutas y servidor HTTP
-	mux := setupRoutes(wsHandler, baseDir)
-	addr := fmt.Sprintf(":%d", cfg.Port)
-
-	log.Printf("Iniciando servidor en %s", addr)
-	log.Printf("Swagger UI disponible en http://localhost%s/swagger/", addr)
-	log.Printf("WebSocket disponible en ws://localhost%s/ws", addr)
-
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		log.Fatalf("Error al iniciar el servidor: %v", err)
-	}
-
-	websockets.HandleSignals()
 }
 
-func setupRoutes(wsHandler *websockets.WSHandler, baseDir string) *http.ServeMux {
-	mux := http.NewServeMux()
+func setupWorkerRoutes(e *core.ServeEvent, wsHandler *websockets.WSHandler, baseDir string) {
+	// WebSocket endpoint
+	e.Router.GET("/ws", func(c *core.RequestEvent) error {
+		wsHandler.HandleConnection(c.Response, c.Request)
+		return nil
+	})
 
-	// WebSocket y Health endpoints
-	mux.HandleFunc("/ws", wsHandler.HandleConnection)
-	mux.HandleFunc("/health", websockets.HealthHandler)
+	// Health endpoint
+	e.Router.GET("/health", func(c *core.RequestEvent) error {
+		websockets.HealthHandler(c.Response, c.Request)
+		return nil
+	})
 
 	// Swagger documentation
-	mux.Handle("/swagger/", httpSwagger.WrapHandler)
+	e.Router.GET("/swagger/*", func(c *core.RequestEvent) error {
+		swaggerHandler := httpSwagger.Handler(
+			httpSwagger.URL("/swagger/doc.json"),
+		)
+		swaggerHandler.ServeHTTP(c.Response, c.Request)
+		return nil
+	})
 
-	return mux
+	// Serve swagger.json
+	e.Router.GET("/swagger/doc.json", func(c *core.RequestEvent) error {
+		http.ServeFile(c.Response, c.Request, filepath.Join(baseDir, "docs", "swagger.json"))
+		return nil
+	})
 }

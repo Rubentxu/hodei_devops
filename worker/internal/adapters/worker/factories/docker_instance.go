@@ -75,7 +75,7 @@ func NewDockerWorker(task domain.TaskExecution, grpcCfg config.GRPCConfig, docke
 	}, nil
 }
 
-func (d *DockerWorker) Start(ctx context.Context, outputChan chan<- domain.ProcessOutput) (*domain.WorkerEndpoint, error) {
+func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputChan chan<- domain.ProcessOutput) (*domain.WorkerEndpoint, error) {
 	log.Printf("Iniciando DockerWorker con spec=%v", d.task.WorkerSpec)
 
 	// Obtener ruta absoluta para el directorio de certificados

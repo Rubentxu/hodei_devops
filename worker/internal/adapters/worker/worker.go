@@ -220,7 +220,7 @@ func (w *Worker) processTask(op ports.TaskOperation) {
 	sendOutput(op.OutputChan, taskID, TypeInfo,
 		"Iniciando worker...", false, domain.RUNNING)
 
-	endpoint, err := workerInstance.Start(op.Ctx, op.OutputChan)
+	endpoint, err := workerInstance.Start(op.Ctx, "", op.OutputChan)
 	if err != nil {
 		state.SetState(domain.ERROR)
 		sendOutput(op.OutputChan, taskID, TypeError,

@@ -3,12 +3,14 @@ package factories
 import (
 	"context"
 	"fmt"
+
+	"gopkg.in/yaml.v2"
 	"k8s.io/client-go/tools/clientcmd"
 	"log"
+	"os"
 	"time"
 
 	"dev.rubentxu.devops-platform/worker/config"
-
 	"dev.rubentxu.devops-platform/worker/internal/adapters/grpc"
 	"dev.rubentxu.devops-platform/worker/internal/domain"
 	"dev.rubentxu.devops-platform/worker/internal/ports"
@@ -59,64 +61,125 @@ func NewK8sWorker(task domain.TaskExecution, grpcConfig config.GRPCConfig, k8sCf
 	}, nil
 }
 
-// Start crea el Pod en Kubernetes y espera a que esté en Running, luego setea k.endpoint
-func (k *K8sWorker) Start(ctx context.Context, outputChan chan<- domain.ProcessOutput) (*domain.WorkerEndpoint, error) {
-	log.Printf("Iniciando K8sWorker con spec=%v", k.task.WorkerSpec)
+// loadPodTemplateFromFile carga y parsea un template de Pod desde un archivo YAML
+func loadPodTemplateFromFile(templatePath string) (*apiv1.Pod, error) {
+	if templatePath == "" {
+		return nil, fmt.Errorf("ruta al template de Pod no especificada")
+	}
 
-	// Determinar la imagen
+	yamlFile, err := os.ReadFile(templatePath)
+	if err != nil {
+		return nil, fmt.Errorf("error leyendo archivo template YAML: %w", err)
+	}
+
+	podTemplate := &apiv1.Pod{}
+	err = yaml.Unmarshal(yamlFile, podTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("error parseando YAML a Pod: %w", err)
+	}
+
+	return podTemplate, nil
+}
+
+// Start crea el Pod en Kubernetes y espera a que esté en Running, luego setea k.endpoint
+func (k *K8sWorker) Start(ctx context.Context, templatePath string, outputChan chan<- domain.ProcessOutput) (*domain.WorkerEndpoint, error) {
+	log.Printf("Iniciando K8sWorker con spec=%v y templatePath=%s", k.task.WorkerSpec, templatePath)
+
+	// Cargar el template del Pod desde el archivo YAML pasado como argumento
+	podTemplate, err := loadPodTemplateFromFile(templatePath)
+	if err != nil {
+		k.sendErrorMessage(outputChan, fmt.Sprintf("Error cargando template de Pod desde '%s': %v", templatePath, err))
+		return nil, err
+	}
+
+	// **Personalizar el template del Pod**
+
+	// 1. Nombre del Pod
+	podName := fmt.Sprintf("task-%s", k.task.Name)
+	podTemplate.ObjectMeta.Name = podName
+	log.Printf("Personalizando Pod con nombre: %s", podName)
+
+	// 2. Namespace (tomar de k.k8sCfg.Namespace como valor predeterminado si no está ya en el template)
+	if podTemplate.ObjectMeta.Namespace == "" && k.k8sCfg.Namespace != "" {
+		podTemplate.ObjectMeta.Namespace = k.k8sCfg.Namespace
+		log.Printf("Personalizando Pod con namespace desde config: %s", k.k8sCfg.Namespace)
+	} else if podTemplate.ObjectMeta.Namespace != "" {
+		log.Printf("Usando namespace del template del Pod: %s", podTemplate.ObjectMeta.Namespace)
+	} else {
+		log.Println("Namespace no definido ni en template ni en config, usando namespace 'default'") // Podría ser un error según tus requisitos
+		podTemplate.ObjectMeta.Namespace = "default"                                                 // o retornar error si el namespace es obligatorio
+	}
+
+	// 3. Labels (merge con los definidos en k.k8sCfg.Labels, priorizando los de la config si hay conflicto)
+	if k.k8sCfg.Labels != nil {
+		if podTemplate.ObjectMeta.Labels == nil {
+			podTemplate.ObjectMeta.Labels = make(map[string]string)
+		}
+		for key, value := range k.k8sCfg.Labels {
+			podTemplate.ObjectMeta.Labels[key] = value
+		}
+		log.Printf("Merge de labels con la config: %v", k.k8sCfg.Labels)
+	}
+
+	// 4. Annotations (merge con los definidos en k.k8sCfg.Annotations, similar a labels)
+	if k.k8sCfg.Annotations != nil {
+		if podTemplate.ObjectMeta.Annotations == nil {
+			podTemplate.ObjectMeta.Annotations = make(map[string]string)
+		}
+		for key, value := range k.k8sCfg.Annotations {
+			podTemplate.ObjectMeta.Annotations[key] = value
+		}
+		log.Printf("Merge de annotations con la config: %v", k.k8sCfg.Annotations)
+	}
+
+	// 5. Imagen del contenedor (usar WorkerSpec.Image si se define, sino usar k.k8sCfg.DefaultImage, sino usar la del template)
 	workerImage := k.task.WorkerSpec.Image
 	if workerImage == "" {
-		k.sendErrorMessage(outputChan, "No se definió imagen para el Pod")
-		workerImage = k.k8sCfg.DefaultImage
+		if k.k8sCfg.DefaultImage != "" {
+			workerImage = k.k8sCfg.DefaultImage // Usar default de config
+			log.Printf("Usando imagen default de config: %s", workerImage)
+		} else if len(podTemplate.Spec.Containers) > 0 && podTemplate.Spec.Containers[0].Image != "" {
+			workerImage = podTemplate.Spec.Containers[0].Image // Usar imagen del template
+			log.Printf("Usando imagen del template del Pod: %s", workerImage)
+		} else {
+			k.sendErrorMessage(outputChan, "No se definió imagen para el Pod y no hay en template/default config")
+			return nil, fmt.Errorf("no se definió imagen para el Pod y no hay en template/default config")
+		}
+	} else {
+		log.Printf("Usando imagen de WorkerSpec: %s", workerImage)
+	}
+	if len(podTemplate.Spec.Containers) > 0 { // Asumiendo que el primer contenedor es el worker container
+		podTemplate.Spec.Containers[0].Image = workerImage
 	}
 
-	// Armar la espec del Pod
-	podName := fmt.Sprintf("task-%s", k.task.Name)
-	podSpec := &apiv1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        podName,
-			Namespace:   k.k8sCfg.Namespace,
-			Labels:      k.k8sCfg.Labels,
-			Annotations: k.k8sCfg.Annotations,
-		},
-		Spec: apiv1.PodSpec{
-			Containers: []apiv1.Container{
-				{
-					Name:  "grpc-worker-container",
-					Image: workerImage,
-					Ports: []apiv1.ContainerPort{
-						{
-							Name:          "grpc",
-							ContainerPort: 50051,
-							Protocol:      apiv1.ProtocolTCP,
-						},
-					},
-					Env: buildK8sEnvVars(k.task.WorkerSpec.Env),
-					// Args/Command según necesites (o se lo dejas al servidor gRPC)
-				},
-			},
-			RestartPolicy: apiv1.RestartPolicyNever,
-		},
+	// 6. Variables de entorno (append WorkerSpec.Env a las env vars existentes en el template)
+	envVars := buildK8sEnvVars(k.task.WorkerSpec.Env)
+	if len(podTemplate.Spec.Containers) > 0 {
+		podTemplate.Spec.Containers[0].Env = append(podTemplate.Spec.Containers[0].Env, envVars...) // Append para mergear
+		log.Printf("Añadiendo variables de entorno de WorkerSpec: %v", k.task.WorkerSpec.Env)
 	}
+
+	// **PodSpec ya está configurado desde el template y personalizado.**
 
 	// Crear el Pod en el cluster
-	_, err := k.clientset.CoreV1().Pods("default").Create(ctx, podSpec, metav1.CreateOptions{})
+	namespaceToCreateIn := podTemplate.ObjectMeta.Namespace // Usar el namespace que finalmente quedó configurado en el template
+	_, err = k.clientset.CoreV1().Pods(namespaceToCreateIn).Create(ctx, podTemplate, metav1.CreateOptions{})
 	if err != nil {
 		k.sendErrorMessage(outputChan, "Error creando Pod")
-		return nil, fmt.Errorf("error creando Pod %s: %v", podName, err)
+		return nil, fmt.Errorf("error creando Pod %s en namespace '%s': %v", podName, namespaceToCreateIn, err)
 	}
-	log.Printf("Pod %s creado en Kubernetes", podName)
+	log.Printf("Pod %s creado en Kubernetes en namespace '%s'", podName, namespaceToCreateIn)
 
 	// Esperar a que el Pod entre en Running
-	err = waitForPodRunning(ctx, k.clientset, podName, "default")
+	err = waitForPodRunning(ctx, k.clientset, podName, namespaceToCreateIn)
 	if err != nil {
 		k.sendErrorMessage(outputChan, "Error esperando que el Pod esté en Running")
 		return nil, fmt.Errorf("error esperando que el Pod %s esté en Running: %v", podName, err)
 	}
-	log.Printf("Pod %s está en Running", podName)
+	log.Printf("Pod %s está en Running en namespace '%s'", podName, namespaceToCreateIn)
 
 	// Obtener información del Pod (IP, etc.)
-	pod, err := k.clientset.CoreV1().Pods("default").Get(ctx, podName, metav1.GetOptions{})
+	pod, err := k.clientset.CoreV1().Pods(namespaceToCreateIn).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		k.sendErrorMessage(outputChan, "Error obteniendo Pod")
 		return nil, fmt.Errorf("error obteniendo Pod %s: %v", podName, err)
@@ -132,7 +195,7 @@ func (k *K8sWorker) Start(ctx context.Context, outputChan chan<- domain.ProcessO
 	k.endpoint = &domain.WorkerEndpoint{
 		WorkerID: k.task.Name,
 		Address:  podIP,   // IP interna del Pod
-		Port:     "50051", // Puerto del contenedor gRPC
+		Port:     "50051", // Puerto del contenedor gRPC (asumiendo que es fijo en el template o config)
 	}
 
 	log.Printf("K8sWorkerEndpoint: IP=%s Puerto=%s", k.endpoint.Address, k.endpoint.Port)

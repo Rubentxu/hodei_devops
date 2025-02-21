@@ -27,7 +27,7 @@ type WorkerInstance interface {
 	GetID() string
 	GetName() string
 	GetType() string
-	Start(ctx context.Context, outputChan chan<- domain.ProcessOutput) (*domain.WorkerEndpoint, error)
+	Start(ctx context.Context, templatePath string, outputChan chan<- domain.ProcessOutput) (*domain.WorkerEndpoint, error)
 	Run(ctx context.Context, t domain.TaskExecution, outputChan chan<- domain.ProcessOutput) error
 	Stop(ctx context.Context) (bool, string, error)
 	StartMonitoring(ctx context.Context, checkInterval int64, healthChan chan<- *domain.ProcessHealthStatus) error
