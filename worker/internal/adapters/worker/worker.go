@@ -3,6 +3,7 @@ package worker
 
 import (
 	"context"
+	"dev.rubentxu.devops-platform/worker/internal/adapters/store"
 	"fmt"
 	"log"
 	"sync"
@@ -11,7 +12,6 @@ import (
 
 	"dev.rubentxu.devops-platform/worker/internal/domain"
 
-	"dev.rubentxu.devops-platform/worker/internal/adapters/store"
 	"dev.rubentxu.devops-platform/worker/internal/ports"
 )
 
@@ -39,7 +39,7 @@ type workerOperation struct {
 
 type Worker struct {
 	name          string
-	db            store.Store[domain.TaskExecution]
+	db            ports.Store[domain.TaskExecution]
 	workerFactory ports.WorkerFactory
 
 	// Channels for Task management
@@ -61,7 +61,7 @@ type Worker struct {
 	wg       sync.WaitGroup
 }
 
-func NewWorker(name string, initialMaxConcurrent int, storeType string, workerFactory ports.WorkerFactory) *Worker {
+func NewWorker(name string, initialMaxConcurrent int, workerFactory ports.WorkerFactory) *Worker {
 	w := &Worker{
 		name:                 name,
 		workerFactory:        workerFactory,
@@ -80,27 +80,13 @@ func NewWorker(name string, initialMaxConcurrent int, storeType string, workerFa
 		w.workerSlots <- struct{}{}
 	}
 
-	w.initStore(storeType)
+	w.db = store.NewCacheStore[domain.TaskExecution]()
 
 	w.wg.Add(2) // Para taskDispatcher y workerManager
 	go w.taskDispatcher()
 	go w.workerManager()
 
 	return w
-}
-
-func (w *Worker) initStore(storeType string) {
-	switch storeType {
-	case "memory":
-		w.db = store.NewInMemoryStore[domain.TaskExecution]()
-	case "bolt":
-		filename := fmt.Sprintf("%s_tasks.db", w.name)
-		store, err := store.NewBoltDBStore[domain.TaskExecution](filename, 0600, "tasks")
-		if err != nil {
-			panic(err)
-		}
-		w.db = store
-	}
 }
 
 func (w *Worker) Stop() {

@@ -35,12 +35,11 @@ func main() {
 	w := worker.NewWorker(
 		cfg.WorkerName,
 		cfg.MaxConcurrentTasks,
-		cfg.StorageType,
 		workerFactory,
 	)
 
 	// Crear manager
-	manager, err := manager.New("greedy", cfg.StorageType, w, 100)
+	manager, err := manager.New("greedy", cfg.StorageType, w, 100, app)
 	if err != nil {
 		log.Fatalf("Error creando el manager: %v", err)
 	}

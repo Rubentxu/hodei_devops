@@ -7,6 +7,7 @@ import (
 	"dev.rubentxu.devops-platform/worker/internal/adapters/worker"
 	"dev.rubentxu.devops-platform/worker/internal/domain"
 	"dev.rubentxu.devops-platform/worker/internal/ports"
+	"github.com/pocketbase/pocketbase/core"
 
 	"fmt"
 	"log"
@@ -23,15 +24,15 @@ import (
 type Manager struct {
 	mu               sync.Mutex
 	pendingTasksChan chan uuid.UUID
-	taskDb           store.Store[domain.Task]
-	taskOperationDb  store.Store[ports.TaskOperation]
+	taskDb           ports.Store[domain.Task]
+	taskOperationDb  ports.Store[ports.TaskOperation]
 	resourcePools    map[string]*ports.ResourcePool
 	scheduler        ports.Scheduler
 	worker           *worker.Worker
 }
 
 // New creates a new Manager instance.
-func New(schedulerType string, dbType string, worker *worker.Worker, sizePendingsTask int) (*Manager, error) { // Recibe el Worker
+func New(schedulerType string, dbType string, worker *worker.Worker, sizePendingsTask int, app core.App) (*Manager, error) { // Recibe el Worker
 	// ... (Creación del Scheduler y los Stores, como antes) ...
 	// Crear Scheduler
 	var currentSheduler ports.Scheduler
@@ -45,16 +46,16 @@ func New(schedulerType string, dbType string, worker *worker.Worker, sizePending
 	}
 
 	// Crear Stores
-	var taskDb store.Store[domain.Task]
-	var taskOperationDb store.Store[ports.TaskOperation]
+	var taskDb ports.Store[domain.Task]
+	var taskOperationDb ports.Store[ports.TaskOperation]
 	var err error // Declarar err aquí para que esté disponible en todo el bloque
 
 	switch dbType {
 	case "memory":
-		taskDb = store.NewInMemoryStore[domain.Task]()
+		taskDb = store.NewCacheStore[domain.Task]()
 
 	case "persistent":
-		taskDb, err = store.NewBoltDBStore[domain.Task]("tasks.db", 0600, "tasks")
+		taskDb, err = store.NewPocketBaseStore[domain.Task](app, "tasks")
 		if err != nil {
 			return nil, fmt.Errorf("unable to create task store: %w", err)
 		}
@@ -62,7 +63,7 @@ func New(schedulerType string, dbType string, worker *worker.Worker, sizePending
 	default:
 		return nil, fmt.Errorf("invalid dbType: %currentSheduler", dbType)
 	}
-	taskOperationDb = store.NewInMemoryStore[ports.TaskOperation]()
+	taskOperationDb = store.NewCacheStore[ports.TaskOperation]()
 
 	m := Manager{
 		pendingTasksChan: make(chan uuid.UUID, sizePendingsTask), // Buffer para 1000 tareas
@@ -224,7 +225,6 @@ func (m *Manager) processTask(taskDefID uuid.UUID) {
 
 	log.Printf("Tarea %s procesada", taskDefID)
 }
-
 
 // GetTasks devuelve todas las Tasks (para la UI, por ejemplo).
 func (m *Manager) GetTasks() ([]domain.Task, error) {
