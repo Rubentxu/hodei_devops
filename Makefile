@@ -37,8 +37,8 @@ DOCKER_SOCKET ?= /var/run/docker.sock
 
 # Swagger configuration
 SWAGGER_UI_VERSION ?= v4.15.5
-SWAGGER_UI_DIR = worker/swagger-ui
-API_DOCS_DIR = worker/api
+SWAGGER_UI_DIR = orchestrator/swagger-ui
+API_DOCS_DIR = orchestrator/api
 
 .PHONY: proto
 proto:
@@ -49,21 +49,21 @@ proto:
 	          $(PROTO_FILE)
 
 .PHONY: test
-test: proto build run-remote_process run-worker
-	@sleep 2 # Espera a que el servidor y el workere se inicien
+test: proto build run-remote_process run-orchestrator
+	@sleep 2 # Espera a que el servidor y el orchestratore se inicien
 	@echo "🧪 Ejecutando pruebas..."
 	@echo "🧪 Ejecutando pruebas shell..."
 	@bash $(TEST_SCRIPT)
 	
 
 .PHONY: test-go
-test-go: stop-remote_process stop-worker clean build run-remote_process run-worker
+test-go: stop-remote_process stop-orchestrator clean build run-remote_process run-orchestrator
 	@sleep 5 # Increase sleep time to ensure the remote_process starts
 	@echo "🧪 Ejecutando pruebas Go..."
 	@JWT_SECRET="$(JWT_SECRET)" JWT_TOKEN="$(JWT_TOKEN)" go test -v ./tests/...
 	@echo "✅ Pruebas Go completadas."
 	@$(MAKE) stop-remote_process
-	@$(MAKE) stop-worker
+	@$(MAKE) stop-orchestrator
 
 .PHONY: test-integration
 test-integration:
@@ -74,15 +74,15 @@ test-integration:
 test-all: test test-integration
 
 .PHONY: clean
-clean: stop-remote_process stop-worker
+clean: stop-remote_process stop-orchestrator
 	@echo "🧹 Limpiando binarios..."
-	rm -f bin/remote_process bin/worker
+	rm -f bin/remote_process bin/orchestrator
 
 .PHONY: build
 build:
 	@echo "🏗️  Construyendo binarios..."
 	go build -o bin/remote_process remote_process/cmd/main.go
-	go build -o bin/worker worker/cmd/main.go
+	go build -o bin/orchestrator orchestrator/cmd/main.go
 
 .PHONY: certs-dirs
 certs-dirs:
@@ -136,10 +136,10 @@ k8s-secrets: certs-dev
 	@kubectl create secret tls grpc-tls-certs \
 		--cert=$(DEV_CERT_DIR)/$(SERVER_CERT) \
 		--key=$(DEV_CERT_DIR)/$(SERVER_KEY) \
-		--dry-run=worker -o yaml > k8s/tls-secret.yaml
+		--dry-run=orchestrator -o yaml > k8s/tls-secret.yaml
 	@kubectl create configmap grpc-ca-cert \
 		--from-file=ca.crt=$(DEV_CERT_DIR)/$(CA_CERT) \
-		--dry-run=worker -o yaml > k8s/ca-configmap.yaml
+		--dry-run=orchestrator -o yaml > k8s/ca-configmap.yaml
 	@echo "✅ Kubernetes secrets generated in k8s/"
 
 .PHONY: run-remote_process
@@ -154,25 +154,25 @@ run-remote_process: stop-remote_process build
 	./bin/remote_process > ./bin/remote_process.log 2>&1 & echo $$! > ./bin/remote_process.pid
 
 
-.PHONY: run-worker
-run-worker: stop-worker build
-	@echo "🚀 Starting worker with TLS and JWT in development mode..."
+.PHONY: run-orchestrator
+run-orchestrator: stop-orchestrator build
+	@echo "🚀 Starting orchestrator with TLS and JWT in development mode..."
 	@CLIENT_CERT_PATH=$(DEV_CERT_DIR)/$(CLIENT_CERT) \
 	CLIENT_KEY_PATH=$(DEV_CERT_DIR)/$(CLIENT_KEY) \
 	CA_CERT_PATH=$(DEV_CERT_DIR)/$(CA_CERT) \
 	JWT_TOKEN="$(JWT_TOKEN)" \
-	./bin/worker serve --dir="./test_pb_data" > ./bin/worker.log 2>&1 & echo $$! > ./bin/worker.pid
+	./bin/orchestrator serve --dir="./test_pb_data" > ./bin/orchestrator.log 2>&1 & echo $$! > ./bin/orchestrator.pid
 
 .PHONY: test-tls
 test-tls: certs-dev
 	@echo "🧪 Testing TLS configuration..."
 	@echo "Testing remote_process certificate:"
 	@openssl x509 -in $(DEV_CERT_DIR)/$(SERVER_CERT) -text -noout | grep "Subject:"
-	@echo "Testing worker certificate:"
+	@echo "Testing orchestrator certificate:"
 	@openssl x509 -in $(DEV_CERT_DIR)/$(CLIENT_CERT) -text -noout | grep "Subject:"
 	@echo "Verifying remote_process certificate against CA:"
 	@openssl verify -CAfile $(DEV_CERT_DIR)/$(CA_CERT) $(DEV_CERT_DIR)/$(SERVER_CERT)
-	@echo "Verifying worker certificate against CA:"
+	@echo "Verifying orchestrator certificate against CA:"
 	@openssl verify -CAfile $(DEV_CERT_DIR)/$(CA_CERT) $(DEV_CERT_DIR)/$(CLIENT_CERT)
 
 .PHONY: clean-certs
@@ -203,7 +203,7 @@ help-certs:
 	@echo "Development Commands:"
 	@echo "  make run-remote_process   - Run remote_process with TLS in development"
 	@echo "  make run-remote_process   - Run remote_process with TLS in development"
-	@echo "  make run-worker   - Run worker with TLS in development"
+	@echo "  make run-orchestrator   - Run orchestrator with TLS in development"
 	@echo "  make docker-compose-dev - Run all services with TLS in development"
 
 .PHONY: install-swagger
@@ -244,11 +244,11 @@ stop-remote_process:
 	@kill `cat ./bin/remote_process.pid` || true
 	@rm -f ./bin/remote_process.pid
 
-.PHONY: stop-worker
-stop-worker:
-	@echo "🛑 Deteniendo worker..."
-	@kill `cat ./bin/worker.pid` || true
-	@rm -f ./bin/worker.pid
+.PHONY: stop-orchestrator
+stop-orchestrator:
+	@echo "🛑 Deteniendo orchestrator..."
+	@kill `cat ./bin/orchestrator.pid` || true
+	@rm -f ./bin/orchestrator.pid
 
 # Agregar nuevos targets para tests en Docker
 .PHONY: test-docker
