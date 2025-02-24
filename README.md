@@ -130,3 +130,24 @@ GitHub: Hodei DevOps
 
 ---
 
+### Para instalar el chart:
+
+```bash
+# Desarrollo
+helm install hodei-dev ./hodei-devops-chart \
+  --set global.environment=development \
+  --set jwt.token=<tu-token-jwt> \
+  --set jwt.secret=<tu-secreto-jwt>
+
+# Producción
+helm install hodei-prod ./hodei-devops-chart \
+  --set global.environment=production \
+  --set jwt.token=<tu-token-jwt> \
+  --set jwt.secret=<tu-secreto-jwt> \
+  --set ingress.hosts[0].host=hodei.yourdomain.com
+```
+
+Todos los recursos desplegados tendrán el prefijo "hodei-devops" y 
+las etiquetas apropiadas para identificarlos como parte de la aplicación Hodei DevOps.
+
+helm install hodei-prod ./hodei-devops-chart -f custom-values.yaml

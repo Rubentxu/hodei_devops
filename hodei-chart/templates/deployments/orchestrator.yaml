@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hodei-devops.fullname" . }}-orchestrator
+  labels:
+    {{- include "hodei-devops.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.orchestrator.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.orchestrator.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.orchestrator.name }}
+    spec:
+      containers:
+        - name: {{ .Values.orchestrator.name }}
+          image: "{{ .Values.orchestrator.image.repository }}:{{ .Values.orchestrator.image.tag }}"
+          imagePullPolicy: {{ .Values.orchestrator.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.orchestrator.service.ports.http }}
+            - name: websocket
+              containerPort: {{ .Values.orchestrator.service.ports.websocket }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "hodei-devops.fullname" . }}-orchestrator-config
+            - secretRef:
+                name: {{ include "hodei-devops.fullname" . }}-orchestrator-secrets
+          env:
+            - name: SERVER_CERT_PATH
+              value: {{ .Values.orchestrator.config.grpc.serverCertPath }}
+            - name: SERVER_KEY_PATH
+              value: {{ .Values.orchestrator.config.grpc.serverKeyPath }}
+            - name: CLIENT_CERT_PATH
+              value: {{ .Values.orchestrator.config.grpc.clientCertPath }}
+            - name: CLIENT_KEY_PATH
+              value: {{ .Values.orchestrator.config.grpc.clientKeyPath }}
+            - name: CA_CERT_PATH
+              value: {{ .Values.orchestrator.config.grpc.caCertPath }}
+          volumeMounts:
+            - name: certs
+              mountPath: {{ .Values.orchestrator.config.grpc.certsMountPath }}
+              readOnly: true
+            {{- if eq .Values.orchestrator.config.providers.docker.host "unix:///var/run/docker.sock" }}
+            - name: docker-socket
+              mountPath: /var/run/docker.sock
+            {{- end }}
+      volumes:
+        - name: certs
+          secret:
+            secretName: {{ include "hodei-devops.fullname" . }}-tls
+        {{- if eq .Values.orchestrator.config.providers.docker.host "unix:///var/run/docker.sock" }}
+        - name: docker-socket
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+        {{- end }}

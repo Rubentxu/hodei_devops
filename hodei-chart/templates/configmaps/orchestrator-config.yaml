@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hodei-devops.fullname" . }}-orchestrator-config
+  labels:
+    {{- include "hodei-devops.labels" . | nindent 4 }}
+data:
+  ENV: {{ .Values.orchestrator.config.env | quote }}
+  HTTP_PORT: {{ .Values.orchestrator.config.port | quote }}
+  WORKER_NAME: {{ .Values.orchestrator.config.workerName | quote }}
+  MAX_CONCURRENT_TASKS: {{ .Values.orchestrator.config.maxConcurrentTasks | quote }}
+  STORAGE_TYPE: {{ .Values.orchestrator.config.storageType | quote }}
+  
+  # Docker config
+  DOCKER_HOST: {{ .Values.orchestrator.config.providers.docker.host | quote }}
+  DOCKER_DEFAULT_IMAGE: {{ .Values.orchestrator.config.providers.docker.defaultImage | quote }}
+  DOCKER_CERTS_PATH: {{ .Values.orchestrator.config.providers.docker.certsVolumePath | quote }}
+  DOCKER_NETWORK: {{ .Values.orchestrator.config.providers.docker.networkName | quote }}
+  DOCKER_STOP_DELAY: {{ .Values.orchestrator.config.providers.docker.stopDelay | quote }}
+  DOCKER_HEALTHCHECK_INTERVAL: {{ .Values.orchestrator.config.providers.docker.healthCheck.interval | quote }}
+  DOCKER_HEALTHCHECK_TIMEOUT: {{ .Values.orchestrator.config.providers.docker.healthCheck.timeout | quote }}
+  DOCKER_HEALTHCHECK_RETRIES: {{ .Values.orchestrator.config.providers.docker.healthCheck.retries | quote }}
+  
+  # Kubernetes config
+  K8S_NAMESPACE: {{ .Values.orchestrator.config.providers.kubernetes.namespace | quote }}
+  K8S_CONFIG_PATH: {{ .Values.orchestrator.config.providers.kubernetes.kubeConfig | quote }}
+  K8S_IN_CLUSTER: {{ .Values.orchestrator.config.providers.kubernetes.inCluster | quote }}
+  
+  # VM config
+  VM_HYPERVISOR_URL: {{ .Values.orchestrator.config.providers.virtualMachine.hypervisorURL | quote }}
+  VM_DEF_NETWORK: {{ .Values.orchestrator.config.providers.virtualMachine.defaultNetwork | quote }}

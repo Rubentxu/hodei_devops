@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hodei-devops.fullname" . }}-remote-process-worker
+  labels:
+    {{- include "hodei-devops.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.remote_process_worker.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.remote_process_worker.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.remote_process_worker.name }}
+    spec:
+      containers:
+        - name: {{ .Values.remote_process_worker.name }}
+          image: "{{ .Values.remote_process_worker.image.repository }}:{{ .Values.remote_process_worker.image.tag }}"
+          imagePullPolicy: {{ .Values.remote_process_worker.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.remote_process_worker.service.port }}
+          env:
+            - name: SERVER_CERT_PATH
+              value: {{ printf "%s/%s" .Values.tls.mountPath .Values.tls.serverCert }}
+            - name: SERVER_KEY_PATH
+              value: {{ printf "%s/%s" .Values.tls.mountPath .Values.tls.serverKey }}
+            - name: CA_CERT_PATH
+              value: {{ printf "%s/%s" .Values.tls.mountPath .Values.tls.caCert }}
+            - name: APPLICATION_PORT
+              value: "{{ .Values.remote_process_worker.service.port }}"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-jwt
+                  key: JWT_SECRET
+          volumeMounts:
+            - name: tls-certs
+              mountPath: {{ .Values.tls.mountPath }}
+              readOnly: true
+          resources:
+            {{- toYaml .Values.remote_process_worker.resources | nindent 12 }}
+      volumes:
+        - name: tls-certs
+          secret:
+            secretName: {{ .Release.Name }}-tls

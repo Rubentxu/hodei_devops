@@ -1,0 +1,167 @@
+{{- if .Values.endpoints.enabled }}
+{{- if eq .Values.endpoints.type "ingress" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "hodei-devops.fullname" . }}-orchestrator
+  labels:
+    {{- include "hodei-devops.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.endpoints.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.endpoints.ingress.className }}
+  ingressClassName: {{ .Values.endpoints.ingress.className }}
+  {{- end }}
+  {{- if .Values.endpoints.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.endpoints.host }}
+      secretName: {{ .Values.endpoints.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.endpoints.host | quote }}
+      http:
+        paths:
+          # Path para API REST
+          - path: {{ .Values.endpoints.paths.api }}
+            pathType: {{ .Values.endpoints.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "hodei-devops.fullname" . }}-orchestrator
+                port:
+                  number: {{ .Values.orchestrator.service.ports.http }}
+          # Path para WebSocket
+          - path: {{ .Values.endpoints.paths.ws }}
+            pathType: {{ .Values.endpoints.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "hodei-devops.fullname" . }}-orchestrator
+                port:
+                  number: {{ .Values.orchestrator.service.ports.ws }}
+
+{{- else if eq .Values.endpoints.type "route" }}
+# Route para API REST
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "hodei-devops.fullname" . }}-orchestrator-api
+  labels:
+    {{- include "hodei-devops.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.endpoints.route.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  host: {{ .Values.endpoints.host }}
+  path: {{ .Values.endpoints.paths.api }}
+  to:
+    kind: Service
+    name: {{ include "hodei-devops.fullname" . }}-orchestrator
+  port:
+    targetPort: http
+  {{- if .Values.endpoints.tls.enabled }}
+  tls:
+    {{- toYaml .Values.endpoints.route.tls | nindent 4 }}
+  {{- end }}
+---
+# Route para WebSocket
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "hodei-devops.fullname" . }}-orchestrator-ws
+  labels:
+    {{- include "hodei-devops.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.endpoints.route.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  host: {{ .Values.endpoints.host }}
+  path: {{ .Values.endpoints.paths.ws }}
+  to:
+    kind: Service
+    name: {{ include "hodei-devops.fullname" . }}-orchestrator
+  port:
+    targetPort: ws
+  {{- if .Values.endpoints.tls.enabled }}
+  tls:
+    {{- toYaml .Values.endpoints.route.tls | nindent 4 }}
+  {{- end }}
+
+{{- else if eq .Values.endpoints.type "gateway" }}
+{{- if .Values.endpoints.gateway.gateway.create }}
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: Gateway
+metadata:
+  name: {{ .Values.endpoints.gateway.gateway.name }}
+  namespace: {{ .Values.endpoints.gateway.gateway.namespace }}
+  labels:
+    {{- include "hodei-devops.labels" . | nindent 4 }}
+spec:
+  gatewayClassName: {{ .Values.endpoints.gateway.gatewayClass }}
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- if .Values.endpoints.tls.enabled }}
+    - name: https
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: {{ .Values.endpoints.tls.secretName }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}
+{{- end }}
+---
+# HTTPRoute para API REST
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: {{ include "hodei-devops.fullname" . }}-orchestrator-api
+  labels:
+    {{- include "hodei-devops.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.endpoints.gateway.gateway.name }}
+  hostnames:
+    - {{ .Values.endpoints.host }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: {{ .Values.endpoints.paths.api }}
+      backendRefs:
+        - name: {{ include "hodei-devops.fullname" . }}-orchestrator
+          port: {{ .Values.orchestrator.service.ports.http }}
+---
+# HTTPRoute para WebSocket
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: {{ include "hodei-devops.fullname" . }}-orchestrator-ws
+  labels:
+    {{- include "hodei-devops.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.endpoints.gateway.gateway.name }}
+  hostnames:
+    - {{ .Values.endpoints.host }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: {{ .Values.endpoints.paths.ws }}
+      backendRefs:
+        - name: {{ include "hodei-devops.fullname" . }}-orchestrator
+          port: {{ .Values.orchestrator.service.ports.ws }}
+{{- end }}
+{{- end }}

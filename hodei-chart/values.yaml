@@ -1,0 +1,162 @@
+project:
+  name: "hodei"
+  component: "devops"
+  platform: "kubernetes"
+
+nameOverride: ""
+fullnameOverride: ""
+
+remote_process_worker:
+  name: remote-process-worker
+  image:
+    repository: hodei/remote-process-worker
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  service:
+    type: ClusterIP
+    port: 50051
+
+orchestrator:
+  name: orchestrator
+  image:
+    repository: hodei/orchestrator
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicas: 1
+  
+  config:
+    env: "development"
+    port: 8080
+    workerName: "default-worker"
+    maxConcurrentTasks: 3
+    storageType: "memory"
+    
+    # Configuración gRPC
+    grpc:
+      certsMountPath: "/certs"
+      serverCertPath: "/certs/remote_process-cert.pem"
+      serverKeyPath: "/certs/remote_process-key.pem"
+      clientCertPath: "/certs/worker-cert.pem"
+      clientKeyPath: "/certs/worker-key.pem"
+      caCertPath: "/certs/ca-cert.pem"
+      jwtSecret: ""  # Debe ser proporcionado
+      jwtToken: ""   # Debe ser proporcionado
+      environment: "development"
+
+    # Configuración de providers
+    providers:
+      docker:
+        host: "unix:///var/run/docker.sock"
+        defaultImage: "posts_mpv-remote-process:latest"
+        certsVolumePath: "/certs"
+        certsMountPath: "/certs"
+        networkName: "devops-platform_default"
+        stopDelay: "10s"
+        healthCheck:
+          test: ["CMD", "/app/grpc_health_check.sh"]
+          interval: "3s"
+          timeout: "5s"
+          retries: 2
+
+      kubernetes:
+        namespace: "default"
+        kubeConfig: ""
+        inCluster: true
+        labels:
+          app: "grpc-worker"
+        annotations: {}
+        defaultImage: "posts_mpv-remote-process:latest"
+
+      virtualMachine:
+        hypervisorURL: ""
+        defaultNetwork: ""
+
+  service:
+    type: ClusterIP
+    ports:
+      http: 8080
+      websocket: 8080
+
+  # Configuración específica de WebSocket
+  websocket:
+    path: "/ws"
+    pingInterval: 30
+    pongWait: 120
+    writeWait: 30
+    maxMessageSize: 1024
+
+endpoints:
+  enabled: true
+  type: "ingress"  # ingress, route, gateway
+  
+  # Configuración común
+  host: "hodei-orchestrator.example.com"
+  
+  # Configuración de paths
+  paths:
+    api: "/"
+    ws: "/ws"
+  
+  tls:
+    enabled: false
+    secretName: "hodei-tls"
+
+  # Ingress configuration
+  ingress:
+    className: "nginx"
+    annotations:
+      kubernetes.io/ingress.class: nginx
+      # Anotaciones específicas para WebSocket
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+      nginx.org/websocket-services: "hodei-orchestrator"
+    pathType: Prefix
+
+  # OpenShift Route configuration
+  route:
+    annotations:
+      haproxy.router.openshift.io/timeout: 3600s
+    targetPort: http
+    tls:
+      termination: edge
+      insecureEdgeTerminationPolicy: Redirect
+    wildcardPolicy: None
+
+  # Gateway API configuration
+  gateway:
+    gatewayClass: "istio"
+    gateway:
+      name: "hodei-gateway"
+      namespace: "default"
+      create: true
+      annotations:
+        networking.istio.io/v1alpha3: |
+          websocketRoutes:
+          - match:
+            - uri:
+                prefix: /ws
+            route:
+            - destination:
+                host: hodei-orchestrator
+                port:
+                  number: 8080
+
+tls:
+  mountPath: "/certs"
+  serverCert: "remote-process-cert.pem"
+  serverKey: "remote-process-key.pem"
+  clientCert: "orchestrator-cert.pem"
+  clientKey: "orchestrator-key.pem"
+  caCert: "ca-cert.pem"
+
+jwt:
+  secret: "test_secret_key_for_development_1234567890"
+  token: "" # Se debe proporcionar en tiempo de instalación
