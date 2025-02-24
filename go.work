@@ -5,4 +5,5 @@ use (
 	./tests
 	./protos
 	./remote_process
+	./archiva_go
 )

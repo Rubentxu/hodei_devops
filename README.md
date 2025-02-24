@@ -1,158 +1,132 @@
-# **Creando un MVP de Ejecución Remota de Procesos con gRPC y Arquitectura Hexagonal (Streaming Edition)**
+# Hodei DevOps
+<div align="center" >
+  <img src="docs/assets/imagen-readme.png" alt="imagen-3" style="width: 100%;"/>
+</div>
 
-![img.png](docs/resources/img.png)
+Hodei DevOps es un proyecto **open source** que forma parte de una idea orientada a transformar la forma en que se ejecutan 
+y gestionan procesos en entornos devops y cloud native. 
+Inspirado en las mejores prácticas de plataformas modernas, Hodei DevOps se centra en proporcionar una solución robusta 
+y flexible para la orquestacion de ejecución de tareas remotas, y otros servicios para facilitar la gestión de flujos de trabajo con DevOps.
 
-## 🎯 **Introducción**
+### Significado del nombre de Hodei
+Uno de los significados que se asocian al nombre de Hodei en Euskadi es nube.
+Esa significación se toma como referencia a los cielos cambiantes que se ven en la naturaleza. 
+Otros aspectos que se relacionan con este nombre son la fugacidad de la belleza y la tendencia al cambio. 
+Etimológicamente, también tiene el significado de Dios.
 
-En este post, vamos a crear un Producto Mínimo Viable (MVP) para un sistema de **ejecución remota de procesos** utilizando **gRPC** y **Go**. Implementaremos **streaming bidireccional** para la salida del proceso y la monitorización de su estado, obteniendo así información en tiempo real.
+Tampoco pasa desapercibido el hecho de que a las personas que comparten el nombre de Hodei se les asocian aspectos como el ser soñadoras, tranquilas y sensibles. 
+Todos estos rasgos han contribuido a que el nombre de Hodei perviva con fuerza a pesar del paso del tiempo.
 
-### **¿Por qué gRPC y arquitectura hexagonal?**
+## Arquitectura y Tecnologías
 
-- **gRPC:** Un framework moderno y de alto rendimiento para RPC, ideal para comunicación eficiente y con streaming.
-- **Arquitectura Hexagonal:** También conocida como "Puertos y Adaptadores", desacopla la lógica de negocio de los detalles de implementación, como la comunicación externa o el almacenamiento de datos. Esto facilita la evolución, el mantenimiento y las pruebas del sistema.
+Hodei DevOps se basa en dos pilares tecnológicos clave:
 
-### **Objetivo del MVP**
+- **gRPC:** Utilizamos este framework de alto rendimiento para implementar RPC (Remote Procedure Call) 
+- con capacidades de streaming. Esto garantiza una comunicación eficiente y con baja latencia entre los componentes del sistema.
+- **Arquitectura Hexagonal (Puertos y Adaptadores):** Esta arquitectura desacopla la lógica de negocio de los detalles
+- de implementación (como la comunicación gRPC o la ejecución local de procesos), lo que facilita el mantenimiento, la evolución y las pruebas del sistema.
+- **Go:** Lenguaje de programación utilizado para implementar los servicios de Hodei DevOps. Go es conocido por su eficiencia, simplicidad y facilidad de uso en entornos de sistemas y servicios distribuidos.
 
-Nuestro MVP permitirá a los usuarios:
+### Estructura del Proyecto
 
-1. **Ejecutar comandos** en un servidor remoto.
-2. **Obtener la salida del comando en tiempo real** (streaming).
-3. **Detener procesos** en ejecución.
-4. **Monitorizar el estado de los procesos** (streaming).
 
-### **Pre-requisitos**
+El proyecto está organizado utilizando Go y se gestiona mediante `go.work` para trabajar de manera modular con múltiples componentes o subproyectos.
 
-- Conocimientos básicos de Go.
-- Tener instalado Go y `protoc` (el compilador de Protocol Buffers).
-- Familiaridad con la línea de comandos.
-- Un editor de código (recomendamos VS Code con la extensión de Go).
+## Requisitos Previos
 
-### **Instalación de Protocol Buffers**
+Antes de comenzar, asegúrate de tener instalado lo siguiente:
 
-Para instalar el compilador de Protocol Buffers (`protoc`), sigue las instrucciones según tu sistema operativo:
+- **Go:** Conocimientos básicos de Go y su entorno de desarrollo.
+- **Protocol Buffers Compiler (protoc):** Necesario para compilar las definiciones de gRPC.
+- **Línea de Comandos:** Familiaridad con el uso de terminal o consola.
+- **Editor de Código:** Se recomienda VS Code con la extensión de Go, aunque cualquier editor es válido.
 
-#### **Windows**
-1. Visita la [página de lanzamientos de Protocol Buffers](https://github.com/protocolbuffers/protobuf/releases).
-2. Descarga el archivo zip correspondiente a Windows.
-3. Descomprime el archivo en una ubicación de tu elección.
-4. Añade la ruta del ejecutable `protoc.exe` a la variable de entorno `PATH` para que puedas ejecutarlo desde cualquier terminal.
+## Instalación
 
-#### **Ubuntu Linux**
-1. Abre una terminal.
-2. Actualiza la lista de paquetes:
+1. **Clona el repositorio:**
 ```bash
-   sudo apt update
+git clone https://github.com/tu-usuario/hodei-devops.git
+cd hodei-devops
 ```
-3. Instala el compilador de Protocol Buffers:
-```bash
-  sudo apt install -y protobuf-compiler
-```
-4. Verifica la instalación ejecutando `protoc --version` en la terminal para asegurarte de que se ha instalado correctamente.
-#### **Fedora:**
-1. Abre una terminal.
-2. Actualiza la lista de paquetes:
-```bash
-  sudo dnf check-update
-```
-3. Instala el compilador de Protocol Buffers:
-```bash
-  sudo dnf install -y protobuf-compiler
-```
-4. Verifica la instalación ejecutando `protoc --version` en la terminal para asegurarte de que se ha instalado correctamente.
 
-3. Instala el compilador de Protocol Buffers:
-   ```bash
-   sudo apt install -y protobuf-compiler
-   ```
-4. Verifica la instalación ejecutando `protoc --version` en la terminal para asegurarte de que se ha instalado correctamente.
+2. Instala las dependencias:
+```bash
+go mod tidy
+```
+
+## Comandos Clave en Makefile para el Desarrollo
+
+Para facilitar el flujo de trabajo y agilizar las tareas comunes durante el desarrollo, se han configurado varios comandos en el Makefile. 
+A continuación se explica cada uno de los más relevantes:
+
+- **make proto**  
+  Genera el código en Go a partir de los archivos Protocol Buffers (.proto). Este comando crea los archivos necesarios (`.pb.go` y `.grpc.pb.go`) para que los servicios gRPC funcionen correctamente.
+
+- **make build**  
+  Compila los binarios de los diferentes servicios (remote_process, orchestrator y archiva-go). El resultado se ubica en el directorio `bin`, facilitando su ejecución y despliegue.
+
+- **make test**  
+  Ejecuta una serie de pasos:
+   1. Genera el código proto y compila los binarios.
+   2. Inicia los servicios `remote_process` y `orchestrator`.
+   3. Ejecuta el script de pruebas (`testProcess.sh`), que valida la funcionalidad general del sistema.
+
+- **make test-go**  
+  Ejecuta las pruebas unitarias e integradas escritas en Go:
+   1. Detiene cualquier instancia previa de los servicios.
+   2. Reconstruye y vuelve a iniciar los servicios.
+   3. Ejecuta `go test` sobre los tests definidos en el directorio `tests`.
+   4. Detiene automáticamente los servicios al finalizar las pruebas.
+
+- **make test-integration**  
+  Ejecuta las pruebas de integración ubicadas en el subdirectorio `tests/integration/`. Esto permite validar el comportamiento del sistema en escenarios más completos y realistas.
+
+- **make clean**  
+  Detiene los servicios en ejecución y elimina los binarios generados en el directorio `bin`, facilitando una limpieza del entorno de desarrollo.
+
+- **make certs-dev**  
+  Genera los certificados y claves necesarios para el entorno de desarrollo. Si los certificados ya existen, notifica que están disponibles. Esto es esencial para habilitar la comunicación segura (TLS) entre los servicios.
+
+- **make run-remote_process**  
+  Inicia el servicio `remote_process` en modo desarrollo, configurando variables de entorno necesarias (como rutas de certificados, puerto y JWT). Además, redirige la salida a un archivo de log y guarda el PID para facilitar su gestión.
+
+- **make run-orchestrator**  
+  Arranca el servicio `orchestrator` con las configuraciones de TLS y JWT en modo desarrollo, redirigiendo la salida a un log y almacenando el PID correspondiente.
+
+- **make run-archiva-go**  
+  Ejecuta el binario del servicio `archiva-go`, de forma similar a los otros servicios, permitiendo su monitoreo mediante logs y gestión a través del archivo de PID.
+
+- **make stop-remote_process, stop-orchestrator, stop-archiva-go**  
+  Cada uno de estos comandos se encarga de detener el servicio correspondiente usando el PID almacenado en el directorio `bin`. Esto permite reiniciar los servicios de forma controlada durante el desarrollo o en caso de incidencias.
+
+
+- **make test-docker**  
+  Ejecuta las pruebas en contenedores Docker, verificando que el entorno de Docker esté correctamente configurado y permitiendo la ejecución de pruebas de forma aislada y reproducible.
+
+Estos comandos están diseñados para automatizar y simplificar tareas repetitivas, 
+garantizando que el entorno de desarrollo se mantenga consistente y seguro. 
+Utilízalos para construir, probar y desplegar el proyecto de forma rápida y eficiente.
+
+
+
+### Contribuciones
+Hodei DevOps es un proyecto colaborativo y abierto. ¡Tus contribuciones son bienvenidas! Para participar:
+
+Haz un fork del repositorio.
+Crea una rama para tu nueva funcionalidad o corrección.
+Realiza tus cambios y haz commit con mensajes claros.
+Envía un pull request para que la comunidad pueda revisar y fusionar tus cambios.
+Consulta el archivo CONTRIBUTING.md para obtener más detalles sobre el proceso de contribución.
+
+
+### Licencia
+Este proyecto se distribuye bajo la licencia MIT. Revisa el archivo de licencia para más información.
+
+### Contacto
+Si tienes preguntas, sugerencias o deseas colaborar, ponte en contacto con nosotros:
+
+Correo: rubentxu74@gmail.com
+GitHub: Hodei DevOps
 
 ---
 
-## 🏗️ **Arquitectura del Sistema**
-
-Seguiremos la **arquitectura hexagonal**, que divide nuestro sistema en capas. Esta arquitectura nos permite mantener una separación clara de responsabilidades y facilita el mantenimiento y la escalabilidad del sistema.
-
-### **Capas principales de la arquitectura hexagonal:**
-
-- **Dominio:**  
-  Contiene la lógica de negocio principal de la aplicación. Aquí se definen las interfaces (puertos) que describen las operaciones que la aplicación puede realizar. Es independiente de tecnologías específicas, lo que facilita su testeo y reutilización.
-
-- **Adaptadores:**  
-  Implementan los puertos definidos en la capa de dominio. Permiten que el dominio interactúe con el mundo exterior, como servicios gRPC, bases de datos, sistemas de archivos, etc.
-
-- **Infraestructura:**  
-  Contiene el código de configuración y las utilidades que no son específicas de la lógica de negocio, como la configuración de dependencias, la inicialización de servicios, y la gestión de variables de entorno.
-
-Cada una de estas capas se comunica con las otras a través de interfaces bien definidas, lo que permite una mayor modularidad y flexibilidad en el diseño del sistema.
-
-### **Estructura de directorios utilizando `go.work` y arquitectura hexagonal**
-
-`go.work` es una característica de Go que permite trabajar con múltiples módulos en un solo espacio de trabajo. Esto es especialmente útil en proyectos grandes y complejos.
-
-#### **Ventajas de `go.work`:**
-- Permite a los desarrolladores trabajar en varios módulos simultáneamente sin necesidad de publicarlos en un repositorio remoto.
-- Facilita la integración continua y el despliegue.
-
-#### Estructura de Directorios con `go.work`
-
-```
-.
-├── go.work
-├── cmd/
-│   ├── client/
-│   │   └── main.go
-│   └── server/
-│       └── main.go        # Ejecutable del servidor
-└── internal/              # Código privado al módulo
-   ├── domain/            # Lógica de negocio y interfaces
-   │   ├── go.mod
-   │   └── ports/         # Interfaces (puertos)
-   │       └── process.go      
-   └── adapters/          # Implementaciones de adaptadores
-       ├── go.mod
-       ├── grpc/          # Implementación gRPC
-       │   ├── protos/    # Definiciones de protobuf
-       │   │   └── remote_process/
-       │   │   │   └── remote_process.proto
-       │   ├── client/    # Cliente gRPC
-       │   │   └── remote_process/
-       │   │   │   └── remote_process_client.go
-       │   └── server/    # Servidor gRPC
-       │       └── remote_process/
-       │       │   └── remote_process_server.go
-       └── local/         # Implementación local para ejecución de procesos
-          └── process_executor.go│   
-```
-
-#### **Descripción de los Archivos**
-
-1. **`go.work`**: Archivo de trabajo que define los módulos que forman parte del proyecto. Este archivo permite trabajar con múltiples módulos de Go en un solo espacio de trabajo.
-
-2. **`cmd/`**: Contiene los puntos de entrada de la aplicación.
-    - **`client/main.go`**: Código para iniciar el cliente de línea de comandos.
-    - **`server/main.go`**: Código para iniciar el servidor.
-
-3. **`internal/`**: Contiene la lógica de negocio y las interfaces.
-    - **`domain/`**: Contiene la lógica de negocio y las interfaces.
-        - **`go.mod`**: Módulo de Go para la capa de dominio.
-        - **`ports/process.go`**: Define las interfaces (puertos) para la ejecución de procesos.
-        - **`services/worker.go`**: Implementación futura para la orquestación de procesos.
-
-4. **`adapters/`**: Contiene las implementaciones de los adaptadores.
-    - **`go.mod`**: Módulo de Go para la capa de adaptadores.
-    - **`grpc/`**: Implementación gRPC.
-        - **`protos/remote_process/remote_process.proto`**: Definiciones de Protocol Buffers.
-        - **`client/remote_process/remote_process_client.go`**: Implementación del cliente gRPC.
-        - **`server/remote_process/remote_process_server.go`**: Implementación del servidor gRPC.
-    - **`local/process_executor.go`**: Implementación local para la ejecución de procesos.
-
-Esta estructura modular permite que cada capa de la arquitectura hexagonal sea un módulo independiente, lo que facilita la gestión de dependencias y el desarrollo colaborativo. Además, el uso de `go.work` permite trabajar con todos los módulos en un solo espacio de trabajo, simplificando el desarrollo y las pruebas.
-
-[Enlace al post original:](https://medium.com/@rubentxu/creando-un-mvp-de-ejecuci%C3%B3n-remota-de-procesos-con-grpc-y-arquitectura-hexagonal-f0daa1e33c17)
-
-
----
-
-- Incluir configuracion de certificados para gRPC y TLS, creando un certificado autofirmado
-- Incluir dependencias para trazas zap.Logger
-- Incluir fichero config en cada módulo para recoger configuración centralizada

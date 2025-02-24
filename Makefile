@@ -83,6 +83,7 @@ build:
 	@echo "🏗️  Construyendo binarios..."
 	go build -o bin/remote_process remote_process/cmd/main.go
 	go build -o bin/orchestrator orchestrator/cmd/main.go
+	go build -o bin/archiva-go archiva_go/cmd/main.go
 
 .PHONY: certs-dirs
 certs-dirs:
@@ -162,6 +163,11 @@ run-orchestrator: stop-orchestrator build
 	CA_CERT_PATH=$(DEV_CERT_DIR)/$(CA_CERT) \
 	JWT_TOKEN="$(JWT_TOKEN)" \
 	./bin/orchestrator serve --dir="./test_pb_data" > ./bin/orchestrator.log 2>&1 & echo $$! > ./bin/orchestrator.pid
+
+.PHONY: run-archiva-go
+run-archiva-go: stop-archiva-go build
+	@echo "🚀 Starting archiva-go..."
+	./bin/archiva-go > ./bin/archiva-go.log 2>&1 & echo $$! > ./bin/archiva-go.pid
 
 .PHONY: test-tls
 test-tls: certs-dev
@@ -249,6 +255,12 @@ stop-orchestrator:
 	@echo "🛑 Deteniendo orchestrator..."
 	@kill `cat ./bin/orchestrator.pid` || true
 	@rm -f ./bin/orchestrator.pid
+
+.PHONY: stop-archiva-go
+stop-archiva-go:
+	@echo "🛑 Deteniendo archiva-go..."
+	@kill `cat ./bin/archiva-go.pid` || true
+	@rm -f ./bin/archiva-go.pid
 
 # Agregar nuevos targets para tests en Docker
 .PHONY: test-docker
