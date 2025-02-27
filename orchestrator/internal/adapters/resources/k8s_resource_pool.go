@@ -2,12 +2,13 @@ package resources
 
 import (
 	"context"
-	"dev.rubentxu.devops-platform/orchestrator/config"
+	"fmt"
+	"log"
+	"time"
+
 	"dev.rubentxu.devops-platform/orchestrator/internal/domain"
 	"dev.rubentxu.devops-platform/orchestrator/internal/ports"
-	"fmt"
 	"k8s.io/client-go/kubernetes"
-	"time"
 
 	v1 "k8s.io/api/core/v1"
 
@@ -16,26 +17,62 @@ import (
 	"k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
+// Config específica de Kubernetes ajustada para implementar ResourcePoolConfig
+
 type KubernetesResourcePool struct {
-	id        string
-	client    *KubernetesClientAdapter
-	namespace string
+	id            string
+	client        *KubernetesClientAdapter
+	namespace     string
+	templateStore ports.Store[ports.WorkerTemplate] // Store para persistir templates
 }
 
-func (d *KubernetesResourcePool) GetID() string {
-	return d.id
-}
-
-func NewKubernetesResourcePool(config config.K8sConfig, id string) (ports.ResourcePool, error) {
+func NewKubernetesResourcePool(id string, config KubernetesResoucesPoolConfig, templateStore ports.Store[ports.WorkerTemplate]) (ports.ResourcePool, error) {
 	nativeClient, err := NewKubernetesClientAdapter(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 	return &KubernetesResourcePool{
-		client:    nativeClient.(*KubernetesClientAdapter),
-		id:        id,
-		namespace: config.Namespace, // Asigna el namespace desde la configuración
+		client:        nativeClient.(*KubernetesClientAdapter),
+		id:            id,
+		namespace:     config.Namespace, // Asigna el namespace desde la configuración
+		templateStore: templateStore,
 	}, nil
+}
+
+func (d *KubernetesResourcePool) GetWorkerTemplate(id string) (ports.WorkerTemplate, error) {
+	template, err := d.templateStore.Get(id)
+	if err != nil {
+		return ports.WorkerTemplate{}, fmt.Errorf("worker template with id %s not found: %w", id, err)
+	}
+
+	return template, nil
+}
+
+func (d *KubernetesResourcePool) AddWorkerTemplate(template ports.WorkerTemplate) error {
+	if template.ID == "" {
+		return fmt.Errorf("template ID cannot be empty")
+	}
+
+	if template.WorkerSpec.Type != domain.DockerInstance {
+		return fmt.Errorf("invalid instance type for Docker resource pool: %s", template.WorkerSpec.Type)
+	}
+
+	// Validar que la template sea válida para Docker
+	if template.WorkerSpec.Image == "" {
+		return fmt.Errorf("docker image is required in worker template")
+	}
+
+	// Guardar en la base de datos
+	if err := d.templateStore.Put(template.ID, template); err != nil {
+		return fmt.Errorf("failed to save template to database: %w", err)
+	}
+
+	log.Printf("Added worker template: %s for image %s", template.ID, template.WorkerSpec.Image)
+	return nil
+}
+
+func (d *KubernetesResourcePool) GetID() string {
+	return d.id
 }
 
 func (d *KubernetesResourcePool) GetResourceInstanceClient() ports.ResourceIntanceClient {
@@ -111,7 +148,7 @@ func (k *KubernetesResourcePool) monitorTask(ctx context.Context, taskExecution 
 
 func (k *KubernetesResourcePool) GetStats() (*domain.Stats, error) {
 	ctx := context.Background()
-	config := k.client.GetConfig().(config.K8sConfig)
+	config := k.client.GetConfig().(KubernetesResoucesPoolConfig)
 	k8sClient := k.client.GetNativeClient().(kubernetes.Clientset)
 	k8sMetricsClient := k.client.GetNativeMetricsClient()
 	namespace := config.Namespace // Usar el namespace de la configuración.

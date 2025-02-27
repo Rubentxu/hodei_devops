@@ -14,8 +14,8 @@ certificados:
   rutaBase: "certs"  # Relativa a la carpeta de la chart
   ca: "ca-cert.pem"
   worker:
-    cert: "worker-cert.pem"
-    key: "worker-key.pem"
+    cert: "worker-client-cert.pem"
+    key: "worker-client-key.pem"
   remoteProcess:
     cert: "remote_process-cert.pem"
     key: "remote_process-key.pem"
@@ -58,7 +58,7 @@ orchestrator:
       certsMountPath: "/certs"
       serverCertPath: "/certs/remote_process-cert.pem"
       serverKeyPath: "/certs/remote_process-key.pem"
-      clientCertPath: "/certs/worker-cert.pem"
+      clientCertPath: "/certs/worker-client-cert.pem"
       clientKeyPath: "/certs/worker-key.pem"
       caCertPath: "/certs/ca-cert.pem"
       jwtSecret: ""  # Debe ser proporcionado

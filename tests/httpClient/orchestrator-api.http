@@ -1,0 +1,319 @@
+### Variables globales
+@baseUrl = http://localhost:8090
+@wsUrl = ws://localhost:8090
+
+### Health check
+GET {{baseUrl}}/health
+Accept: application/json
+
+### Swagger UI
+# Abrir en navegador: {{baseUrl}}/swagger/
+
+### Swagger JSON
+GET {{baseUrl}}/swagger/doc.json
+Accept: application/json
+
+
+### Conexión WebSocket
+WEBSOCKET {{wsUrl}}/ws
+
+
+### PocketBase API - Lista de colecciones
+GET {{baseUrl}}/api/collections
+Accept: application/json
+
+### PocketBase Dashboard
+# Abrir en navegador: {{baseUrl}}/_/
+
+### PocketBase API - Auth
+POST {{baseUrl}}/api/admins/auth-with-password
+Content-Type: application/json
+
+{
+  "identity": "admin@example.com",
+  "password": "your-password"
+}
+
+### Static files
+GET {{baseUrl}}/static/styles.css
+Accept: text/css
+
+### Variables globales
+
+@collectionName = tasks
+@recordId = RECORD_ID_HERE
+@adminEmail = admin@example.com
+@adminPassword = your-password
+@userEmail = user@example.com
+@userPassword = user-password
+@authToken = AUTH_TOKEN_HERE
+
+### ========== AUTENTICACIÓN ==========
+
+### Admin - Iniciar sesión
+POST {{baseUrl}}/api/admins/auth-with-password
+Content-Type: application/json
+
+{
+  "identity": "{{adminEmail}}",
+  "password": "{{adminPassword}}"
+}
+
+### Admin - Actualizar perfil
+PATCH {{baseUrl}}/api/admins/ADMIN_ID
+Content-Type: application/json
+Authorization: Admin {{authToken}}
+
+{
+  "avatar": 0,
+  "email": "newemail@example.com"
+}
+
+### Admin - Refrescar token
+POST {{baseUrl}}/api/admins/auth-refresh
+Authorization: Admin {{authToken}}
+
+### Usuario - Registrar
+POST {{baseUrl}}/api/collections/users/records
+Content-Type: application/json
+
+{
+  "email": "{{userEmail}}",
+  "password": "{{userPassword}}",
+  "passwordConfirm": "{{userPassword}}",
+  "name": "Test User"
+}
+
+### Usuario - Iniciar sesión
+POST {{baseUrl}}/api/collections/users/auth-with-password
+Content-Type: application/json
+
+{
+  "identity": "{{userEmail}}",
+  "password": "{{userPassword}}"
+}
+
+### Usuario - Solicitar restablecimiento de contraseña
+POST {{baseUrl}}/api/collections/users/request-password-reset
+Content-Type: application/json
+
+{
+  "email": "{{userEmail}}"
+}
+
+### Usuario - Confirmar restablecimiento de contraseña
+POST {{baseUrl}}/api/collections/users/confirm-password-reset
+Content-Type: application/json
+
+{
+  "token": "TOKEN_FROM_EMAIL",
+  "password": "new-password",
+  "passwordConfirm": "new-password"
+}
+
+### Usuario - Refrescar token
+POST {{baseUrl}}/api/collections/users/auth-refresh
+Authorization: User {{authToken}}
+
+### Usuario - Solicitar verificación de email
+POST {{baseUrl}}/api/collections/users/request-verification
+Content-Type: application/json
+
+{
+  "email": "{{userEmail}}"
+}
+
+### Usuario - Confirmar verificación de email
+POST {{baseUrl}}/api/collections/users/confirm-verification
+Content-Type: application/json
+
+{
+  "token": "TOKEN_FROM_EMAIL"
+}
+
+### ========== ADMINISTRACIÓN COLECCIONES ==========
+
+### Listar todas las colecciones
+GET {{baseUrl}}/api/collections
+Authorization: Admin {{authToken}}
+
+### Crear nueva colección
+POST {{baseUrl}}/api/collections
+Content-Type: application/json
+Authorization: Admin {{authToken}}
+
+{
+  "name": "projects",
+  "type": "base",
+  "schema": [
+    {
+      "name": "title",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "description",
+      "type": "text"
+    },
+    {
+      "name": "status",
+      "type": "select",
+      "options": {
+        "values": ["pending", "active", "completed"]
+      }
+    }
+  ]
+}
+
+### Obtener una colección específica
+GET {{baseUrl}}/api/collections/{{collectionName}}
+Authorization: Admin {{authToken}}
+
+### Actualizar colección
+PATCH {{baseUrl}}/api/collections/{{collectionName}}
+Content-Type: application/json
+Authorization: Admin {{authToken}}
+
+{
+  "name": "{{collectionName}}",
+  "schema": [
+    {
+      "name": "title",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "description",
+      "type": "text"
+    },
+    {
+      "name": "status",
+      "type": "select",
+      "options": {
+        "values": ["pending", "active", "completed", "cancelled"]
+      }
+    }
+  ]
+}
+
+### Eliminar colección
+DELETE {{baseUrl}}/api/collections/{{collectionName}}
+Authorization: Admin {{authToken}}
+
+### ========== REGISTROS (RECORDS) ==========
+
+### Listar registros
+GET {{baseUrl}}/api/collections/{{collectionName}}/records?page=1&perPage=20&sort=-created
+Authorization: User {{authToken}}
+
+### Listar registros con filtros
+GET {{baseUrl}}/api/collections/{{collectionName}}/records?filter=(status='active')
+Authorization: User {{authToken}}
+
+### Buscar registros
+GET {{baseUrl}}/api/collections/{{collectionName}}/records?filter=(title~'test')
+Authorization: User {{authToken}}
+
+### Crear registro
+POST {{baseUrl}}/api/collections/{{collectionName}}/records
+Content-Type: application/json
+Authorization: User {{authToken}}
+
+{
+  "title": "Nuevo proyecto",
+  "description": "Descripción del proyecto",
+  "status": "pending"
+}
+
+### Obtener registro específico
+GET {{baseUrl}}/api/collections/{{collectionName}}/records/{{recordId}}
+Authorization: User {{authToken}}
+
+### Actualizar registro
+PATCH {{baseUrl}}/api/collections/{{collectionName}}/records/{{recordId}}
+Content-Type: application/json
+Authorization: User {{authToken}}
+
+{
+  "title": "Título actualizado",
+  "status": "active"
+}
+
+### Eliminar registro
+DELETE {{baseUrl}}/api/collections/{{collectionName}}/records/{{recordId}}
+Authorization: User {{authToken}}
+
+### ========== ARCHIVOS ==========
+
+### Subir archivo (form-data)
+# Nota: Esta llamada debe hacerse desde una interfaz que soporte form-data
+POST {{baseUrl}}/api/collections/{{collectionName}}/records/{{recordId}}
+Authorization: User {{authToken}}
+# Content-Type: multipart/form-data
+# Campos form-data:
+# attachment - archivo
+# title - "Nuevo título"
+
+### ========== REALTIME API ==========
+
+# Para suscribirse a cambios en tiempo real, se necesita una conexión WebSocket:
+# ws://localhost:8090/api/realtime
+
+### ========== CONFIGURACIÓN ==========
+
+### Obtener configuración del sistema
+GET {{baseUrl}}/api/settings
+Authorization: Admin {{authToken}}
+
+### Actualizar configuración
+PATCH {{baseUrl}}/api/settings
+Content-Type: application/json
+Authorization: Admin {{authToken}}
+
+{
+  "meta": {
+    "appName": "Mi Aplicación",
+    "appUrl": "https://mi-aplicacion.com"
+  },
+  "logs": {
+    "maxDays": 5
+  }
+}
+
+### Probar configuración de email
+POST {{baseUrl}}/api/settings/test/email
+Content-Type: application/json
+Authorization: Admin {{authToken}}
+
+{
+  "email": "test@example.com",
+  "template": "verification"
+}
+
+### ========== HEALTH CHECK ==========
+
+### Health check
+GET {{baseUrl}}/health
+Accept: application/json
+
+### ========== BACKUPS ==========
+
+### Listar backups (solo admin)
+GET {{baseUrl}}/api/backups
+Authorization: Admin {{authToken}}
+
+### Iniciar backup (solo admin)
+POST {{baseUrl}}/api/backups
+Authorization: Admin {{authToken}}
+
+### Descargar backup (solo admin)
+GET {{baseUrl}}/api/backups/BACKUP_KEY/download
+Authorization: Admin {{authToken}}
+
+### Eliminar backup (solo admin)
+DELETE {{baseUrl}}/api/backups/BACKUP_KEY
+Authorization: Admin {{authToken}}
+
+### Restaurar backup (solo admin)
+POST {{baseUrl}}/api/backups/BACKUP_KEY/restore
+Authorization: Admin {{authToken}}

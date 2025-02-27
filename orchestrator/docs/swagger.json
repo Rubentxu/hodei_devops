@@ -1,109 +1,109 @@
 {
-    "schemes": [
-        "http",
-        "ws"
-    ],
-    "swagger": "2.0",
-    "info": {
-        "description": "API para gestionar tareas y procesos remotos",
-        "title": "Worker API",
-        "termsOfService": "http://swagger.io/terms/",
-        "contact": {
-            "name": "API Support",
-            "email": "your.email@example.com"
-        },
-        "license": {
-            "name": "MIT",
-            "url": "http://opensource.org/licenses/MIT"
-        },
-        "version": "1.0"
+  "schemes": [
+    "http",
+    "ws"
+  ],
+  "swagger": "2.0",
+  "info": {
+    "description": "API para gestionar tareas y procesos remotos",
+    "title": "Worker API",
+    "termsOfService": "http://swagger.io/terms/",
+    "contact": {
+      "name": "API Support",
+      "email": "your.email@example.com"
     },
-    "host": "localhost:8080",
-    "basePath": "/",
-    "paths": {
-        "/health": {
-            "get": {
-                "description": "Retorna el estado de salud del servicio",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "health"
-                ],
-                "summary": "Endpoint de health check",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_adapters_websockets.HealthResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/ws": {
-            "get": {
-                "description": "Endpoint WebSocket para gestionar tareas en tiempo real. Soporta las siguientes acciones:\n- create_task: Crear una nueva tarea\n- stop_task: Detener una tarea en ejecución\n- list_tasks: Listar todas las tareas",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "WebSocket"
-                ],
-                "summary": "Gestiona conexiones WebSocket para tareas",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "ID del cliente para tracking",
-                        "name": "client_id",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "101": {
-                        "description": "Switching Protocols",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_adapters_websockets.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        }
+    "license": {
+      "name": "MIT",
+      "url": "http://opensource.org/licenses/MIT"
     },
-    "definitions": {
-        "internal_adapters_websockets.ErrorResponse": {
-            "type": "object",
-            "properties": {
-                "code": {
-                    "description": "Código de error\nExample: invalid_request",
-                    "type": "string"
-                },
-                "message": {
-                    "description": "Mensaje de error\nExample: Invalid request parameters",
-                    "type": "string"
-                }
+    "version": "1.0"
+  },
+  "host": "localhost:8080",
+  "basePath": "/",
+  "paths": {
+    "/health": {
+      "get": {
+        "description": "Retorna el estado de salud del servicio",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "health"
+        ],
+        "summary": "Endpoint de health check",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/internal_adapters_websockets.HealthResponse"
             }
-        },
-        "internal_adapters_websockets.HealthResponse": {
-            "type": "object",
-            "properties": {
-                "status": {
-                    "description": "Estado del servicio\nExample: healthy",
-                    "type": "string"
-                }
-            }
+          }
         }
+      }
+    },
+    "/ws": {
+      "get": {
+        "description": "Endpoint WebSocket para gestionar tareas en tiempo real. Soporta las siguientes acciones:\n- create_task: Crear una nueva tarea\n- stop_task: Detener una tarea en ejecución\n- list_tasks: Listar todas las tareas",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "WebSocket"
+        ],
+        "summary": "Gestiona conexiones WebSocket para tareas",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "ID del cliente para tracking",
+            "name": "client_id",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching Protocols",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/internal_adapters_websockets.ErrorResponse"
+            }
+          }
+        }
+      }
     }
+  },
+  "definitions": {
+    "internal_adapters_websockets.ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "Código de error\nExample: invalid_request",
+          "type": "string"
+        },
+        "message": {
+          "description": "Mensaje de error\nExample: Invalid request parameters",
+          "type": "string"
+        }
+      }
+    },
+    "internal_adapters_websockets.HealthResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "description": "Estado del servicio\nExample: healthy",
+          "type": "string"
+        }
+      }
+    }
+  }
 }

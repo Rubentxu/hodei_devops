@@ -48,10 +48,15 @@ func LoadTLSConfig() (*TLSConfig, error) {
 // ConfigureServerTLS configura el TLS para el servidor gRPC
 func (c *TLSConfig) ConfigureServerTLS() (*tls.Config, error) {
 	// Verificar variables de entorno
+	// Debug mejorado
 	log.Printf("🔐 Configuración TLS:")
 	log.Printf("- SERVER_CERT_PATH: %s", c.ServerCertPath)
 	log.Printf("- SERVER_KEY_PATH: %s", c.ServerKeyPath)
 	log.Printf("- CA_CERT_PATH: %s", c.CACertPath)
+
+	// Obtener directorio de trabajo actual
+	cwd, _ := os.Getwd()
+	log.Printf("📁 Directorio de trabajo actual: %s", cwd)
 
 	// Verificar existencia de archivos
 	files := map[string]string{
@@ -61,19 +66,50 @@ func (c *TLSConfig) ConfigureServerTLS() (*tls.Config, error) {
 	}
 
 	for desc, path := range files {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			// Listar contenido del directorio padre
-			dir := filepath.Dir(path)
-			files, err := os.ReadDir(dir)
-			fileList := "Archivos encontrados en " + dir + ":\n"
-			if err != nil {
-				fileList = "Error leyendo directorio: " + err.Error()
-			} else {
-				for _, file := range files {
-					fileList += fmt.Sprintf("  - %s\n", file.Name())
+		log.Printf("🔍 Verificando %s en ruta: %q", desc, path)
+
+		// Comprobar si la ruta es absoluta
+		if !filepath.IsAbs(path) {
+			absPath, _ := filepath.Abs(path)
+			log.Printf("⚠️ Ruta relativa detectada, versión absoluta: %s", absPath)
+		}
+
+		// Verificar acceso al archivo
+		fileInfo, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Listar contenido del directorio padre
+				dir := filepath.Dir(path)
+				files, err := os.ReadDir(dir)
+				fileList := "Archivos encontrados en " + dir + ":\n"
+				if err != nil {
+					fileList = "Error leyendo directorio: " + err.Error()
+				} else {
+					for _, file := range files {
+						info, _ := file.Info()
+						if info != nil {
+							fileList += fmt.Sprintf("  - %s (%d bytes, %s)\n", file.Name(), info.Size(), info.Mode())
+						} else {
+							fileList += fmt.Sprintf("  - %s\n", file.Name())
+						}
+					}
 				}
+				return nil, fmt.Errorf("❌ %s no encontrado en: %s\n%s", desc, path, fileList)
+			} else {
+				return nil, fmt.Errorf("❌ Error accediendo a %s: %v", desc, err)
 			}
-			return nil, fmt.Errorf("❌ %s no encontrado en: %s\n%s", desc, path, fileList)
+		}
+
+		// Archivo existe, mostrar detalles
+		log.Printf("✅ %s encontrado: Tamaño=%d bytes, Permisos=%s",
+			desc, fileInfo.Size(), fileInfo.Mode())
+
+		// Prueba de acceso al archivo
+		content, err := os.ReadFile(path)
+		if err != nil {
+			log.Printf("⚠️ Error intentando leer %s: %v", desc, err)
+		} else {
+			log.Printf("✅ %s leído correctamente: %d bytes", desc, len(content))
 		}
 	}
 

@@ -78,8 +78,8 @@ check_health() {
         if grpcurl -d '{}' \
             -H "authorization: ${jwt_token}" \
             -cacert "${CA_CERT}" \
-            -cert "${CERT_DIR}/worker-cert.pem" \
-            -key "${CERT_DIR}/worker-key.pem" \
+            -cert "${CERT_DIR}/worker-client-cert.pem" \
+            -key "${CERT_DIR}/worker-client-key.pem" \
             "${GRPC_SERVER_ADDRESS}" \
             grpc.health.v1.Health/Check >/dev/null 2>&1; then
             success "Servidor responde OK (salud verificada)."
@@ -212,8 +212,8 @@ run_execute_cmd_tests() {
         grpcurl -d "$REQ" \
             -H "authorization: bearer ${jwt_token}" \
             -cacert "${CA_CERT}" \
-            -cert "${CERT_DIR}/worker-cert.pem" \
-            -key "${CERT_DIR}/worker-key.pem" \
+            -cert "${CERT_DIR}/worker-client-cert.pem" \
+            -key "${CERT_DIR}/worker-client-key.pem" \
             "${GRPC_SERVER_ADDRESS}" \
             remote_process.RemoteProcessService/ExecuteCommand > "${TMP_OUTPUT}" 2>&1
 

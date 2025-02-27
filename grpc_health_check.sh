@@ -15,6 +15,6 @@ grpcurl \
   -d '{}' \
   -rpc-header "authorization: Bearer ${JWT_TOKEN}" \
   -cacert /certs/ca-cert.pem \
-  -cert /certs/worker-cert.pem \
-  -key /certs/worker-key.pem \
+  -cert /certs/worker-client-cert.pem \
+  -key /certs/worker-client-key.pem \
   ${GRPC_SERVER_ADDRESS} grpc.health.v1.Health/Check || exit 1

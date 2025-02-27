@@ -34,7 +34,10 @@ RUN groupadd -g ${DOCKER_GID} appgroup && \
 RUN chown -R appuser:appgroup /app /certs
 RUN chmod +x /app/grpc_health_check.sh
 RUN chmod +x /app/remote_process
-RUN chmod -R 700 /certs
+# Configurar permisos para certificados
+RUN find /certs -type d -exec chmod 755 {} \; && \
+    find /certs -type f -name "*.pem" -exec chmod 644 {} \; && \
+    find /certs -type f -name "*key*" -exec chmod 600 {} \;
 
 # Cambiar al usuario no privilegiado
 USER appuser

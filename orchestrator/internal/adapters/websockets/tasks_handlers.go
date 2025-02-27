@@ -76,6 +76,9 @@ func (h *WSHandler) HandleConnection(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
+	// Enviar mensaje de bienvenida
+	h.sendJSON(conn, "connection_established", map[string]string{"message": "Connection established"})
+
 	go h.sendPing(ctx, conn)
 
 	for {
@@ -86,6 +89,8 @@ func (h *WSHandler) HandleConnection(w http.ResponseWriter, r *http.Request) {
 			}
 			break
 		}
+		// Enviar notificación de procesamiento
+		h.sendJSON(conn, "processing_request", map[string]string{"action": msg.Action, "payload": string(msg.Payload)})
 
 		switch msg.Action {
 		case "create_task":

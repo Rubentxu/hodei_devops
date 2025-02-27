@@ -2,6 +2,7 @@ package factories
 
 import (
 	"context"
+	"dev.rubentxu.devops-platform/orchestrator/internal/adapters/resources"
 	"fmt"
 
 	"gopkg.in/yaml.v2"
@@ -26,38 +27,33 @@ import (
 type K8sWorker struct {
 	task       domain.TaskExecution
 	endpoint   *domain.WorkerEndpoint
-	grpcConfig config.GRPCConfig
-	k8sCfg     config.K8sConfig
+	grpcConfig config.GrpcConnectionsConfig
+	k8sCfg     resources.KubernetesResoucesPoolConfig
 	clientset  *kubernetes.Clientset
 }
 
 func (k *K8sWorker) GetID() string {
-	//TODO implement me
-	panic("implement me")
+	return k.task.ID.String()
 }
 
 func (k *K8sWorker) GetName() string {
-	//TODO implement me
-	panic("implement me")
+	return k.task.Name
 }
 
 func (k *K8sWorker) GetType() string {
-	//TODO implement me
-	panic("implement me")
+	return "kubernetes"
 }
 
 // NewK8sWorker crea una instancia de K8sWorker con la misma firma que DockerWorker
-func NewK8sWorker(task domain.TaskExecution, grpcConfig config.GRPCConfig, k8sCfg config.K8sConfig) (ports.WorkerInstance, error) {
-	// Crear el clientset de Kubernetes
-	cs, err := getK8sClient(k8sCfg)
-	if err != nil {
-		return nil, fmt.Errorf("error creando clientset K8s: %v", err)
-	}
+func NewK8sWorker(task domain.TaskExecution, grpcConfig config.GrpcConnectionsConfig, client ports.ResourceIntanceClient) (ports.WorkerInstance, error) {
+	k8sCfg := client.GetConfig().(resources.KubernetesResoucesPoolConfig)
+	clientset := client.GetNativeClient().(*kubernetes.Clientset)
+
 	return &K8sWorker{
 		task:       task,
 		grpcConfig: grpcConfig,
 		k8sCfg:     k8sCfg,
-		clientset:  cs,
+		clientset:  clientset,
 	}, nil
 }
 
@@ -135,16 +131,9 @@ func (k *K8sWorker) Start(ctx context.Context, templatePath string, outputChan c
 	// 5. Imagen del contenedor (usar WorkerSpec.Image si se define, sino usar k.k8sCfg.DefaultImage, sino usar la del template)
 	workerImage := k.task.WorkerSpec.Image
 	if workerImage == "" {
-		if k.k8sCfg.DefaultImage != "" {
-			workerImage = k.k8sCfg.DefaultImage // Usar default de config
-			log.Printf("Usando imagen default de config: %s", workerImage)
-		} else if len(podTemplate.Spec.Containers) > 0 && podTemplate.Spec.Containers[0].Image != "" {
-			workerImage = podTemplate.Spec.Containers[0].Image // Usar imagen del template
-			log.Printf("Usando imagen del template del Pod: %s", workerImage)
-		} else {
-			k.sendErrorMessage(outputChan, "No se definió imagen para el Pod y no hay en template/default config")
-			return nil, fmt.Errorf("no se definió imagen para el Pod y no hay en template/default config")
-		}
+		k.sendErrorMessage(outputChan, "No se definió imagen para el Pod ")
+		return nil, fmt.Errorf("no se definió imagen para el Pod")
+
 	} else {
 		log.Printf("Usando imagen de WorkerSpec: %s", workerImage)
 	}
@@ -299,7 +288,7 @@ func (k *K8sWorker) createGRPCClient() (*grpc.RPSClient, error) {
 }
 
 // getK8sClient crea un clientset de Kubernetes para interactuar con la API
-func getK8sClient(k8sCfg config.K8sConfig) (*kubernetes.Clientset, error) {
+func getK8sClient(k8sCfg resources.KubernetesResoucesPoolConfig) (*kubernetes.Clientset, error) {
 	if k8sCfg.InCluster {
 		// Worker corre dentro del cluster
 		cfg, err := rest.InClusterConfig()

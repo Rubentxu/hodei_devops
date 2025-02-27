@@ -1,0 +1,129 @@
+### 1. Crear una tarea simple de "Hello World"
+{
+  "action": "create_task",
+  "payload": {
+    "name": "hello-world",
+    "image": "hodei/remote-process-worker"
+    "command": ["echo", "Hello, World!"],
+    "timeout": 30
+  }
+}
+
+### 2. Crear una tarea con variables de entorno
+{
+  "action": "create_task",
+  "payload": {
+    "name": "env-test",
+    "image": "hodei/remote-process-worker"
+    "command": ["sh", "-c", "echo $GREETING $NAME"],
+    "env": {
+      "GREETING": "Hello",
+      "NAME": "Developer"
+    },
+    "timeout": 30
+  }
+}
+
+### 3. Ejecutar un script Python
+{
+  "action": "create_task",
+  "payload": {
+    "name": "python-script",
+    "image": "python:3.9-alpine",
+    "command": ["python", "-c", "import time; print('Starting...'); time.sleep(2); print('Processing...'); time.sleep(2); print('Completed!')"],
+    "timeout": 60
+  }
+}
+
+### 4. Ejecutar un comando en un directorio de trabajo específico
+{
+  "action": "create_task",
+  "payload": {
+    "name": "working-dir-test",
+    "image": "hodei/remote-process-worker"
+    "command": ["sh", "-c", "pwd && ls -la"],
+    "working_dir": "/tmp",
+    "timeout": 30
+  }
+}
+
+### 5. Ejecutar una tarea larga con timeout
+{
+  "action": "create_task",
+  "payload": {
+    "name": "long-task",
+    "image": "hodei/remote-process-worker"
+    "command": ["sh", "-c", "for i in {1..10}; do echo \"Step $i\"; sleep 2; done"],
+    "timeout": 25
+  }
+}
+
+### 6. Ejecutar un comando que produce errores
+{
+  "action": "create_task",
+  "payload": {
+    "name": "error-task",
+    "image": "hodei/remote-process-worker"
+    "command": ["sh", "-c", "echo 'This will succeed' && command_that_doesnt_exist"],
+    "timeout": 30
+  }
+}
+
+### 7. Ejecutar un contenedor con Docker
+{
+  "action": "create_task",
+  "payload": {
+    "name": "docker-task",
+    "image": "hodei/remote-process-worker"
+    "command": ["docker", "run", "--rm", "alpine", "echo", "Hello from nested container"],
+    "instance_type": "docker",
+    "timeout": 60
+  }
+}
+
+### 8. Detener una tarea en ejecución
+{
+  "action": "stop_task",
+  "payload": {
+    "task_id": "TASK_ID_HERE"
+  }
+}
+
+### 9. Listar todas las tareas
+{
+  "action": "list_tasks",
+  "payload": {}
+}
+
+### 10. Ejecutar un script de shell más complejo
+{
+  "action": "create_task",
+  "payload": {
+    "name": "complex-shell-script",
+    "image": "hodei/remote-process-worker"
+    "command": ["sh", "-c", "echo 'Starting complex task...' && mkdir -p /tmp/test && cd /tmp/test && echo 'Created directory' && for i in {1..5}; do echo \"File $i\" > file$i.txt; done && echo 'Created files:' && ls -la && echo 'Task completed successfully'"],
+    "timeout": 60
+  }
+}
+
+### 11. Ejecutar una tarea con Node.js
+{
+  "action": "create_task",
+  "payload": {
+    "name": "nodejs-task",
+    "image": "node:14-alpine",
+    "command": ["node", "-e", "console.log('Node.js version:', process.version); setTimeout(() => console.log('Task completed!'), 3000);"],
+    "timeout": 60
+  }
+}
+
+### 12. Ejecutar una tarea que muestra información del sistema
+{
+  "action": "create_task",
+  "payload": {
+    "name": "system-info",
+    "image": "hodei/remote-process-worker"
+    "command": ["sh", "-c", "echo 'System Information:' && uname -a && echo 'Memory:' && free -h && echo 'Disk:' && df -h"],
+    "timeout": 30
+  }
+}

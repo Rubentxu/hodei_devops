@@ -3,8 +3,6 @@ package ports
 import (
 	"context"
 
-	"time"
-
 	"dev.rubentxu.devops-platform/orchestrator/internal/domain"
 )
 
@@ -19,8 +17,7 @@ type WorkerPort interface {
 
 // WorkerFactory es una interfaz para crear instancias de workers
 type WorkerFactory interface {
-	Create(task domain.TaskExecution) (WorkerInstance, error)
-	GetStopDelay() time.Duration
+	Create(task domain.TaskExecution, client ResourceIntanceClient) (WorkerInstance, error)
 }
 
 type WorkerInstance interface {

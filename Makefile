@@ -234,18 +234,24 @@ endif
 run-orchestrator: stop-orchestrator build
 	@echo "🚀 Starting orchestrator with TLS and JWT in development mode..."
 ifeq ($(DETECTED_OS),Windows)
-	@set CLIENT_CERT_PATH=$(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CLIENT_CERT))& ^
-	set CLIENT_KEY_PATH=$(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CLIENT_KEY))& ^
-	set CA_CERT_PATH=$(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CA_CERT))& ^
-	set JWT_TOKEN=$(JWT_TOKEN)& ^
+	@set JWT_TOKEN=$(JWT_TOKEN)& ^
 	start /B cmd /C bin$(SEP)orchestrator serve --dir=".\test_pb_data" > bin$(SEP)orchestrator.log 2>&1
 	@echo %ERRORLEVEL% > bin$(SEP)orchestrator.pid
 else
-	@CLIENT_CERT_PATH=$(DEV_CERT_DIR)/$(CLIENT_CERT) \
-	CLIENT_KEY_PATH=$(DEV_CERT_DIR)/$(CLIENT_KEY) \
-	CA_CERT_PATH=$(DEV_CERT_DIR)/$(CA_CERT) \
-	JWT_TOKEN="$(JWT_TOKEN)" \
+	@JWT_TOKEN="$(JWT_TOKEN)" \
+	DEFAULT_DOCKER_POOL=true \
 	./bin/orchestrator serve --dir="./test_pb_data" > ./bin/orchestrator.log 2>&1 & echo $$! > ./bin/orchestrator.pid
+endif
+
+.PHONY: stop-orchestrator
+stop-orchestrator:
+	@echo "🛑 Deteniendo orchestrator..."
+ifeq ($(DETECTED_OS),Windows)
+	@if exist bin$(SEP)orchestrator.pid (for /f %i in (bin$(SEP)orchestrator.pid) do taskkill /F /PID %i 2>NUL || true)
+	@$(RM) bin$(SEP)orchestrator.pid 2>NUL || true
+else
+	@if [ -f ./bin/orchestrator.pid ]; then kill -9 `cat ./bin/orchestrator.pid` 2>/dev/null || true; fi
+	@$(RM) ./bin/orchestrator.pid 2>/dev/null || true
 endif
 
 .PHONY: run-archiva-go
@@ -339,16 +345,7 @@ else
 	@$(RM) ./bin/remote_process.pid 2>/dev/null || true
 endif
 
-.PHONY: stop-orchestrator
-stop-orchestrator:
-	@echo "🛑 Deteniendo orchestrator..."
-ifeq ($(DETECTED_OS),Windows)
-	@if exist bin$(SEP)orchestrator.pid (for /f %i in (bin$(SEP)orchestrator.pid) do taskkill /F /PID %i 2>NUL || true)
-	@$(RM) bin$(SEP)orchestrator.pid 2>NUL || true
-else
-	@if [ -f ./bin/orchestrator.pid ]; then kill -9 `cat ./bin/orchestrator.pid` 2>/dev/null || true; fi
-	@$(RM) ./bin/orchestrator.pid 2>/dev/null || true
-endif
+
 
 .PHONY: stop-archiva-go
 stop-archiva-go:
@@ -374,7 +371,7 @@ check-docker:
 
 # Targets para construcción de imágenes Docker
 .PHONY: docker-build-all
-docker-build-all: docker-build-orchestrator docker-build-remote-process docker-build-tests
+docker-build-all: docker-build-orchestrator docker-build-remote-process
 
 # Añadir targets para compilar binarios específicamente para imágenes Docker
 .PHONY: build-for-docker
@@ -401,9 +398,7 @@ docker-build-remote-process: build-for-docker
 	docker build -t hodei/remote-process-worker:latest -f build/remote_process/Dockerfile .
 
 
-# Target para construir todas las imágenes Docker
-.PHONY: docker-build-all
-docker-build-all: docker-build-orchestrator docker-build-remote-process docker-build-worker docker-build-tests
+
 
 # Target para test en Docker con generación de certificados
 .PHONY: test-docker

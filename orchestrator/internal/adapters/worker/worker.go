@@ -156,7 +156,7 @@ func (w *Worker) processTask(op ports.TaskOperation) {
 	_, instanceCancel := context.WithTimeout(ctx, 1*time.Minute)
 	defer instanceCancel()
 
-	workerInstance, err := w.workerFactory.Create(op.Task)
+	workerInstance, err := w.workerFactory.Create(op.Task, op.Client)
 	if err != nil {
 		sendOutput(op.OutputChan, taskID, TypeError,
 			fmt.Sprintf("Error creating worker instance: %v", err), true, domain.ERROR)

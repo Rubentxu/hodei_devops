@@ -2,38 +2,30 @@ package resources
 
 import (
 	"context"
-	"dev.rubentxu.devops-platform/orchestrator/config"
-	"dev.rubentxu.devops-platform/orchestrator/internal/domain"
-	"dev.rubentxu.devops-platform/orchestrator/internal/ports"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
+	"sync"
+
+	"dev.rubentxu.devops-platform/orchestrator/internal/domain"
+	"dev.rubentxu.devops-platform/orchestrator/internal/ports"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/client"
-	"io"
-	"log"
-	"sync"
 )
 
 type DockerResourcePool struct {
-	id           string
-	client       ports.ResourceIntanceClient
-	lastCPUStats map[string]*container.CPUStats
-	mu           sync.Mutex
-	hostInfo     *system.Info // Cache the Docker host info
-	hostInfoErr  error        // Cache the error for fetching host info
+	id            string
+	client        ports.ResourceIntanceClient
+	lastCPUStats  map[string]*container.CPUStats
+	hostInfo      *system.Info                      // Cache the Docker host info
+	hostInfoErr   error                             // Cache the error for fetching host info
+	templateStore ports.Store[ports.WorkerTemplate] // Store para persistir templates
 }
 
-func (d *DockerResourcePool) GetID() string {
-	return d.id
-}
-
-func (d *DockerResourcePool) GetResourceInstanceClient() ports.ResourceIntanceClient {
-	return d.client
-}
-
-func NewDockerResourcePool(config config.DockerConfig, id string) (ports.ResourcePool, error) {
+func NewDockerResourcePool(id string, templateStore ports.Store[ports.WorkerTemplate], config DockerResourcesPoolConfig) (ports.ResourcePool, error) {
 	nativeClient, err := NewDockerClientAdapter(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Docker client: %w", err)
@@ -47,13 +39,60 @@ func NewDockerResourcePool(config config.DockerConfig, id string) (ports.Resourc
 		log.Printf("Error getting Docker host info: %v", err)
 	}
 
+	// Verificamos si se proporcionó un store de templates
+	if templateStore == nil {
+		return nil, fmt.Errorf("template store is required for Docker resource pool")
+	}
+
 	return &DockerResourcePool{
-		id:           id,
-		client:       nativeClient,
-		lastCPUStats: make(map[string]*container.CPUStats),
-		hostInfo:     &hostInfo, // Store Docker host info in the struct
-		hostInfoErr:  err,       // Store the error
+		id:            id,
+		client:        nativeClient,
+		lastCPUStats:  make(map[string]*container.CPUStats),
+		hostInfo:      &hostInfo,
+		hostInfoErr:   err,
+		templateStore: templateStore,
 	}, nil
+}
+
+func (d *DockerResourcePool) GetWorkerTemplate(id string) (ports.WorkerTemplate, error) {
+	// Obtenemos el template directamente de la base de datos
+	template, err := d.templateStore.Get(id)
+	if err != nil {
+		return ports.WorkerTemplate{}, fmt.Errorf("worker template with id %s not found: %w", id, err)
+	}
+
+	return template, nil
+}
+
+func (d *DockerResourcePool) AddWorkerTemplate(template ports.WorkerTemplate) error {
+	if template.ID == "" {
+		return fmt.Errorf("template ID cannot be empty")
+	}
+
+	if template.WorkerSpec.Type != domain.DockerInstance {
+		return fmt.Errorf("invalid instance type for Docker resource pool: %s", template.WorkerSpec.Type)
+	}
+
+	// Validar que la template sea válida para Docker
+	if template.WorkerSpec.Image == "" {
+		return fmt.Errorf("docker image is required in worker template")
+	}
+
+	// Guardar en la base de datos
+	if err := d.templateStore.Put(template.ID, template); err != nil {
+		return fmt.Errorf("failed to save template to database: %w", err)
+	}
+
+	log.Printf("Added worker template: %s for image %s", template.ID, template.WorkerSpec.Image)
+	return nil
+}
+
+func (d *DockerResourcePool) GetID() string {
+	return d.id
+}
+
+func (d *DockerResourcePool) GetResourceInstanceClient() ports.ResourceIntanceClient {
+	return d.client
 }
 
 func (d *DockerResourcePool) GetStats() (*domain.Stats, error) {
@@ -220,8 +259,6 @@ func (d *DockerResourcePool) getContainerStats(ctx context.Context, containerID 
 }
 
 func (d *DockerResourcePool) calculateCPUUsage(containerID string, currentStats *container.CPUStats) (uint64, uint64, uint64) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
 
 	previousStats, ok := d.lastCPUStats[containerID]
 	d.lastCPUStats[containerID] = currentStats
@@ -252,4 +289,10 @@ func (d *DockerResourcePool) Matches(task domain.Task) bool {
 		return false
 	}
 	return true
+}
+
+// GetTemplateStore implementa la interfaz TemplateStoreAccessor
+// Proporciona acceso directo al store de templates para operaciones adicionales
+func (d *DockerResourcePool) GetTemplateStore() ports.Store[ports.WorkerTemplate] {
+	return d.templateStore
 }

@@ -2,6 +2,8 @@ package manager
 
 import (
 	"context"
+
+	"dev.rubentxu.devops-platform/orchestrator/internal/adapters/resources"
 	"dev.rubentxu.devops-platform/orchestrator/internal/adapters/scheduler"
 	"dev.rubentxu.devops-platform/orchestrator/internal/adapters/store"
 	"dev.rubentxu.devops-platform/orchestrator/internal/adapters/worker"
@@ -26,14 +28,13 @@ type Manager struct {
 	pendingTasksChan chan uuid.UUID
 	taskDb           ports.Store[domain.Task]
 	taskOperationDb  ports.Store[ports.TaskOperation]
-	resourcePools    map[string]*ports.ResourcePool
 	scheduler        ports.Scheduler
 	worker           *worker.Worker
+	poolManager      *resources.ResourcePoolManager
 }
 
 // New creates a new Manager instance.
-func New(schedulerType string, dbType string, worker *worker.Worker, sizePendingsTask int, app core.App) (*Manager, error) { // Recibe el Worker
-	// ... (Creación del Scheduler y los Stores, como antes) ...
+func New(schedulerType string, dbType string, worker *worker.Worker, sizePendingsTask int, app core.App, poolManager *resources.ResourcePoolManager) (*Manager, error) {
 	// Crear Scheduler
 	var currentSheduler ports.Scheduler
 	switch schedulerType {
@@ -69,17 +70,20 @@ func New(schedulerType string, dbType string, worker *worker.Worker, sizePending
 		pendingTasksChan: make(chan uuid.UUID, sizePendingsTask), // Buffer para 1000 tareas
 		taskDb:           taskDb,
 		taskOperationDb:  taskOperationDb,
-		resourcePools:    make(map[string]*ports.ResourcePool), // Se inicializa vacío
 		scheduler:        currentSheduler,
 		worker:           worker, // Guardar la instancia del Worker
+		poolManager:      poolManager,
 	}
 
 	return &m, nil
 }
 
-// AddResourcePool agrega un ResourcePool al Manager.
-func (m *Manager) AddResourcePool(pool ports.ResourcePool) {
-	m.resourcePools[pool.GetID()] = &pool
+// GetResourcePool obtiene un ResourcePool por su ID utilizando el ResourcePoolManager
+func (m *Manager) GetResourcePool(id string) *ports.ResourcePool {
+	if pool, exists := m.poolManager.GetActivePool(id); exists {
+		return pool
+	}
+	return nil
 }
 
 // AddTask añade una nueva Task a la cola de pendientes.
@@ -130,34 +134,31 @@ func (m *Manager) AddTask(taskDef domain.Task, ctx context.Context) (ports.TaskO
 
 // SelectWorker elige un ResourcePool para una tarea.
 func (m *Manager) SelectWorker(taskDefID uuid.UUID) (*ports.ResourcePool, error) {
-	// Implementa la lógica para seleccionar un worker (ResourcePool)
-	// Por ahora, una selección simple (el primero disponible).
-	// TODO: Implementar una lógica de selección más sofisticada.
-	if len(m.resourcePools) == 0 {
-		return nil, fmt.Errorf("no hay ResourcePools disponibles")
-	}
-
-	// Usar el scheduler para seleccionar un ResourcePool.
+	// Obtener la definición de la tarea
 	taskDef, err := m.taskDb.Get(taskDefID.String())
 	if err != nil {
 		return nil, fmt.Errorf("tarea no encontrada: %w", err)
 	}
-	log.Printf("Seleccionando un worker para la tarea %s", taskDef.ID)
-	listPools := []*ports.ResourcePool{}
-	for _, pool := range m.resourcePools {
-		listPools = append(listPools, pool)
+
+	// Obtener la lista de pools activos del ResourcePoolManager
+	activePools := m.poolManager.ListActivePools()
+	if len(activePools) == 0 {
+		return nil, fmt.Errorf("no hay ResourcePools disponibles")
 	}
-	candidatePools := m.scheduler.SelectCandidateNodes(taskDef, listPools)
+
+	log.Printf("Seleccionando un worker para la tarea %s", taskDef.ID)
+
+	candidatePools := m.scheduler.SelectCandidateNodes(taskDef, activePools)
 	log.Printf("Candidate pools: %v", candidatePools)
 
 	scores := m.scheduler.Score(taskDef, candidatePools)
 	log.Printf("Scores: %v", scores)
 
 	selectedPool := m.scheduler.Pick(scores, candidatePools)
-
 	if selectedPool == nil {
 		return nil, fmt.Errorf("no se pudo seleccionar un ResourcePool")
 	}
+
 	log.Printf("Worker seleccionado: %s", (*selectedPool).GetID())
 	return selectedPool, nil
 }
@@ -182,7 +183,7 @@ func (m *Manager) processTask(taskDefID uuid.UUID) {
 		return
 	}
 
-	// 2. Seleccionar un ResourcePool
+	// 2. Seleccionar un ResourcePool usando el nuevo método que trabaja con el ResourcePoolManager
 	selectedPool, err := m.SelectWorker(taskDefID)
 	if err != nil {
 		log.Printf("Error seleccionando un worker para la tarea %s: %v", taskDefID, err)
@@ -190,7 +191,7 @@ func (m *Manager) processTask(taskDefID uuid.UUID) {
 	}
 	log.Printf("Worker seleccionado: %s", (*selectedPool).GetID())
 
-	// 3. Obtener la configuración del ResourcePool
+	// 3. Verificar que el pool seleccionado existe
 	if selectedPool == nil {
 		log.Printf("Error: selectedPool is nil for task %s", taskDefID)
 		return
@@ -207,6 +208,7 @@ func (m *Manager) processTask(taskDefID uuid.UUID) {
 	resourceClient := (*selectedPool).GetResourceInstanceClient()
 	operation.Client = resourceClient
 	m.taskOperationDb.Put(taskDefID.String(), operation)
+
 	// 5. Delegar la ejecución al Worker
 	result := m.worker.AddTask(operation)
 	log.Printf("Tarea %s enviada al worker", taskDefID)

@@ -20,13 +20,13 @@ func (s State) String() []string {
 }
 
 var stateTransitionMap = map[State][]State{
-	Pending:   []State{Scheduled},
-	Scheduled: []State{Scheduled, Running, Failed, Stopped},
-	Running:   []State{Running, Completed, Failed, Scheduled, Stopped},
-	Completed: []State{Done},
-	Failed:    []State{Scheduled},
-	Stopped:   []State{Scheduled},
-	Unknown:   []State{Pending, Scheduled, Running, Completed, Failed, Stopped},
+	Pending:   {Scheduled},
+	Scheduled: {Scheduled, Running, Failed, Stopped},
+	Running:   {Running, Completed, Failed, Scheduled, Stopped},
+	Completed: {Done},
+	Failed:    {Scheduled},
+	Stopped:   {Scheduled},
+	Unknown:   {Pending, Scheduled, Running, Completed, Failed, Stopped},
 }
 
 func Contains(states []State, state State) bool {

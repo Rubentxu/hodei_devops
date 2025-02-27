@@ -22,8 +22,8 @@ RUN test -f /app/orchestrator || exit 1
 RUN mkdir -p /certs /app/test_pb_data
 
 # Variables de entorno para TLS y JWT
-ENV CLIENT_CERT_PATH="/certs/worker-cert.pem" \
-    CLIENT_KEY_PATH="/certs/worker-key.pem" \
+ENV CLIENT_CERT_PATH="/certs/worker-client-cert.pem" \
+    CLIENT_KEY_PATH="/certs/worker-client-key.pem" \
     CA_CERT_PATH="/certs/ca-cert.pem" \
     JWT_SECRET="" \
     JWT_TOKEN=""

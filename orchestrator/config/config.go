@@ -3,27 +3,26 @@ package config
 import (
 	"log"
 	"os"
-	"path/filepath"
 	"strconv"
 	"time"
 )
 
 // Config general de la aplicación
 type Config struct {
-	Env                string
-	Port               int
-	WorkerName         string
-	MaxConcurrentTasks int
-	StorageType        string
-	GRPC               GRPCConfig
-	Docker             DockerConfig
+	Env                       string
+	Port                      int
+	WorkerName                string
+	MaxConcurrentTasks        int
+	StorageType               string
+	GRPC                      GrpcConnectionsConfig
+	DefaultDockerResourcePool bool
 
 	// Nueva sección para distintos proveedores
 	Providers ProvidersConfig
 }
 
 // Configuración general de gRPC
-type GRPCConfig struct {
+type GrpcConnectionsConfig struct {
 	// Certificados y claves
 	ServerCertPath string // Para remote-process
 	ServerKeyPath  string // Para remote-process
@@ -41,32 +40,7 @@ type GRPCConfig struct {
 
 // Config que engloba distintos proveedores: Docker, K8s, VMs...
 type ProvidersConfig struct {
-	Docker      DockerConfig
-	Kubernetes  K8sConfig
 	VirtualMach VMConfig // Ejemplo, máquinas virtuales
-}
-
-// Config específica para Docker
-type DockerConfig struct {
-	Host            string
-	DefaultImage    string
-	CertsVolumePath string // Ruta al directorio de certificados (puede ser absoluta o relativa)
-	CertsMountPath  string // Punto de montaje en el contenedor (siempre /certs)
-	HealthCheck     HealthCheck
-	NetworkName     string        // Para asegurar que los contenedores están en la misma red
-	StopDelay       time.Duration // Tiempo de espera antes de parar el worker
-	WorkerHost      string        // Host del worker
-	MainServiceName string        // Nombre del servicio principal
-}
-
-// Config específica de Kubernetes
-type K8sConfig struct {
-	Namespace    string
-	KubeConfig   string            // Ruta a kubeconfig si estás fuera del cluster
-	InCluster    bool              // Indica si ejecuta dentro del cluster
-	Labels       map[string]string // Labels por defecto en Pods
-	Annotations  map[string]string // Anotaciones disponibles
-	DefaultImage string
 }
 
 // Config de máquinas virtuales (solo un ejemplo genérico)
@@ -86,20 +60,16 @@ type HealthCheck struct {
 // Cargas la configuración unificada
 func Load() Config {
 	// Obtener el directorio actual para la ruta por defecto
-	pwd, err := os.Getwd()
-	defaultCertsPath := "./certs/dev"
-	if err == nil {
-		defaultCertsPath = filepath.Join(pwd, "certs", "dev")
-	}
 
 	return Config{
-		Env:                getEnv("ENV", "development"),
-		Port:               getIntEnv("HTTP_PORT", 8080),
-		WorkerName:         getEnv("WORKER_NAME", "default-worker"),
-		MaxConcurrentTasks: getIntEnv("MAX_CONCURRENT_TASKS", 3),
-		StorageType:        getEnv("STORAGE_TYPE", "memory"),
+		Env:                       getEnv("ENV", "development"),
+		Port:                      getIntEnv("HTTP_PORT", 8080),
+		WorkerName:                getEnv("WORKER_NAME", "default-worker"),
+		MaxConcurrentTasks:        getIntEnv("MAX_CONCURRENT_TASKS", 3),
+		StorageType:               getEnv("STORAGE_TYPE", "memory"),
+		DefaultDockerResourcePool: getBoolEnv("DEFAULT_DOCKER_POOL", false),
 
-		GRPC: GRPCConfig{
+		GRPC: GrpcConnectionsConfig{
 			// Certificados
 			ServerCertPath: getEnv("SERVER_CERT_PATH", "/certs/remote_process-cert.pem"),
 			ServerKeyPath:  getEnv("SERVER_KEY_PATH", "/certs/remote_process-key.pem"),
@@ -116,28 +86,14 @@ func Load() Config {
 		},
 
 		Providers: ProvidersConfig{
-			Docker: DockerConfig{
-				Host:            getEnv("DOCKER_HOST", "unix:///var/run/docker.sock"),
-				WorkerHost:      getEnv("WORKER_HOST", "localhost"),
-				DefaultImage:    getEnv("WORKER_IMAGE", "hodei/remote-process-worker:latest"), // Actualizado para usar la imagen correcta
-				CertsVolumePath: getEnv("DOCKER_CERTS_PATH", defaultCertsPath),
-				CertsMountPath:  "/certs",
-				NetworkName:     getEnv("DOCKER_NETWORK", "posts_mpv_default"),
-				StopDelay:       getDurationEnv("DOCKER_STOP_DELAY", 10*time.Second),
-				HealthCheck: HealthCheck{
-					Test:     []string{"CMD", "/app/grpc_health_check.sh"},
-					Interval: getDurationEnv("DOCKER_HEALTHCHECK_INTERVAL", 3*time.Second),
-					Timeout:  getDurationEnv("DOCKER_HEALTHCHECK_TIMEOUT", 5*time.Second),
-					Retries:  getIntEnv("DOCKER_HEALTHCHECK_RETRIES", 2),
-				},
-			},
-			Kubernetes: K8sConfig{
-				Namespace:   getEnv("K8S_NAMESPACE", "default"),
-				KubeConfig:  getEnv("K8S_CONFIG_PATH", ""),
-				InCluster:   getBoolEnv("K8S_IN_CLUSTER", true),
-				Labels:      map[string]string{"app": "grpc-worker"},
-				Annotations: map[string]string{},
-			},
+
+			//Kubernetes: K8sConfig{
+			//	Namespace:   getEnv("K8S_NAMESPACE", "default"),
+			//	KubeConfig:  getEnv("K8S_CONFIG_PATH", ""),
+			//	InCluster:   getBoolEnv("K8S_IN_CLUSTER", true),
+			//	Labels:      map[string]string{"app": "grpc-worker"},
+			//	Annotations: map[string]string{},
+			//},
 			VirtualMach: VMConfig{
 				HypervisorURL:  getEnv("VM_HYPERVISOR_URL", ""),
 				DefaultNetwork: getEnv("VM_DEF_NETWORK", ""),

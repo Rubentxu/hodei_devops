@@ -66,8 +66,8 @@ check_health() {
         if grpcurl -d '{}' \
             -H "authorization: ${jwt_token}" \
             -cacert "${CA_CERT}" \
-            -cert "${CERT_DIR}/worker-cert.pem" \
-            -key "${CERT_DIR}/worker-key.pem" \
+            -cert "${CERT_DIR}/worker-client-cert.pem" \
+            -key "${CERT_DIR}/worker-client-key.pem" \
             "${GRPC_SERVER_ADDRESS}" \
             grpc.health.v1.Health/Check >/dev/null 2>&1; then
             success "Servidor listo!"
@@ -102,8 +102,8 @@ run_metrics_tests() {
         grpcurl -v -d "$REQUEST" \
             -H "authorization: bearer ${jwt_token}" \
             -cacert "${CA_CERT}" \
-            -cert "${CERT_DIR}/worker-cert.pem" \
-            -key "${CERT_DIR}/worker-key.pem" \
+            -cert "${CERT_DIR}/worker-client-cert.pem" \
+            -key "${CERT_DIR}/worker-client-key.pem" \
             -max-time 60 \
             "${GRPC_SERVER_ADDRESS}" \
             remote_process.RemoteProcessService/CollectMetrics 2>&1 | tee "${TMP_OUTPUT}" &

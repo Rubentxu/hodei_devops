@@ -37,10 +37,10 @@ paths:
   /health:
     get:
       consumes:
-      - application/json
+        - application/json
       description: Retorna el estado de salud del servicio
       produces:
-      - application/json
+        - application/json
       responses:
         "200":
           description: OK
@@ -48,23 +48,23 @@ paths:
             $ref: '#/definitions/internal_adapters_websockets.HealthResponse'
       summary: Endpoint de health check
       tags:
-      - health
+        - health
   /ws:
     get:
       consumes:
-      - application/json
+        - application/json
       description: |-
         Endpoint WebSocket para gestionar tareas en tiempo real. Soporta las siguientes acciones:
         - create_task: Crear una nueva tarea
         - stop_task: Detener una tarea en ejecución
         - list_tasks: Listar todas las tareas
       parameters:
-      - description: ID del cliente para tracking
-        in: query
-        name: client_id
-        type: string
+        - description: ID del cliente para tracking
+          in: query
+          name: client_id
+          type: string
       produces:
-      - application/json
+        - application/json
       responses:
         "101":
           description: Switching Protocols
@@ -76,8 +76,8 @@ paths:
             $ref: '#/definitions/internal_adapters_websockets.ErrorResponse'
       summary: Gestiona conexiones WebSocket para tareas
       tags:
-      - WebSocket
+        - WebSocket
 schemes:
-- http
-- ws
+  - http
+  - ws
 swagger: "2.0"

@@ -8,15 +8,41 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"dev.rubentxu.devops-platform/orchestrator/config"
 	"dev.rubentxu.devops-platform/orchestrator/internal/ports"
 )
+
+// Config específica de Kubernetes
+
+type KubernetesResoucesPoolConfig struct {
+	Type        string            `json:"type"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Namespace   string            `json:"namespace"`
+	KubeConfig  string            `json:"kubeConfig"`  // Ruta a kubeconfig si estás fuera del cluster
+	InCluster   bool              `json:"inCluster"`   // Indica si ejecuta dentro del cluster
+	Labels      map[string]string `json:"labels"`      // Labels por defecto en Pods
+	Annotations map[string]string `json:"annotations"` // Anotaciones disponibles
+
+}
+
+// Implementación de la interfaz ResourcePoolConfig
+func (c *KubernetesResoucesPoolConfig) GetType() string {
+	return c.Type
+}
+
+func (c *KubernetesResoucesPoolConfig) GetName() string {
+	return c.Name
+}
+
+func (c *KubernetesResoucesPoolConfig) GetDescription() string {
+	return c.Description
+}
 
 // KubernetesClientAdapter adapta el cliente de Kubernetes a la interfaz InfrastructureClient.
 type KubernetesClientAdapter struct {
 	clientset     *kubernetes.Clientset
 	metricsClient *metricsclientset.Clientset
-	config        config.K8sConfig
+	config        KubernetesResoucesPoolConfig
 }
 
 func (k *KubernetesClientAdapter) GetConfig() any {
@@ -32,7 +58,7 @@ func (k *KubernetesClientAdapter) GetNativeMetricsClient() *metricsclientset.Cli
 }
 
 // NewKubernetesClientAdapter crea un KubernetesClientAdapter y lo retorna como una interfaz ResourceIntanceClient.
-func NewKubernetesClientAdapter(config config.K8sConfig) (ports.ResourceIntanceClient, error) {
+func NewKubernetesClientAdapter(config KubernetesResoucesPoolConfig) (ports.ResourceIntanceClient, error) {
 	var kubeConfig *rest.Config
 	var err error
 
