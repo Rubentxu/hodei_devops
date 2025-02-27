@@ -105,6 +105,7 @@ type WorkerSpec struct {
 	Ports       []PortMapping
 	Labels      map[string]string
 	HealthCheck *HealthCheckConfig
+	TemplateID  string
 }
 
 type ResourceRequirements struct {

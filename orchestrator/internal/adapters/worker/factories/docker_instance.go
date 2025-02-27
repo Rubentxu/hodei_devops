@@ -1,8 +1,13 @@
 package factories
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/volume"
 	"io"
 	"log"
 	"net"
@@ -11,13 +16,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types"
-
 	"dev.rubentxu.devops-platform/orchestrator/config"
 	"dev.rubentxu.devops-platform/orchestrator/internal/domain"
-	"github.com/docker/docker/api/types/image"
-
+	_ "github.com/compose-spec/compose-go/v2/cli"
+	"github.com/compose-spec/compose-go/v2/loader"
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 
@@ -28,89 +34,546 @@ import (
 
 // DockerWorker implementa WorkerInstance para Docker
 type DockerWorker struct {
-	task       domain.TaskExecution
-	endpoint   *domain.WorkerEndpoint
-	grpcConfig config.GRPCConfig
-	dockerCfg  config.DockerConfig
-	client     *dockerclient.Client
+	task            domain.TaskExecution
+	endpoint        *domain.WorkerEndpoint
+	grpcConfig      config.GRPCConfig
+	dockerCfg       config.DockerConfig
+	client          *dockerclient.Client
+	composeSpec     *types.Project // Added for Compose-Spec support
+	mainServiceName string         // Name of the main service
+	mainContainerID string         // Id of the main container
 }
 
 func (d *DockerWorker) GetID() string {
-	//TODO implement me
-	panic("implement me")
+	return d.task.ID.String()
 }
 
 func (d *DockerWorker) GetName() string {
-	//TODO implement me
-	panic("implement me")
+	return d.task.Name
 }
 
 func (d *DockerWorker) GetType() string {
-	//TODO implement me
-	panic("implement me")
+	return "docker"
 }
 
 func NewDockerWorker(task domain.TaskExecution, grpcCfg config.GRPCConfig, dockerCfg config.DockerConfig) (ports.WorkerInstance, error) {
-
-	// Ejemplo: usar dockerCfg.Host para crear el cliente
 	var opts []dockerclient.Opt
 	if dockerCfg.Host != "" {
 		opts = append(opts, dockerclient.WithHost(dockerCfg.Host))
 	}
-	// Podrías añadir TLSVerify si corresponde
 
 	cli, err := dockerclient.NewClientWithOpts(
 		dockerclient.FromEnv,
 		dockerclient.WithAPIVersionNegotiation(),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("error creando cliente Docker: %v", err)
+		return nil, fmt.Errorf("error creating Docker client: %v", err)
 	}
 	return &DockerWorker{
-		task:       task,
-		grpcConfig: grpcCfg,
-		dockerCfg:  dockerCfg,
-		client:     cli,
-		endpoint:   nil,
+		task:            task,
+		grpcConfig:      grpcCfg,
+		dockerCfg:       dockerCfg,
+		client:          cli,
+		endpoint:        nil,
+		composeSpec:     nil,
+		mainServiceName: dockerCfg.MainServiceName,
 	}, nil
 }
 
-func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputChan chan<- domain.ProcessOutput) (*domain.WorkerEndpoint, error) {
-	log.Printf("Iniciando DockerWorker con spec=%v", d.task.WorkerSpec)
+func (d *DockerWorker) GetEndpoint() *domain.WorkerEndpoint {
+	return d.endpoint
+}
 
-	// Obtener ruta absoluta para el directorio de certificados
-	certsPath, err := d.getAbsoluteCertsPath(d.dockerCfg.CertsVolumePath)
-	if err != nil {
-		d.sendErrorMessage(outputChan, fmt.Sprintf("Error obteniendo ruta de certificados: %v", err))
-		return nil, fmt.Errorf("error con ruta de certificados: %v", err)
-	}
+// Data structure to pass to the template
+type TemplateData struct {
+	Task        domain.TaskExecution
+	WorkerSpec  domain.WorkerSpec
+	Env         string // From config.Config
+	JWTSecret   string // From config.GRPCConfig
+	ProjectName string
+	// ... other global values like cert paths if needed ...
+}
 
-	// Log para debugging de volúmenes
-	log.Printf("Directorio de certificados en host: %s", certsPath)
-	if files, err := os.ReadDir(certsPath); err == nil {
-		var certFiles []string
-		for _, file := range files {
-			certFiles = append(certFiles, file.Name())
+func (d *DockerWorker) Start(ctx context.Context, templateString string, outputChan chan<- domain.ProcessOutput) (*domain.WorkerEndpoint, error) {
+	log.Printf("Starting DockerWorker with spec=%v", d.task.WorkerSpec)
+	d.sendLogsMessage(outputChan, fmt.Sprintf("Starting DockerWorker with spec=%v", d.task.WorkerSpec))
+
+	var err error
+
+	// Check if a Compose file is provided
+	if templateString != "" {
+		// Example to use
+		templateData := TemplateData{
+			Task:        d.task,
+			WorkerSpec:  d.task.WorkerSpec,
+			Env:         d.grpcConfig.Environment, // Config object
+			JWTSecret:   d.grpcConfig.JWTSecret,   // Config object
+			ProjectName: fmt.Sprintf("task-%s", d.task.Name),
 		}
-		log.Printf("Certificados encontrados en host: %v", certFiles)
+		log.Printf("TemplateData: %+v", templateData)
+
+		// Deploy using Compose-Spec
+		d.composeSpec, err = d.loadComposeSpec(ctx, templateString, templateData)
+		if err != nil {
+			return nil, err
+		}
+
+		d.endpoint, err = d.deployWithCompose(ctx, outputChan)
+		if err != nil {
+			return nil, err
+		}
+
+		//copy the files to the main container
+		if err := d.copyCertsToMainContainer(outputChan); err != nil {
+			return nil, err
+		}
+	} else {
+		// lanza un error si no se proporciona un archivo de plantilla
+		return nil, fmt.Errorf("no template file provided")
 	}
 
-	// Environment variables con rutas dentro del contenedor
+	return d.endpoint, nil
+}
+
+func (d *DockerWorker) loadComposeSpec(ctx context.Context, templateString string, templateData TemplateData) (*types.Project, error) {
+	// Definir un mapa con las variables de entorno personalizadas
+
+	customEnv := types.Mapping{
+		"MY_IMAGE":     d.task.WorkerSpec.Image,
+		"APP_ENV":      templateData.Env,
+		"JWT_SECRET":   templateData.JWTSecret,
+		"PROJECT_NAME": templateData.ProjectName,
+		"JWT_TOKEN":    d.grpcConfig.JWTToken,
+	}
+	for k, v := range d.task.WorkerSpec.Env {
+		customEnv[k] = v
+	}
+	// Create a ConfigFile object with the template content
+	// Crear un objeto ConfigFile con el contenido de la template.
+	configFile := types.ConfigFile{
+		Filename: "docker-compose.template.yml", // nombre de referencia
+		Content:  []byte(templateString),
+	}
+
+	// Crear un objeto ConfigDetails que contenga el ConfigFile.
+	configDetails := types.ConfigDetails{
+		ConfigFiles: []types.ConfigFile{configFile},
+		Environment: customEnv,
+		WorkingDir:  d.task.WorkerSpec.WorkingDir,
+		// Puedes establecer WorkingDir o Environment si lo requieres.
+	}
+	log.Printf("ConfigDetails: %+v", configDetails)
+
+	// Cargar el proyecto utilizando LoadWithContext (la función recomendada)
+	project, err := loader.LoadWithContext(ctx, configDetails)
+	if err != nil {
+		log.Fatalf("Error cargando el proyecto: %v", err)
+	}
+	// Obtener la representación YAML final, ya con los placeholders sustituidos.
+	rendered, err := project.MarshalYAML()
+	if err != nil {
+		log.Fatalf("Error serializando el proyecto a YAML: %v", err)
+	}
+
+	fmt.Println("YAML final interpolado:")
+	fmt.Println(string(rendered))
+	return project, nil
+}
+
+func (d *DockerWorker) deployWithCompose(ctx context.Context, outputChan chan<- domain.ProcessOutput) (*domain.WorkerEndpoint, error) {
+	// Check if composeSpec is loaded
+	if d.composeSpec == nil {
+		return nil, fmt.Errorf("compose specification not loaded")
+	}
+
+	if len(d.composeSpec.Services) == 0 {
+		return nil, fmt.Errorf("no services found in compose file")
+	}
+
+	// Iterate through networks and create them
+	for networkName, networkConfig := range d.composeSpec.Networks {
+		_, err := d.client.NetworkInspect(ctx, networkName, network.InspectOptions{})
+		if err != nil {
+			// If network does not exist, create it
+			if dockerclient.IsErrNotFound(err) {
+				d.sendLogsMessage(outputChan, fmt.Sprintf("Network %s not found, creating...", networkName))
+				_, err := d.client.NetworkCreate(ctx, networkName, network.CreateOptions{
+					Driver: networkConfig.Driver,
+				})
+				if err != nil {
+					d.sendLogsMessage(outputChan, fmt.Sprintf("Error creating network %s: %v", networkName, err))
+				} else {
+					d.sendLogsMessage(outputChan, fmt.Sprintf("Network %s created.", networkName))
+				}
+			} else {
+				return nil, fmt.Errorf("error inspecting network %s: %w", networkName, err)
+			}
+		}
+	}
+
+	var workerEndpoint *domain.WorkerEndpoint
+	var err error
+	// Iterate through services and create containers
+	for name, service := range d.composeSpec.Services {
+		workerEndpoint, err = d.deployService(ctx, outputChan, service)
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("Worker endpoint and service created for %s: %+v", name, workerEndpoint)
+		d.sendLogsMessage(outputChan, fmt.Sprintf("Worker endpoint and service created for %s: %+v", name, workerEndpoint))
+		// Set main service name if this is the first service
+		if d.mainServiceName == "" {
+			d.mainServiceName = name
+		}
+	}
+
+	return workerEndpoint, nil
+}
+
+func (d *DockerWorker) deployService(ctx context.Context, outputChan chan<- domain.ProcessOutput, service types.ServiceConfig) (*domain.WorkerEndpoint, error) {
+
+	workerImage := service.Image
+	if workerImage == "" {
+		d.sendErrorMessage(outputChan, fmt.Sprintf("No image specified for service %s", service.Name))
+		return nil, fmt.Errorf("no image specified for service %s", service.Name)
+	}
+
+	d.sendLogsMessage(outputChan, fmt.Sprintf("Using image: %s for service %s", workerImage, service.Name))
+
+	containerName := fmt.Sprintf("task-%s-%s", d.task.Name, service.Name)
+	if err := d.cleanupExistingContainer(ctx, containerName); err != nil {
+		d.sendLogsMessage(outputChan, fmt.Sprintf("Warning al limpiar contenedor anterior: %v", err))
+	}
+
+	_, _, err := d.client.ImageInspectWithRaw(ctx, workerImage)
+	if err != nil {
+		d.sendLogsMessage(outputChan, fmt.Sprintf("Imagen %s no encontrada localmente, intentando pull...", workerImage))
+		reader, err := d.client.ImagePull(ctx, workerImage, image.PullOptions{})
+		if err != nil {
+			d.sendLogsMessage(outputChan, fmt.Sprintf("No se pudo hacer pull de la imagen %q: %v", workerImage, err))
+		} else {
+			defer reader.Close()
+			if _, err := io.Copy(io.Discard, reader); err != nil {
+				d.sendLogsMessage(outputChan, fmt.Sprintf("Error durante el pull de la imagen: %v", err))
+			}
+		}
+	}
+	log.Printf("Usando imagen %s", workerImage)
+	d.sendLogsMessage(outputChan, fmt.Sprintf("Usando imagen %s", workerImage))
+
+	// Convert service.Environment (MappingWithEquals) to []string
+	var envVars []string
+	for key, valuePtr := range service.Environment {
+		if valuePtr != nil {
+			envVars = append(envVars, fmt.Sprintf("%s=%s", key, *valuePtr))
+		} else {
+			envVars = append(envVars, fmt.Sprintf("%s", key)) // Key without value
+		}
+	}
+
+	// Convert service.Ports ([]ServicePortConfig) to nat.PortSet
+	exposedPorts, err := toExposedPorts(service.Ports)
+	// TODO: Cambiar a la siguiente línea para usar el puerto fijo 50051
+	//exposedPorts, err := nat.PortSet{
+	//	nat.Port("50051/tcp"): struct{}{},
+	//}, nil
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert service.Ports ([]ServicePortConfig) to nat.PortMap
+	portBindings, err := toPortBindings(service.Ports)
+	if err != nil {
+		return nil, err
+	}
+
+	var networkMode container.NetworkMode
+	networkConfig := &network.NetworkingConfig{
+		EndpointsConfig: map[string]*network.EndpointSettings{},
+	}
+
+	if len(service.Networks) > 0 {
+		for networkName := range service.Networks {
+			if _, ok := d.composeSpec.Networks[networkName]; ok {
+				networkMode = container.NetworkMode(networkName)
+				networkConfig.EndpointsConfig[networkName] = &network.EndpointSettings{
+					NetworkID: networkName,
+				}
+				break
+			} else {
+				// Handle the case where the network is not found in d.composeSpec.Networks
+				return nil, fmt.Errorf("network '%s' defined for service '%s' not found in global networks configuration", networkName, service.Name)
+			}
+
+		}
+	}
+
+	containerCreateResp, err := d.client.ContainerCreate(
+		ctx,
+		&container.Config{
+			Image:        workerImage,
+			Env:          envVars, // Use the converted environment variables
+			ExposedPorts: exposedPorts,
+			Healthcheck: &container.HealthConfig{
+				Test:     d.dockerCfg.HealthCheck.Test,
+				Interval: d.dockerCfg.HealthCheck.Interval,
+				Timeout:  d.dockerCfg.HealthCheck.Timeout,
+				Retries:  d.dockerCfg.HealthCheck.Retries,
+			},
+		},
+		&container.HostConfig{
+			PortBindings: portBindings, // Use the converted port bindings
+			NetworkMode:  networkMode,
+		},
+		networkConfig,
+		nil,
+		containerName,
+	)
+	if err != nil {
+		d.sendErrorMessage(outputChan, fmt.Sprintf("Error creating container: %v", err))
+		return nil, fmt.Errorf("error creating Docker container: %v", err)
+	}
+	if err := d.client.ContainerStart(ctx, containerCreateResp.ID, container.StartOptions{}); err != nil {
+		d.sendErrorMessage(outputChan, fmt.Sprintf("Error starting container: %v", err))
+		return nil, fmt.Errorf("error starting Docker container: %v", err)
+	}
+
+	// Store the main containerId
+	if service.Name == d.mainServiceName {
+		d.mainContainerID = containerCreateResp.ID
+	}
+
+	log.Printf("Contenedor %s iniciado (ID=%s)", containerName, containerCreateResp.ID)
+	d.sendLogsMessage(outputChan, fmt.Sprintf("Contenedor %s iniciado (ID=%s)", containerName, containerCreateResp.ID))
+
+	time.Sleep(2 * time.Second)
+
+	insp, err := d.client.ContainerInspect(ctx, containerCreateResp.ID)
+	if err != nil {
+		d.sendErrorMessage(outputChan, fmt.Sprintf("Error inspecting container: %v", err))
+		d.extractContainerLogs(ctx, containerCreateResp.ID, outputChan)
+		return nil, fmt.Errorf("error inspecting container: %v", err)
+	}
+
+	// Convertir la estructura a JSON con indentación para una mejor legibilidad
+	inspJSON, err := json.MarshalIndent(insp, "", "  ")
+	if err != nil {
+		log.Printf("Error al formatear inspect: %v", err)
+	} else {
+		log.Printf("Contenedor %s inspeccionado:\n%s", containerName, string(inspJSON))
+	}
+	portKey := nat.Port("50051/tcp")
+	bindings, ok := insp.NetworkSettings.Ports[portKey]
+	if !ok || len(bindings) == 0 {
+		d.sendErrorMessage(outputChan, fmt.Sprintf("No se encontraron bindings para el puerto %s", portKey))
+		d.extractContainerLogs(ctx, containerCreateResp.ID, outputChan)
+		d.sendErrorMessage(outputChan, fmt.Sprintf("Insp json: %s", string(inspJSON)))
+		return nil, fmt.Errorf("no se pudieron obtener los bindings para %s", portKey)
+	}
+	hostPort := bindings[0].HostPort
+	log.Printf("Contenedor %s escuchando en puerto %s", containerName, hostPort)
+	d.sendLogsMessage(outputChan, fmt.Sprintf("Contenedor %s escuchando en puerto %s", containerName, hostPort))
+
+	if !ok || len(bindings) == 0 || bindings[0].HostPort == "" {
+		// Imprimir todas las claves disponibles en el mapa para depurar
+		for key, b := range insp.NetworkSettings.Ports {
+			log.Printf("Clave de puerto: %s, bindings: %+v", key, b)
+		}
+		d.extractContainerLogs(ctx, containerCreateResp.ID, outputChan)
+		return nil, fmt.Errorf("No port is exposed in binding")
+	}
+
+	log.Printf("Contenedor %s escuchando en puerto %s", containerName, hostPort)
+	d.sendLogsMessage(outputChan, fmt.Sprintf("Contenedor %s escuchando en puerto %s", containerName, hostPort))
+
+	// Usar el nombre del servicio del worker como dirección, gracias a la red de Docker Compose.
+	// TODO: Mirar si es accesible desde el exterior con el nombre del servicio y no localhost.
+	hostAddress := d.dockerCfg.WorkerHost
+	endpoint := &domain.WorkerEndpoint{
+		WorkerID: fmt.Sprintf("%s-%s", d.task.Name, service.Name),
+		Address:  hostAddress,
+		Port:     hostPort,
+	}
+
+	log.Printf("Endpoint configurado: %+v", endpoint)
+	d.sendLogsMessage(outputChan, fmt.Sprintf("Contenedor accesible en %s:%s", hostAddress, hostPort))
+
+	return endpoint, nil
+}
+
+func (d *DockerWorker) extractContainerLogs(ctx context.Context, containerID string, outputChan chan<- domain.ProcessOutput) {
+	logsOptions := container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       "all",
+	}
+	out, err := d.client.ContainerLogs(ctx, containerID, logsOptions)
+	if err != nil {
+		d.sendErrorMessage(outputChan, fmt.Sprintf("error obteniendo logs del contenedor %s: %v", containerID, err))
+		return
+	}
+	defer out.Close()
+	data, err := io.ReadAll(out)
+	if err != nil {
+		d.sendErrorMessage(outputChan, fmt.Sprintf("error leyendo logs del contenedor %s: %v", containerID, err))
+		return
+	}
+	d.sendLogsMessage(outputChan, fmt.Sprintf("[Worker] Logs del contenedor %s:\n%s", containerID, string(data)))
+}
+
+// copyCertsToMainContainer copies the certificates from CertsVolumePath to the main service container.
+func (d *DockerWorker) copyCertsToMainContainer(outputChan chan<- domain.ProcessOutput) error {
+	// Check if composeSpec is loaded and has services
+	if d.composeSpec == nil || len(d.composeSpec.Services) == 0 {
+		return fmt.Errorf("compose specification not loaded or no services defined")
+	}
+	if d.mainServiceName == "" {
+		return fmt.Errorf("main service name not defined")
+	}
+	// Get the container ID for the main service
+	containerID := d.mainContainerID
+	if containerID == "" {
+		return fmt.Errorf("container id for main service '%s' not defined", d.mainServiceName)
+	}
+
+	// Get all files in CertsVolumePath
+	files, err := os.ReadDir(d.dockerCfg.CertsVolumePath)
+	if err != nil {
+		d.sendErrorMessage(outputChan, fmt.Sprintf("Error reading certs directory: %v", err))
+		return fmt.Errorf("error reading certs directory: %w", err)
+	}
+	log.Printf("Copying certs to container: %s", containerID)
+	d.sendLogsMessage(outputChan, fmt.Sprintf("Copying certs to container: %s", containerID))
+
+	// Copy each file to the container
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		localFilePath := filepath.Join(d.dockerCfg.CertsVolumePath, file.Name())
+		containerPath := d.dockerCfg.CertsMountPath
+		if err := copyFileToContainer(d.client, containerID, containerPath, localFilePath); err != nil {
+			d.sendErrorMessage(outputChan, fmt.Sprintf("Error copying %s to container: %v", file.Name(), err))
+			return fmt.Errorf("error copying %s to container: %w", file.Name(), err)
+		}
+		log.Printf("Copied file: %s", file.Name())
+		d.sendLogsMessage(outputChan, fmt.Sprintf("Copied file: %s", file.Name()))
+	}
+
+	return nil
+}
+
+// toExposedPorts converts []types.ServicePortConfig to nat.PortSet
+func toExposedPorts(ports []types.ServicePortConfig) (nat.PortSet, error) {
+	exposedPorts := nat.PortSet{}
+	for _, portConfig := range ports {
+		protocol := "tcp"
+		if portConfig.Protocol != "" {
+			protocol = portConfig.Protocol
+		}
+
+		targetPort := fmt.Sprintf("%d/%s", portConfig.Target, protocol)
+		exposedPort, err := nat.NewPort(protocol, fmt.Sprintf("%d", portConfig.Target))
+		if err != nil {
+			return nil, fmt.Errorf("error creating nat.Port: %w", err)
+		}
+		exposedPorts[exposedPort] = struct{}{}
+
+		log.Printf("Exposing port: %s", targetPort)
+	}
+	return exposedPorts, nil
+}
+
+// toPortBindings converts []types.ServicePortConfig to nat.PortMap
+func toPortBindings(ports []types.ServicePortConfig) (nat.PortMap, error) {
+	portMap := nat.PortMap{}
+	for _, portConfig := range ports {
+		protocol := "tcp"
+		if portConfig.Protocol != "" {
+			protocol = portConfig.Protocol
+		}
+
+		containerPort, err := nat.NewPort(protocol, fmt.Sprintf("%d", portConfig.Target))
+		if err != nil {
+			return nil, fmt.Errorf("error creating nat.Port: %w", err)
+		}
+
+		portBinding := nat.PortBinding{}
+		if portConfig.Published != "" {
+			portBinding.HostPort = fmt.Sprintf("%d", portConfig.Published)
+		}
+		if portConfig.HostIP != "" {
+			portBinding.HostIP = portConfig.HostIP
+		}
+		log.Printf("Binding port: %s %s", containerPort, portBinding.HostPort)
+
+		portMap[containerPort] = append(portMap[containerPort], portBinding)
+	}
+	return portMap, nil
+}
+
+// copyFileToContainer empaqueta un archivo en tar y lo copia al contenedor.
+func copyFileToContainer(cli *dockerclient.Client, containerID, containerPath, localFilePath string) error {
+	// Abrir el archivo local.
+	file, err := os.Open(localFilePath)
+	if err != nil {
+		return fmt.Errorf("error abriendo archivo %s: %w", localFilePath, err)
+	}
+	defer file.Close()
+
+	// Crear un buffer para el archivo tar.
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+
+	stat, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("error obteniendo info del archivo %s: %w", localFilePath, err)
+	}
+
+	// Crear la cabecera del tar.
+	header, err := tar.FileInfoHeader(stat, "")
+	if err != nil {
+		return fmt.Errorf("error creando cabecera tar: %w", err)
+	}
+	// Se define el nombre dentro del contenedor.
+	header.Name = filepath.Base(localFilePath)
+
+	if err := tw.WriteHeader(header); err != nil {
+		return fmt.Errorf("error escribiendo cabecera tar: %w", err)
+	}
+	if _, err := io.Copy(tw, file); err != nil {
+		return fmt.Errorf("error copiando contenido a tar: %w", err)
+	}
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("error cerrando escritor tar: %w", err)
+	}
+
+	options := container.CopyToContainerOptions{
+		AllowOverwriteDirWithFile: true,
+	}
+
+	if err := cli.CopyToContainer(context.Background(), containerID, containerPath, &buf, options); err != nil {
+		return fmt.Errorf("error copiando al contenedor: %w", err)
+	}
+	return nil
+}
+
+func (d *DockerWorker) deployWithDockerConfig(ctx context.Context, outputChan chan<- domain.ProcessOutput) (*domain.WorkerEndpoint, error) {
+	jwtSecret := "test_secret_key_for_development_1234567890"
 	baseEnvs := map[string]string{
-		"SERVER_CERT_PATH": "/certs/remote_process-cert.pem",
-		"SERVER_KEY_PATH":  "/certs/remote_process-key.pem",
-		"CA_CERT_PATH":     "/certs/ca-cert.pem",
+		"SERVER_CERT_PATH": filepath.Join(d.dockerCfg.CertsMountPath, filepath.Base(d.grpcConfig.ServerCertPath)),
+		"SERVER_KEY_PATH":  filepath.Join(d.dockerCfg.CertsMountPath, filepath.Base(d.grpcConfig.ServerKeyPath)),
+		"CA_CERT_PATH":     filepath.Join(d.dockerCfg.CertsMountPath, filepath.Base(d.grpcConfig.CACertPath)),
 		"APPLICATION_PORT": "50051",
 		"ENV":              d.grpcConfig.Environment,
+		"JWT_SECRET":       jwtSecret,
 	}
 
-	// JWT configuration
-	jwtSecret := "test_secret_key_for_development_1234567890"
-	if d.grpcConfig.JWTSecret != "" {
-		jwtSecret = d.grpcConfig.JWTSecret
+	if jwtSecret == "" {
+		d.sendErrorMessage(outputChan, "JWT_SECRET no configurado")
+		return nil, fmt.Errorf("JWT_SECRET no configurado")
 	}
 
-	// Crear el manejador JWT y generar un nuevo token
 	jwtManager := security.NewJWTManager(jwtSecret)
 	token, err := jwtManager.GenerateToken("admin")
 	if err != nil {
@@ -118,33 +581,13 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 		return nil, fmt.Errorf("error generando token JWT: %v", err)
 	}
 
-	// Configurar las variables de entorno JWT
+	d.grpcConfig.JWTToken = token
+	log.Printf("Token JWT generado y configurado para autenticación With JWT: %s", token[4:])
 	baseEnvs["JWT_SECRET"] = jwtSecret
-	d.grpcConfig.JWTToken = token // Guardar el token generado para uso posterior
-	log.Printf("Token JWT generado y configurado para autenticación")
-
-	// Verificar que los certificados existen antes de continuar
-	requiredCerts := []string{
-		"remote_process-cert.pem",
-		"remote_process-key.pem",
-		"ca-cert.pem",
-		"worker-cert.pem",
-		"worker-key.pem",
-	}
-
-	for _, cert := range requiredCerts {
-		certPath := filepath.Join(certsPath, cert)
-		if _, err := os.Stat(certPath); os.IsNotExist(err) {
-			errMsg := fmt.Sprintf("Certificado requerido no encontrado: %s", certPath)
-			d.sendErrorMessage(outputChan, errMsg)
-			return nil, fmt.Errorf(errMsg)
-		}
-		log.Printf("Certificado verificado: %s", cert)
-	}
 
 	workerImage := d.task.WorkerSpec.Image
 	if workerImage == "" {
-		workerImage = "posts_mpv-remote-process:latest"
+		workerImage = d.dockerCfg.DefaultImage
 	}
 
 	containerCfg := &container.Config{
@@ -152,14 +595,13 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 		Env:          buildEnvVars(baseEnvs),
 		ExposedPorts: nat.PortSet{"50051/tcp": struct{}{}},
 		Healthcheck: &container.HealthConfig{
-			Test:     []string{"CMD", "/app/grpc_health_check.sh"},
-			Interval: 3 * time.Second,
-			Timeout:  5 * time.Second,
-			Retries:  2,
+			Test:     d.dockerCfg.HealthCheck.Test,
+			Interval: d.dockerCfg.HealthCheck.Interval,
+			Timeout:  d.dockerCfg.HealthCheck.Timeout,
+			Retries:  d.dockerCfg.HealthCheck.Retries,
 		},
 	}
 
-	// Configuración del host con volumen de certificados
 	hostCfg := &container.HostConfig{
 		PortBindings: nat.PortMap{
 			"50051/tcp": []nat.PortBinding{{
@@ -167,19 +609,14 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 				HostPort: "", // Puerto dinámico
 			}},
 		},
-		Binds: []string{
-			fmt.Sprintf("%s:/certs:ro", certsPath), // Montar certificados como read-only
-		},
-		NetworkMode: "bridge",
+		NetworkMode: network.NetworkBridge,
 	}
 
-	// Log detallado de la configuración
 	log.Printf("Configuración del contenedor:")
-	log.Printf("- Volumen de certificados: %s:/certs:ro", certsPath)
+	log.Printf("- Imagen: %s", workerImage)
 	log.Printf("- Variables de entorno: %+v", baseEnvs)
 	log.Printf("- Configuración de red: %s", hostCfg.NetworkMode)
 
-	// Si hay un working directory en la spec, asegurarse de que sea absoluto
 	if d.task.WorkerSpec.WorkingDir != "" {
 		absWorkingDir, err := d.toAbsolutePath(d.task.WorkerSpec.WorkingDir)
 		if err != nil {
@@ -189,36 +626,31 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 		}
 	}
 
-	// Ajuste de timeout de 60s
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	// Verificar si existe algún contenedor anterior con el mismo nombre y eliminarlo
 	containerName := fmt.Sprintf("task-%s", d.task.Name)
 	if err := d.cleanupExistingContainer(ctx, containerName); err != nil {
 		d.sendLogsMessage(outputChan, fmt.Sprintf("Warning al limpiar contenedor anterior: %v", err))
 	}
 
-	// Verificar si la imagen existe localmente antes de intentar pull
 	_, _, err = d.client.ImageInspectWithRaw(ctx, workerImage)
 	if err != nil {
-		// Si la imagen no existe localmente, intentar pull
 		d.sendLogsMessage(outputChan, fmt.Sprintf("Imagen %s no encontrada localmente, intentando pull...", workerImage))
 		reader, err := d.client.ImagePull(ctx, workerImage, image.PullOptions{})
 		if err != nil {
-			// Si falla el pull, enviar mensaje pero continuar (podría existir localmente con otro tag)
 			d.sendLogsMessage(outputChan, fmt.Sprintf("No se pudo hacer pull de la imagen %q: %v", workerImage, err))
 		} else {
 			defer reader.Close()
-			// Esperar a que termine el pull
-			_, _ = io.Copy(io.Discard, reader)
+			if _, err := io.Copy(io.Discard, reader); err != nil {
+				d.sendLogsMessage(outputChan, fmt.Sprintf("Error durante el pull de la imagen: %v", err))
+			}
 		}
 	}
 
 	log.Printf("Usando imagen %s", workerImage)
 	d.sendLogsMessage(outputChan, fmt.Sprintf("Usando imagen %s", workerImage))
 
-	// Crear y arrancar el contenedor
 	resp, err := d.client.ContainerCreate(
 		ctx,
 		containerCfg,
@@ -232,24 +664,16 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 		return nil, fmt.Errorf("error creando contenedor Docker: %v", err)
 	}
 
-	// Iniciar contenedor
 	if err := d.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		d.sendErrorMessage(outputChan, fmt.Sprintf("Error iniciando contenedor: %v", err))
 		return nil, fmt.Errorf("error iniciando contenedor Docker: %v", err)
 	}
+
 	log.Printf("Contenedor %s iniciado (ID=%s)", containerName, resp.ID)
 	d.sendLogsMessage(outputChan, fmt.Sprintf("Contenedor %s iniciado (ID=%s)", containerName, resp.ID))
 
-	// Esperar un momento para que el contenedor esté completamente iniciado
 	time.Sleep(2 * time.Second)
 
-	// Después de iniciar el contenedor, verificar que los certificados están montados
-	if err := d.verifyContainerCerts(ctx, resp.ID); err != nil {
-		d.sendErrorMessage(outputChan, fmt.Sprintf("Error verificando certificados en contenedor: %v", err))
-		return nil, err
-	}
-
-	// Inspeccionar contenedor para obtener el puerto
 	insp, err := d.client.ContainerInspect(ctx, resp.ID)
 	if err != nil {
 		d.sendErrorMessage(outputChan, fmt.Sprintf("Error inspeccionando contenedor: %v", err))
@@ -273,10 +697,9 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 	}
 	d.sendLogsMessage(outputChan, fmt.Sprintf("Docker Config: %+v", d.dockerCfg))
 
-	// Guardamos el endpoint
 	d.endpoint = &domain.WorkerEndpoint{
 		WorkerID: d.task.Name,
-		Address:  hostAddress,
+		Address:  hostAddress, // Usar el nombre del servicio
 		Port:     hostPort,
 	}
 
@@ -286,7 +709,6 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 	return d.endpoint, nil
 }
 
-// sendErrorMessage reenvía un mensaje de error al outputChan si está disponible
 func (d *DockerWorker) sendErrorMessage(outputChan chan<- domain.ProcessOutput, errMsg string) {
 	if outputChan == nil {
 		return
@@ -310,7 +732,6 @@ func (d *DockerWorker) sendLogsMessage(outputChan chan<- domain.ProcessOutput, m
 	}
 }
 
-// buildEnvVars convierte un map en un slice de "KEY=VALUE".
 func buildEnvVars(env map[string]string) []string {
 	var result []string
 	for k, v := range env {
@@ -319,23 +740,10 @@ func buildEnvVars(env map[string]string) []string {
 	return result
 }
 
-// mergeEnvs mezcla dos mapas, teniendo prioridad el override.
-func mergeEnvs(base, override map[string]string) map[string]string {
-	newMap := make(map[string]string, len(base)+len(override))
-	for k, v := range base {
-		newMap[k] = v
-	}
-	for k, v := range override {
-		newMap[k] = v
-	}
-	return newMap
-}
-
-// Run levantará el contenedor Docker y llamará a StartProcess.
 func (d *DockerWorker) Run(ctx context.Context, t domain.TaskExecution, outputChan chan<- domain.ProcessOutput) error {
 	log.Printf("Iniciando Run para tarea: %s", t.ID)
 
-	grpcClient, err := d.createGRPCClient()
+	grpcClient, err := d.createGRPCClient(outputChan) // Pasamos outputChan
 	if err != nil {
 		d.sendErrorMessage(outputChan, fmt.Sprintf("Error creando cliente gRPC: %v", err))
 		return fmt.Errorf("error creating gRPC client: %w", err)
@@ -354,7 +762,6 @@ func (d *DockerWorker) Run(ctx context.Context, t domain.TaskExecution, outputCh
 	log.Printf("WorkingDir: %s", d.task.WorkerSpec.WorkingDir)
 	d.sendLogsMessage(outputChan, fmt.Sprintf("WorkingDir: %s", d.task.WorkerSpec.WorkingDir))
 
-	// Llamar al proceso remoto con timeout
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -373,28 +780,77 @@ func (d *DockerWorker) Run(ctx context.Context, t domain.TaskExecution, outputCh
 	return nil
 }
 
-// Stop detiene y limpia el contenedor
 func (d *DockerWorker) Stop(ctx context.Context) (bool, string, error) {
-	if d.endpoint == nil {
-		return true, "No hay contenedor que detener", nil
+	if d.composeSpec != nil {
+		// If using Compose, remove the entire project
+		if err := d.stopComposeProject(ctx); err != nil {
+			return false, "", err
+		}
+		return true, fmt.Sprintf("Project %s stopped and removed", d.composeSpec.Name), nil
+	} else {
+		// If not using Compose, fall back to the previous behavior of removing a single container
+		if d.endpoint == nil {
+			return true, "No hay contenedor que detener", nil
+		}
+
+		containerName := fmt.Sprintf("task-%s", d.task.Name)
+		if err := d.cleanupExistingContainer(ctx, containerName); err != nil {
+			return false, "", fmt.Errorf("error deteniendo contenedor: %v", err)
+		}
+		return true, fmt.Sprintf("Contenedor %s detenido y eliminado", containerName), nil
 	}
 
-	containerName := fmt.Sprintf("task-%s", d.task.Name)
-	if err := d.cleanupExistingContainer(ctx, containerName); err != nil {
-		return false, "", fmt.Errorf("error deteniendo contenedor: %v", err)
-	}
-
-	return true, fmt.Sprintf("Contenedor %s detenido y eliminado", containerName), nil
 }
 
-// StartMonitoring inicia la monitorización de salud - se mantiene igual
-func (d *DockerWorker) StartMonitoring(ctx context.Context, checkInterval int64, healthChan chan<- *domain.ProcessHealthStatus) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+func (d *DockerWorker) stopComposeProject(ctx context.Context) error {
+	// Remove containers
+	for _, service := range d.composeSpec.Services {
+		if err := d.cleanupExistingContainer(ctx, fmt.Sprintf("task-%s-%s", d.task.Name, service.Name)); err != nil {
+			return err
+		}
+	}
 
-	grpcClient, err := d.createGRPCClient()
+	// Remove networks
+	for networkName := range d.composeSpec.Networks {
+		// List networks with filter
+		networks, err := d.client.NetworkList(ctx, network.ListOptions{
+			Filters: filters.NewArgs(filters.Arg("name", networkName)),
+		})
+		if err != nil {
+			return err
+		}
+		// Remove only the network with the same name
+		for _, net := range networks {
+			if net.Name == networkName {
+				err := d.client.NetworkRemove(ctx, net.ID)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+	}
+
+	// Remove volumes
+	var volumeFilters = filters.NewArgs(filters.Arg("label", fmt.Sprintf("%s=%s", "com.docker.compose.project", d.composeSpec.Name)))
+	volumes, err := d.client.VolumeList(ctx, volume.ListOptions{Filters: volumeFilters})
 	if err != nil {
-		return fmt.Errorf("error creating gRPC client for stop: %w", err)
+		return fmt.Errorf("error listing volumes: %w", err)
+	}
+	for _, volume := range volumes.Volumes {
+		err = d.client.VolumeRemove(ctx, volume.Name, true)
+		if err != nil {
+			return fmt.Errorf("error removing volume %s: %w", volume.Name, err)
+		}
+	}
+
+	return nil
+}
+
+func (d *DockerWorker) StartMonitoring(ctx context.Context, checkInterval int64, healthChan chan<- *domain.ProcessHealthStatus) error {
+	grpcClient, err := d.createGRPCClient(nil) // No necesitamos outputChan aquí
+	if err != nil {
+		return fmt.Errorf("error creating gRPC client for monitoring: %w", err)
 	}
 	err = grpcClient.MonitorHealth(ctx, d.endpoint.WorkerID, checkInterval, healthChan)
 	if err != nil {
@@ -403,29 +859,30 @@ func (d *DockerWorker) StartMonitoring(ctx context.Context, checkInterval int64,
 	return nil
 }
 
-func (d *DockerWorker) createGRPCClient() (*grpc.RPSClient, error) {
+func (d *DockerWorker) createGRPCClient(outputChan chan<- domain.ProcessOutput) (*grpc.RPSClient, error) {
 	if d.endpoint == nil {
 		return nil, fmt.Errorf("endpoint no inicializado")
 	}
 
-	// Configuración que coincide con el servidor remote_process
+	// d.dockerCfg.WorkerHost en lugar de d.endpoint.Address
+	address := fmt.Sprintf("%s:%s", d.dockerCfg.WorkerHost, d.endpoint.Port)
 	rpcClientConfig := &grpc.RemoteProcessClientConfig{
-		Address:    fmt.Sprintf("%s:%s", d.endpoint.Address, d.endpoint.Port),
-		ClientCert: d.grpcConfig.ClientCertPath, // Certificado del cliente
-		ClientKey:  d.grpcConfig.ClientKeyPath,  // Llave del cliente
-		CACert:     d.grpcConfig.CACertPath,     // Certificado de CA
+		Address:    address, // Usamos la dirección construida
+		ClientCert: filepath.Join(d.dockerCfg.CertsMountPath, filepath.Base(d.grpcConfig.ClientCertPath)),
+		ClientKey:  filepath.Join(d.dockerCfg.CertsMountPath, filepath.Base(d.grpcConfig.ClientKeyPath)),
+		CACert:     filepath.Join(d.dockerCfg.CertsMountPath, filepath.Base(d.grpcConfig.CACertPath)),
 		AuthToken:  d.grpcConfig.JWTToken,
 	}
 
 	log.Printf("Configuración cliente gRPC: %+v", rpcClientConfig)
+	// Solo loguear a outputChan si es proporcionado (para evitar nil pointer)
+	if outputChan != nil {
+		d.sendLogsMessage(outputChan, fmt.Sprintf("Configuración cliente gRPC: %+v", rpcClientConfig))
+	}
+
 	return grpc.New(rpcClientConfig)
 }
 
-func (w *DockerWorker) GetEndpoint() *domain.WorkerEndpoint {
-	return w.endpoint
-}
-
-// cleanupExistingContainer elimina un contenedor si existe
 func (d *DockerWorker) cleanupExistingContainer(ctx context.Context, containerName string) error {
 	containers, err := d.client.ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
@@ -434,9 +891,7 @@ func (d *DockerWorker) cleanupExistingContainer(ctx context.Context, containerNa
 
 	for _, cont := range containers {
 		for _, name := range cont.Names {
-			// Los nombres de Docker empiezan con /, así que comparamos sin él
 			if name == "/"+containerName {
-				// Si el contenedor está corriendo, intentar detenerlo primero
 				if cont.State == "running" {
 					timeout := 10 * time.Second
 					timeoutSeconds := int(timeout.Seconds())
@@ -444,7 +899,6 @@ func (d *DockerWorker) cleanupExistingContainer(ctx context.Context, containerNa
 						log.Printf("Error deteniendo contenedor %s: %v", cont.ID, err)
 					}
 				}
-				// Eliminar el contenedor
 				if err := d.client.ContainerRemove(ctx, cont.ID, container.RemoveOptions{
 					Force:         true,
 					RemoveVolumes: true,
@@ -459,57 +913,6 @@ func (d *DockerWorker) cleanupExistingContainer(ctx context.Context, containerNa
 	return nil
 }
 
-// Método auxiliar para verificar si un contenedor existe
-func (d *DockerWorker) containerExists(ctx context.Context, containerName string) (bool, string) {
-	containers, err := d.client.ContainerList(ctx, container.ListOptions{All: true})
-	if err != nil {
-		return false, ""
-	}
-
-	for _, cont := range containers {
-		for _, name := range cont.Names {
-			if name == "/"+containerName {
-				return true, cont.ID
-			}
-		}
-	}
-	return false, ""
-}
-
-// getAbsoluteCertsPath convierte una ruta relativa en absoluta y verifica los certificados
-func (d *DockerWorker) getAbsoluteCertsPath(relativePath string) (string, error) {
-	var certsPath string
-
-	// Si tenemos una ruta configurada, usarla
-	if d.dockerCfg.CertsVolumePath != "" {
-		if filepath.IsAbs(d.dockerCfg.CertsVolumePath) {
-			certsPath = d.dockerCfg.CertsVolumePath
-		} else {
-			absPath, err := filepath.Abs(d.dockerCfg.CertsVolumePath)
-			if err != nil {
-				return "", fmt.Errorf("error convirtiendo ruta configurada a absoluta: %v", err)
-			}
-			certsPath = absPath
-		}
-	} else {
-		// Si no hay configuración, usar la ruta relativa proporcionada
-		absPath, err := filepath.Abs(relativePath)
-		if err != nil {
-			return "", fmt.Errorf("error convirtiendo a ruta absoluta: %v", err)
-		}
-		certsPath = absPath
-	}
-
-	// Verificar que el directorio existe
-	if _, err := os.Stat(certsPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("directorio de certificados no existe: %s", certsPath)
-	}
-
-	log.Printf("Ruta absoluta de certificados verificada: %s", certsPath)
-	return certsPath, nil
-}
-
-// toAbsolutePath es un helper genérico para convertir cualquier ruta a absoluta
 func (d *DockerWorker) toAbsolutePath(path string) (string, error) {
 	if path == "" {
 		return "", nil
@@ -522,76 +925,4 @@ func (d *DockerWorker) toAbsolutePath(path string) (string, error) {
 		return "", fmt.Errorf("error convirtiendo a ruta absoluta: %v", err)
 	}
 	return absPath, nil
-}
-
-// Función helper para verificar permisos de archivos
-func verifyFilePermissions(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("error verificando archivo: %v", err)
-	}
-
-	mode := info.Mode()
-	if mode.Perm()&0444 == 0 { // Verificar si es legible
-		return fmt.Errorf("el archivo no tiene permisos de lectura: %s", path)
-	}
-
-	return nil
-}
-
-// Nuevo método para verificar los certificados en el contenedor
-func (d *DockerWorker) verifyContainerCerts(ctx context.Context, containerID string) error {
-	// Verificar que el contenedor esté en ejecución
-	cont, err := d.client.ContainerInspect(ctx, containerID)
-	if err != nil {
-		return fmt.Errorf("error inspeccionando contenedor para verificar certificados: %v", err)
-	}
-
-	if !cont.State.Running {
-		return fmt.Errorf("el contenedor no está en ejecución para verificar certificados")
-	}
-
-	// Ejecutar ls en el directorio de certificados dentro del contenedor
-	execConfig := types.ExecConfig{
-		Cmd:          []string{"ls", "-l", "/certs"},
-		AttachStdout: true,
-		AttachStderr: true,
-		Tty:          false,
-	}
-
-	execResp, err := d.client.ContainerExecCreate(ctx, containerID, execConfig)
-	if err != nil {
-		return fmt.Errorf("error creando exec para verificar certs: %v", err)
-	}
-
-	// Adjuntar al exec para obtener la salida
-	attach, err := d.client.ContainerExecAttach(ctx, execResp.ID, types.ExecStartCheck{})
-	if err != nil {
-		return fmt.Errorf("error adjuntando a exec: %v", err)
-	}
-	defer attach.Close()
-
-	// Leer la salida
-	output, err := io.ReadAll(attach.Reader)
-	if err != nil {
-		return fmt.Errorf("error leyendo salida de exec: %v", err)
-	}
-
-	// Verificar que la salida contiene los archivos esperados
-	outputStr := string(output)
-	log.Printf("Certificados en contenedor:\n%s", outputStr)
-
-	requiredCerts := []string{
-		"remote_process-cert.pem",
-		"remote_process-key.pem",
-		"ca-cert.pem",
-	}
-
-	for _, cert := range requiredCerts {
-		if !strings.Contains(outputStr, cert) {
-			return fmt.Errorf("certificado %s no encontrado en el contenedor", cert)
-		}
-	}
-
-	return nil
 }

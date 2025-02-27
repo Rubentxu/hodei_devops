@@ -205,8 +205,33 @@ func (w *Worker) processTask(op ports.TaskOperation) {
 	// Notificar que el worker está iniciando
 	sendOutput(op.OutputChan, taskID, TypeInfo,
 		"Iniciando worker...", false, domain.RUNNING)
+	const defaultComposeTemplate = `
+name: ${PROJECT_NAME} 
+services:
+  worker:
+    image: "${MY_IMAGE}"
+    container_name: "${PROJECT_NAME}-worker"
+    environment:
+      - PROJECT_NAME=${PROJECT_NAME}
+      - WORKER_NAME=${PROJECT_NAME}-worker
+      - WORKER_HOST=worker-${PROJECT_NAME}
+      - ENV=${APP_ENV}
+      - JWT_SECRET=${JWT_SECRET}
+      - SERVER_CERT_PATH=/certs/remote_process-cert.pem
+      - SERVER_KEY_PATH=/certs/remote_process-key.pem
+      - CA_CERT_PATH=/certs/ca-cert.pem
+      - APPLICATION_PORT=50051
+    ports:
+      - ":50051"
+    networks:
+      - workers
 
-	endpoint, err := workerInstance.Start(op.Ctx, "", op.OutputChan)
+networks:
+  workers:
+    driver: bridge
+`
+
+	endpoint, err := workerInstance.Start(op.Ctx, defaultComposeTemplate, op.OutputChan)
 	if err != nil {
 		state.SetState(domain.ERROR)
 		sendOutput(op.OutputChan, taskID, TypeError,

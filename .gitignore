@@ -132,3 +132,4 @@ k8s/
 # Pocketbase files
 *.pb
 test_pb_data/
+hodei-chart/certs/

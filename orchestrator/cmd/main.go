@@ -74,7 +74,29 @@ func main() {
 		return e.Next()
 	})
 
-	// Iniciar PocketBase
+	// Determinar la dirección de escucha - usar 0.0.0.0 para permitir conexiones externas
+	bindAddr := os.Getenv("PB_ADDR")
+	if bindAddr == "" {
+		bindAddr = "0.0.0.0:8090"
+	}
+
+	// Start server
+	log.Printf("Server starting at %s", bindAddr)
+	log.Printf("├─ REST API:  http://%s/api/", bindAddr)
+	log.Printf("└─ Dashboard: http://%s/_/", bindAddr)
+
+	// Check if PB_SKIP_INIT is set; if not, print superuser creation instructions
+	if os.Getenv("PB_SKIP_INIT") != "true" {
+		log.Printf("(!) Launch the URL below in the browser if it hasn't been open already to create your first superuser account:")
+		log.Printf("http://localhost:8090/_/#/pbinstal/%%s", "<TOKEN>")
+		log.Printf("(you can also create your first superuser by running: /app/orchestrator superuser upsert EMAIL PASS)")
+	}
+
+	// Configure the server via environment
+	if err := os.Setenv("SERVE_HTTP", bindAddr); err != nil {
+		log.Fatal(err)
+	}
+
 	if err := app.Start(); err != nil {
 		log.Fatal(err)
 	}

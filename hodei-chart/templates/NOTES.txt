@@ -1,12 +1,8 @@
 Thank you for installing {{ .Chart.Name }}.
-
 Your release is named {{ .Release.Name }}.
-
 To get the application URL, run these commands:
-{{- if .Values.ingress.enabled }}
-{{- range $host := .Values.ingress.hosts }}
-  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}/
-{{- end }}
+{{- if and .Values.endpoints.enabled (eq .Values.endpoints.type "ingress") }}
+  http{{ if .Values.endpoints.tls.enabled }}s{{ end }}://{{ .Values.endpoints.host }}/
 {{- else }}
   export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "hodei-devops.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -o jsonpath="{.items[0].metadata.name}")
   export CONTAINER_PORT=$(kubectl get pod --namespace {{ .Release.Namespace }} $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
@@ -15,8 +11,8 @@ To get the application URL, run these commands:
 {{- end }}
 
 Services deployed:
-- Remote Process: {{ .Release.Name }}-remote-process:50051
-- Worker: {{ .Release.Name }}-worker:8080
+- Orchestrator: {{ include "hodei-devops.fullname" . }}-orchestrator:{{ .Values.orchestrator.service.ports.http }}
+- Remote Process Worker: {{ include "hodei-devops.fullname" . }}-remote-process-worker:{{ .Values.remote_process_worker.service.port }}
 
 For more information about Hodei DevOps, please visit:
 https://github.com/your-org/hodei-devops

@@ -27,8 +27,8 @@ type GRPCConfig struct {
 	// Certificados y claves
 	ServerCertPath string // Para remote-process
 	ServerKeyPath  string // Para remote-process
-	ClientCertPath string // Para worker
-	ClientKeyPath  string // Para worker
+	ClientCertPath string // Para worker-client
+	ClientKeyPath  string // Para worker-client
 	CACertPath     string // Compartido
 
 	// Autenticación
@@ -55,6 +55,8 @@ type DockerConfig struct {
 	HealthCheck     HealthCheck
 	NetworkName     string        // Para asegurar que los contenedores están en la misma red
 	StopDelay       time.Duration // Tiempo de espera antes de parar el worker
+	WorkerHost      string        // Host del worker
+	MainServiceName string        // Nombre del servicio principal
 }
 
 // Config específica de Kubernetes
@@ -101,8 +103,8 @@ func Load() Config {
 			// Certificados
 			ServerCertPath: getEnv("SERVER_CERT_PATH", "/certs/remote_process-cert.pem"),
 			ServerKeyPath:  getEnv("SERVER_KEY_PATH", "/certs/remote_process-key.pem"),
-			ClientCertPath: getEnv("CLIENT_CERT_PATH", "/certs/worker-cert.pem"),
-			ClientKeyPath:  getEnv("CLIENT_KEY_PATH", "/certs/worker-key.pem"),
+			ClientCertPath: getEnv("CLIENT_CERT_PATH", "/certs/worker-client-cert.pem"),
+			ClientKeyPath:  getEnv("CLIENT_KEY_PATH", "/certs/worker-client-key.pem"),
 			CACertPath:     getEnv("CA_CERT_PATH", "/certs/ca-cert.pem"),
 
 			// Autenticación
@@ -116,10 +118,11 @@ func Load() Config {
 		Providers: ProvidersConfig{
 			Docker: DockerConfig{
 				Host:            getEnv("DOCKER_HOST", "unix:///var/run/docker.sock"),
-				DefaultImage:    getEnv("DOCKER_DEFAULT_IMAGE", "posts_mpv-remote-process:latest"),
+				WorkerHost:      getEnv("WORKER_HOST", "localhost"),
+				DefaultImage:    getEnv("WORKER_IMAGE", "hodei/remote-process-worker:latest"), // Actualizado para usar la imagen correcta
 				CertsVolumePath: getEnv("DOCKER_CERTS_PATH", defaultCertsPath),
 				CertsMountPath:  "/certs",
-				NetworkName:     getEnv("DOCKER_NETWORK", "devops-platform_default"),
+				NetworkName:     getEnv("DOCKER_NETWORK", "posts_mpv_default"),
 				StopDelay:       getDurationEnv("DOCKER_STOP_DELAY", 10*time.Second),
 				HealthCheck: HealthCheck{
 					Test:     []string{"CMD", "/app/grpc_health_check.sh"},

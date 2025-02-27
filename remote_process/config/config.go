@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 )
 
 func GetEnv() string {
@@ -46,28 +47,90 @@ func LoadTLSConfig() (*TLSConfig, error) {
 
 // ConfigureServerTLS configura el TLS para el servidor gRPC
 func (c *TLSConfig) ConfigureServerTLS() (*tls.Config, error) {
+	// Verificar variables de entorno
+	log.Printf("🔐 Configuración TLS:")
+	log.Printf("- SERVER_CERT_PATH: %s", c.ServerCertPath)
+	log.Printf("- SERVER_KEY_PATH: %s", c.ServerKeyPath)
+	log.Printf("- CA_CERT_PATH: %s", c.CACertPath)
+
+	// Verificar existencia de archivos
+	files := map[string]string{
+		"Certificado del Servidor": c.ServerCertPath,
+		"Llave del Servidor":       c.ServerKeyPath,
+		"Certificado CA":           c.CACertPath,
+	}
+
+	for desc, path := range files {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			// Listar contenido del directorio padre
+			dir := filepath.Dir(path)
+			files, err := os.ReadDir(dir)
+			fileList := "Archivos encontrados en " + dir + ":\n"
+			if err != nil {
+				fileList = "Error leyendo directorio: " + err.Error()
+			} else {
+				for _, file := range files {
+					fileList += fmt.Sprintf("  - %s\n", file.Name())
+				}
+			}
+			return nil, fmt.Errorf("❌ %s no encontrado en: %s\n%s", desc, path, fileList)
+		}
+	}
+
 	// Cargar certificado del servidor
 	certificate, err := tls.LoadX509KeyPair(c.ServerCertPath, c.ServerKeyPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load server certificate: %v", err)
+		return nil, fmt.Errorf("❌ Error cargando certificado del servidor:\n"+
+			"- Error: %v\n"+
+			"- Permisos SERVER_CERT: %s\n"+
+			"- Permisos SERVER_KEY: %s",
+			err,
+			getFilePermissions(c.ServerCertPath),
+			getFilePermissions(c.ServerKeyPath))
 	}
 
 	// Cargar CA cert
 	caCert, err := os.ReadFile(c.CACertPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read CA certificate: %v", err)
+		return nil, fmt.Errorf("❌ Error leyendo certificado CA:\n"+
+			"- Error: %v\n"+
+			"- Permisos CA_CERT: %s",
+			err,
+			getFilePermissions(c.CACertPath))
 	}
 
 	caCertPool := x509.NewCertPool()
 	if !caCertPool.AppendCertsFromPEM(caCert) {
-		return nil, fmt.Errorf("failed to append CA certificate")
+		// Verificar formato del certificado
+		return nil, fmt.Errorf("❌ Error añadiendo certificado CA al pool:\n"+
+			"- El archivo existe pero puede no ser un certificado PEM válido\n"+
+			"- Contenido del archivo (primeros 100 bytes): %s",
+			string(caCert[:min(len(caCert), 100)]))
 	}
 
-	// Configurar TLS
+	log.Println("✅ Certificados cargados correctamente")
+
 	return &tls.Config{
 		Certificates: []tls.Certificate{certificate},
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    caCertPool,
 		MinVersion:   tls.VersionTLS13,
 	}, nil
+}
+
+// Helper para obtener los permisos de un archivo
+func getFilePermissions(path string) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Sprintf("Error obteniendo permisos: %v", err)
+	}
+	return fmt.Sprintf("Mode: %v", info.Mode())
+}
+
+// Helper para min
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

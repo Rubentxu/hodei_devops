@@ -6,6 +6,20 @@ project:
 nameOverride: ""
 fullnameOverride: ""
 
+# Valores por defecto para la chart de hodei-devops
+replicaCount: 1
+
+# Configuración de los certificados
+certificados:
+  rutaBase: "certs"  # Relativa a la carpeta de la chart
+  ca: "ca-cert.pem"
+  worker:
+    cert: "worker-cert.pem"
+    key: "worker-key.pem"
+  remoteProcess:
+    cert: "remote_process-cert.pem"
+    key: "remote_process-key.pem"
+
 remote_process_worker:
   name: remote-process-worker
   image:

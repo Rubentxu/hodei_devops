@@ -5,7 +5,7 @@ PROTO_FILE = $(PROTO_DIR)/remote_process.proto
 GO_OUT = .
 
 # Directorios para certificados
-CERT_DIR := certs
+CERT_DIR := hodei-chart/certs
 DEV_CERT_DIR := $(CERT_DIR)/dev
 PROD_CERT_DIR := $(CERT_DIR)/prod
 
@@ -14,8 +14,8 @@ CA_KEY := ca-key.pem
 CA_CERT := ca-cert.pem
 SERVER_KEY := remote_process-key.pem
 SERVER_CERT := remote_process-cert.pem
-CLIENT_KEY := worker-key.pem
-CLIENT_CERT := worker-cert.pem
+CLIENT_KEY := worker-client-key.pem
+CLIENT_CERT := worker-client-cert.pem
 
 # Modificar las variables JWT
 JWT_SECRET ?= "test_secret_key_for_development_1234567890"
@@ -39,6 +39,30 @@ DOCKER_SOCKET ?= /var/run/docker.sock
 SWAGGER_UI_VERSION ?= v4.15.5
 SWAGGER_UI_DIR = orchestrator/swagger-ui
 API_DOCS_DIR = orchestrator/api
+
+# Detectar Sistema Operativo
+ifeq ($(OS),Windows_NT)
+    DETECTED_OS := Windows
+    # Ajuste de comandos para Windows
+    RM := del /F /Q
+    MKDIR := mkdir
+    RMDIR := rmdir /S /Q
+    CP := copy
+    SEP := \\
+else
+    DETECTED_OS := $(shell uname -s)
+    # Comandos para Linux/Mac
+    RM := rm -f
+    MKDIR := mkdir -p
+    RMDIR := rm -rf
+    CP := cp
+    SEP := /
+endif
+
+# Función para normalizar rutas según el SO
+define normalize_path
+$(subst /,$(SEP),$1)
+endef
 
 .PHONY: proto
 proto:
@@ -76,7 +100,13 @@ test-all: test test-integration
 .PHONY: clean
 clean: stop-remote_process stop-orchestrator
 	@echo "🧹 Limpiando binarios..."
-	rm -f bin/remote_process bin/orchestrator
+ifeq ($(DETECTED_OS),Windows)
+	@$(RM) bin$(SEP)remote_process.exe 2>NUL || true
+	@$(RM) bin$(SEP)orchestrator.exe 2>NUL || true
+	@$(RM) bin$(SEP)archiva-go.exe 2>NUL || true
+else
+	@$(RM) bin/remote_process bin/orchestrator bin/archiva-go 2>/dev/null || true
+endif
 
 .PHONY: build
 build:
@@ -85,14 +115,57 @@ build:
 	go build -o bin/orchestrator orchestrator/cmd/main.go
 	go build -o bin/archiva-go archiva_go/cmd/main.go
 
+# Directorios para certificados - Cross-platform
 .PHONY: certs-dirs
 certs-dirs:
 	@echo "🔐 Creating certificate directories..."
-	@mkdir -p $(DEV_CERT_DIR) $(PROD_CERT_DIR)
+ifeq ($(DETECTED_OS),Windows)
+	@if not exist $(call normalize_path,$(DEV_CERT_DIR)) $(MKDIR) $(call normalize_path,$(DEV_CERT_DIR))
+	@if not exist $(call normalize_path,$(PROD_CERT_DIR)) $(MKDIR) $(call normalize_path,$(PROD_CERT_DIR))
+else
+	@$(MKDIR) $(DEV_CERT_DIR) $(PROD_CERT_DIR)
+endif
 
-
+# Certificados - Compatible con Windows/Linux
 .PHONY: certs-dev
 certs-dev: certs-dirs
+ifeq ($(DETECTED_OS),Windows)
+	@if not exist "$(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CA_CERT))" (echo "🔐 Generating development certificates..." && \
+		openssl req -x509 -newkey rsa:4096 -days 365 -nodes \
+			-keyout $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CA_KEY)) \
+			-out $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CA_CERT)) \
+			-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=DevCA" \
+			-addext "subjectAltName = DNS:localhost,DNS:remote-process,DNS:worker" && \
+		openssl genrsa -out $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(SERVER_KEY)) 4096 && \
+		openssl req -new -key $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(SERVER_KEY)) \
+			-out $(call normalize_path,$(DEV_CERT_DIR)$(SEP)remote_process.csr) \
+			-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=remote-process" && \
+		echo "subjectAltName=DNS:localhost,DNS:remote-process,DNS:worker" > $(call normalize_path,$(DEV_CERT_DIR)$(SEP)extfile.cnf) && \
+		openssl x509 -req \
+			-in $(call normalize_path,$(DEV_CERT_DIR)$(SEP)remote_process.csr) \
+			-CA $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CA_CERT)) \
+			-CAkey $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CA_KEY)) \
+			-CAcreateserial \
+			-out $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(SERVER_CERT)) \
+			-days 365 \
+			-extfile $(call normalize_path,$(DEV_CERT_DIR)$(SEP)extfile.cnf) && \
+		openssl genrsa -out $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CLIENT_KEY)) 4096 && \
+		openssl req -new -key $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CLIENT_KEY)) \
+			-out $(call normalize_path,$(DEV_CERT_DIR)$(SEP)worker-client.csr) \
+			-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=worker" && \
+		openssl x509 -req \
+			-in $(call normalize_path,$(DEV_CERT_DIR)$(SEP)worker-client.csr) \
+			-CA $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CA_CERT)) \
+			-CAkey $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CA_KEY)) \
+			-CAcreateserial \
+			-out $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CLIENT_CERT)) \
+			-days 365 && \
+		del $(call normalize_path,$(DEV_CERT_DIR)$(SEP)*.csr) $(call normalize_path,$(DEV_CERT_DIR)$(SEP)*.srl) $(call normalize_path,$(DEV_CERT_DIR)$(SEP)extfile.cnf) && \
+		echo "✅ Development certificates generated in $(DEV_CERT_DIR)") \
+	else \
+		echo "✅ Development certificates already exist in $(DEV_CERT_DIR)" \
+	)
+else
 	@if [ ! -f "$(DEV_CERT_DIR)/$(CA_CERT)" ] || [ ! -f "$(DEV_CERT_DIR)/$(SERVER_CERT)" ] || [ ! -f "$(DEV_CERT_DIR)/$(CLIENT_CERT)" ]; then \
 		echo "🔐 Generating development certificates..."; \
 		openssl req -x509 -newkey rsa:4096 -days 365 -nodes \
@@ -115,10 +188,10 @@ certs-dev: certs-dirs
 			-extfile $(DEV_CERT_DIR)/extfile.cnf; \
 		openssl genrsa -out $(DEV_CERT_DIR)/$(CLIENT_KEY) 4096; \
 		openssl req -new -key $(DEV_CERT_DIR)/$(CLIENT_KEY) \
-			-out $(DEV_CERT_DIR)/worker.csr \
+			-out $(DEV_CERT_DIR)/worker-client.csr \
 			-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=worker"; \
 		openssl x509 -req \
-			-in $(DEV_CERT_DIR)/worker.csr \
+			-in $(DEV_CERT_DIR)/worker-client.csr \
 			-CA $(DEV_CERT_DIR)/$(CA_CERT) \
 			-CAkey $(DEV_CERT_DIR)/$(CA_KEY) \
 			-CAcreateserial \
@@ -130,22 +203,23 @@ certs-dev: certs-dirs
 	else \
 		echo "✅ Development certificates already exist in $(DEV_CERT_DIR)"; \
 	fi
+endif
 
-.PHONY: k8s-secrets
-k8s-secrets: certs-dev
-	@echo "🔐 Creating Kubernetes TLS secrets..."
-	@kubectl create secret tls grpc-tls-certs \
-		--cert=$(DEV_CERT_DIR)/$(SERVER_CERT) \
-		--key=$(DEV_CERT_DIR)/$(SERVER_KEY) \
-		--dry-run=orchestrator -o yaml > k8s/tls-secret.yaml
-	@kubectl create configmap grpc-ca-cert \
-		--from-file=ca.crt=$(DEV_CERT_DIR)/$(CA_CERT) \
-		--dry-run=orchestrator -o yaml > k8s/ca-configmap.yaml
-	@echo "✅ Kubernetes secrets generated in k8s/"
 
+# Run remote_process - Cross-platform
 .PHONY: run-remote_process
 run-remote_process: stop-remote_process build
 	@echo "🚀 Starting remote_process with TLS and JWT in development mode..."
+ifeq ($(DETECTED_OS),Windows)
+	@set SERVER_CERT_PATH=$(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(SERVER_CERT))& ^
+	set SERVER_KEY_PATH=$(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(SERVER_KEY))& ^
+	set CA_CERT_PATH=$(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CA_CERT))& ^
+	set APPLICATION_PORT=50051& ^
+	set JWT_SECRET=$(JWT_SECRET)& ^
+	set ENV=development& ^
+	start /B cmd /C bin$(SEP)remote_process > bin$(SEP)remote_process.log 2>&1
+	@echo %ERRORLEVEL% > bin$(SEP)remote_process.pid
+else
 	@SERVER_CERT_PATH=$(DEV_CERT_DIR)/$(SERVER_CERT) \
 	SERVER_KEY_PATH=$(DEV_CERT_DIR)/$(SERVER_KEY) \
 	CA_CERT_PATH=$(DEV_CERT_DIR)/$(CA_CERT) \
@@ -153,16 +227,26 @@ run-remote_process: stop-remote_process build
 	JWT_SECRET="$(JWT_SECRET)" \
 	ENV=development \
 	./bin/remote_process > ./bin/remote_process.log 2>&1 & echo $$! > ./bin/remote_process.pid
+endif
 
-
+# Run orchestrator - Cross-platform
 .PHONY: run-orchestrator
 run-orchestrator: stop-orchestrator build
 	@echo "🚀 Starting orchestrator with TLS and JWT in development mode..."
+ifeq ($(DETECTED_OS),Windows)
+	@set CLIENT_CERT_PATH=$(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CLIENT_CERT))& ^
+	set CLIENT_KEY_PATH=$(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CLIENT_KEY))& ^
+	set CA_CERT_PATH=$(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CA_CERT))& ^
+	set JWT_TOKEN=$(JWT_TOKEN)& ^
+	start /B cmd /C bin$(SEP)orchestrator serve --dir=".\test_pb_data" > bin$(SEP)orchestrator.log 2>&1
+	@echo %ERRORLEVEL% > bin$(SEP)orchestrator.pid
+else
 	@CLIENT_CERT_PATH=$(DEV_CERT_DIR)/$(CLIENT_CERT) \
 	CLIENT_KEY_PATH=$(DEV_CERT_DIR)/$(CLIENT_KEY) \
 	CA_CERT_PATH=$(DEV_CERT_DIR)/$(CA_CERT) \
 	JWT_TOKEN="$(JWT_TOKEN)" \
 	./bin/orchestrator serve --dir="./test_pb_data" > ./bin/orchestrator.log 2>&1 & echo $$! > ./bin/orchestrator.pid
+endif
 
 .PHONY: run-archiva-go
 run-archiva-go: stop-archiva-go build
@@ -247,14 +331,24 @@ swagger: swagger-gen swagger-ui
 .PHONY: stop-remote_process
 stop-remote_process:
 	@echo "🛑 Deteniendo servidor..."
-	@kill `cat ./bin/remote_process.pid` || true
-	@rm -f ./bin/remote_process.pid
+ifeq ($(DETECTED_OS),Windows)
+	@if exist bin$(SEP)remote_process.pid (for /f %i in (bin$(SEP)remote_process.pid) do taskkill /F /PID %i 2>NUL || true)
+	@$(RM) bin$(SEP)remote_process.pid 2>NUL || true
+else
+	@if [ -f ./bin/remote_process.pid ]; then kill -9 `cat ./bin/remote_process.pid` 2>/dev/null || true; fi
+	@$(RM) ./bin/remote_process.pid 2>/dev/null || true
+endif
 
 .PHONY: stop-orchestrator
 stop-orchestrator:
 	@echo "🛑 Deteniendo orchestrator..."
-	@kill `cat ./bin/orchestrator.pid` || true
-	@rm -f ./bin/orchestrator.pid
+ifeq ($(DETECTED_OS),Windows)
+	@if exist bin$(SEP)orchestrator.pid (for /f %i in (bin$(SEP)orchestrator.pid) do taskkill /F /PID %i 2>NUL || true)
+	@$(RM) bin$(SEP)orchestrator.pid 2>NUL || true
+else
+	@if [ -f ./bin/orchestrator.pid ]; then kill -9 `cat ./bin/orchestrator.pid` 2>/dev/null || true; fi
+	@$(RM) ./bin/orchestrator.pid 2>/dev/null || true
+endif
 
 .PHONY: stop-archiva-go
 stop-archiva-go:
@@ -262,25 +356,7 @@ stop-archiva-go:
 	@kill `cat ./bin/archiva-go.pid` || true
 	@rm -f ./bin/archiva-go.pid
 
-# Agregar nuevos targets para tests en Docker
-.PHONY: test-docker
-test-docker: check-docker certs-dev
-	@echo "🐳 Running tests in Docker containers..."
-	@if [ ! -w "$(DOCKER_SOCKET)" ]; then \
-		echo "🔑 Requesting sudo access for Docker..."; \
-		sudo chmod 666 $(DOCKER_SOCKET); \
-	fi
-	@JWT_SECRET="$(JWT_SECRET)" JWT_TOKEN="$(JWT_TOKEN)" \
-	docker compose -f docker-compose.test.yml up \
-		--build \
-		--abort-on-container-exit \
-		--exit-code-from tests
 
-.PHONY: test-docker-clean
-test-docker-clean:
-	@echo "🧹 Cleaning up Docker test containers..."
-	@#DOCKER_HOST=unix://$(DOCKER_SOCKET) \
-	docker compose -f docker-compose.test.yml down -v --remove-orphans
 
 .PHONY: check-docker
 check-docker:
@@ -295,3 +371,92 @@ check-docker:
 			exit 1; \
 		fi \
 	fi
+
+# Targets para construcción de imágenes Docker
+.PHONY: docker-build-all
+docker-build-all: docker-build-orchestrator docker-build-remote-process docker-build-tests
+
+# Añadir targets para compilar binarios específicamente para imágenes Docker
+.PHONY: build-for-docker
+build-for-docker: proto
+	@echo "🏗️  Construyendo binarios para Docker en $(DETECTED_OS)..."
+	@$(MKDIR) bin
+ifeq ($(DETECTED_OS),Windows)
+	@set CGO_ENABLED=0&&set GOOS=linux&&set GOARCH=amd64&&go build -o bin$(SEP)remote_process.exe remote_process$(SEP)cmd$(SEP)main.go
+	@set CGO_ENABLED=0&&set GOOS=linux&&set GOARCH=amd64&&go build -o bin$(SEP)orchestrator.exe orchestrator$(SEP)cmd$(SEP)main.go
+else
+	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin$(SEP)remote_process remote_process$(SEP)cmd$(SEP)main.go
+	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin$(SEP)orchestrator orchestrator$(SEP)cmd$(SEP)main.go
+endif
+	@echo "✅ Binarios construidos para Docker en directorio bin/"
+
+.PHONY: docker-build-orchestrator
+docker-build-orchestrator: build-for-docker
+	@echo "🐳 Construyendo imagen de Docker para orchestrator..."
+	docker build -t hodei/orchestrator:latest -f build/orchestrator/Dockerfile .
+
+.PHONY: docker-build-remote-process
+docker-build-remote-process: build-for-docker
+	@echo "🐳 Construyendo imagen de Docker para remote_process..."
+	docker build -t hodei/remote-process-worker:latest -f build/remote_process/Dockerfile .
+
+
+# Target para construir todas las imágenes Docker
+.PHONY: docker-build-all
+docker-build-all: docker-build-orchestrator docker-build-remote-process docker-build-worker docker-build-tests
+
+# Target para test en Docker con generación de certificados
+.PHONY: test-docker
+test-docker: check-docker certs-dev build
+	@echo "🐳 Launching orchestrator container via docker-compose..."
+	@docker compose -f docker-compose.test.yml up -d --build
+	@JWT_SECRET="$(JWT_SECRET)" \
+    JWT_TOKEN="$(JWT_TOKEN)" \
+    WS_BASE_URL="ws://orchestrator:8090" \
+    API_BASE_URL="http://orchestrator:8090" \
+    WORKER_IMAGE="hodei/remote-process-worker:latest" \
+    go test -v ./tests/tasks_api_test.go
+
+
+.PHONY: test-docker-clean
+test-docker-clean:
+	@echo "🧹 Cleaning up Docker test containers..."
+	@docker compose -f docker-compose.test.yml down -v --remove-orphans
+
+# Target para construir imágenes y desplegarlas en Helm
+.PHONY: helm-deploy
+helm-deploy: docker-build-all certs-dev setup-helm-certs
+	@echo "🚢 Desplegando en Kubernetes usando Helm..."
+ifeq ($(DETECTED_OS),Windows)
+	helm upgrade --install hodei-chart .\hodei-chart ^
+		--set orchestrator.config.grpc.jwtSecret="$(JWT_SECRET)" ^
+		--set orchestrator.config.grpc.jwtToken="$(JWT_TOKEN)"
+else
+	helm upgrade --install hodei-chart ./hodei-chart \
+		--set orchestrator.config.grpc.jwtSecret="$(JWT_SECRET)" \
+		--set orchestrator.config.grpc.jwtToken="$(JWT_TOKEN)"
+endif
+
+# Target para preparar certificados para Helm (compatible con Windows/Linux)
+.PHONY: setup-helm-certs
+setup-helm-certs:
+	@echo "🔐 Copiando certificados para Helm chart..."
+ifeq ($(DETECTED_OS),Windows)
+	@if not exist hodei-chart$(SEP)certs $(MKDIR) hodei-chart$(SEP)certs
+	@$(CP) $(call normalize_path,$(DEV_CERT_DIR)$(SEP)*.pem) $(call normalize_path,hodei-chart$(SEP)certs$(SEP))
+else
+	@$(MKDIR) hodei-chart/certs
+	@$(CP) $(DEV_CERT_DIR)/*.pem hodei-chart/certs/
+endif
+
+.PHONY: test-containers
+test-containers: check-docker certs-dev build
+	@echo "🧹 Eliminando contenedor hodei-orchestrator previo (si existe)..."
+	@docker rm -f hodei-orchestrator || true
+	@echo "🧪 Ejecutando tests con testcontainers-go..."
+	@JWT_SECRET="$(JWT_SECRET)" \
+	JWT_TOKEN="$(JWT_TOKEN)" \
+	WS_BASE_URL="ws://orchestrator:8090" \
+	API_BASE_URL="http://orchestrator:8090" \
+	WORKER_IMAGE="hodei/remote-process-worker:latest" \
+	go test -v ./tests/tasks_api_test.go
