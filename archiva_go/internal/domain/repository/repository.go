@@ -3,7 +3,7 @@ package repository
 import (
 	"io"
 
-	"dev.rubentxu.devops-platform/archiva-go/internal/domain/artifact"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/domain/artifact"
 )
 
 type Repository struct {

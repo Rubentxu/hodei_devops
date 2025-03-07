@@ -4,11 +4,11 @@ import (
 	"fmt"
 	net "net/http"
 
-	"dev.rubentxu.devops-platform/archiva-go/config"
-	"dev.rubentxu.devops-platform/archiva-go/internal/app/artifact_app"
-	"dev.rubentxu.devops-platform/archiva-go/internal/domain/service"
-	"dev.rubentxu.devops-platform/archiva-go/internal/infrastructure/storage"
-	"dev.rubentxu.devops-platform/archiva-go/internal/interfaces/http"
+	"dev.rubentxu.hodei-devops/archiva-go/config"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/app/artifact_app"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/domain/service"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/infrastructure/storage"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/interfaces/http"
 	"github.com/gorilla/mux"
 )
 

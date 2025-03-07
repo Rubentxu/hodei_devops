@@ -5,9 +5,9 @@ import (
 	"io"
 	"net/http"
 
-	"dev.rubentxu.devops-platform/archiva-go/internal/app/artifact_app"
-	"dev.rubentxu.devops-platform/archiva-go/internal/domain/artifact"
-	"dev.rubentxu.devops-platform/archiva-go/internal/domain/repository"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/app/artifact_app"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/domain/artifact"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/domain/repository"
 	"github.com/gorilla/mux"
 )
 

@@ -1,9 +1,9 @@
-module dev.rubentxu.devops-platform/orchestrator
+module dev.rubentxu.hodei-devops/hodei-app
 
 go 1.23.4
 
 require (
-	dev.rubentxu.devops-platform/protos v0.0.0-00010101000000-000000000000
+	dev.rubentxu.hodei-devops/protos v0.0.0-00010101000000-000000000000
 	github.com/docker/docker v27.5.0+incompatible
 	github.com/docker/go-connections v0.5.0
 	github.com/golang-jwt/jwt v3.2.2+incompatible
@@ -137,4 +137,4 @@ require (
 	sigs.k8s.io/yaml v1.4.0 // indirect
 )
 
-replace dev.rubentxu.devops-platform/protos => ../protos
+replace dev.rubentxu.hodei-devops/protos => ../protos

@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"dev.rubentxu.devops-platform/remote_worker/internal/ports"
+	"dev.rubentxu.hodei-devops/remote_worker/internal/ports"
 )
 
 // LocalProcessExecutor implementa ports.ProcessExecutor para la ejecución local de comandos.

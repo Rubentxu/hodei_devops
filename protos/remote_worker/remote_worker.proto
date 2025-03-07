@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package remote_worker;
 
-option go_package = "dev.rubentxu.devops-platform/protos/remote_worker";
+option go_package = "dev.rubentxu.hodei-devops/protos/remote_worker";
 
 import "google/protobuf/struct.proto";
 

@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"dev.rubentxu.devops-platform/archiva-go/internal/domain/artifact"
-	"dev.rubentxu.devops-platform/archiva-go/internal/domain/repository"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/domain/artifact"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/domain/repository"
 )
 
 type FileSystemStorage struct {

@@ -1,4 +1,4 @@
-module dev.rubentxu.devops-platform/tests
+module dev.rubentxu.hodei-devops/tests
 
 go 1.23.4
 

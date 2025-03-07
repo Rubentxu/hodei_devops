@@ -1,4 +1,4 @@
-module dev.rubentxu.devops-platform/protos
+module dev.rubentxu.hodei-devops/protos
 
 go 1.23.4
 

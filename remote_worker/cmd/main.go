@@ -4,13 +4,13 @@ import (
 	"log"
 	"time"
 
-	"dev.rubentxu.devops-platform/remote_worker/internal/adapters/grpc/security"
+	"dev.rubentxu.hodei-devops/remote_worker/internal/adapters/grpc/security"
 
-	"dev.rubentxu.devops-platform/remote_worker/config"
-	remote_worker_server "dev.rubentxu.devops-platform/remote_worker/internal/adapters/grpc"
-	"dev.rubentxu.devops-platform/remote_worker/internal/adapters/metrics"
-	"dev.rubentxu.devops-platform/remote_worker/internal/application/api"
-	"dev.rubentxu.devops-platform/remote_worker/internal/application/services"
+	"dev.rubentxu.hodei-devops/remote_worker/config"
+	remote_worker_server "dev.rubentxu.hodei-devops/remote_worker/internal/adapters/grpc"
+	"dev.rubentxu.hodei-devops/remote_worker/internal/adapters/metrics"
+	"dev.rubentxu.hodei-devops/remote_worker/internal/application/api"
+	"dev.rubentxu.hodei-devops/remote_worker/internal/application/services"
 )
 
 func main() {

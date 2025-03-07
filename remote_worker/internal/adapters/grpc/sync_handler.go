@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"io"
 
-	"dev.rubentxu.devops-platform/protos/remote_worker"
-	"dev.rubentxu.devops-platform/remote_worker/internal/domain"
-	"dev.rubentxu.devops-platform/remote_worker/internal/ports"
+	"dev.rubentxu.hodei-devops/protos/remote_worker"
+	"dev.rubentxu.hodei-devops/remote_worker/internal/domain"
+	"dev.rubentxu.hodei-devops/remote_worker/internal/ports"
 )
 
 // SyncHandler maneja las operaciones de sincronización a través de gRPC

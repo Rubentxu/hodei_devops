@@ -3,7 +3,7 @@ package ports
 import (
 	"context"
 
-	"dev.rubentxu.devops-platform/remote_worker/internal/domain"
+	"dev.rubentxu.hodei-devops/remote_worker/internal/domain"
 )
 
 // SyncService define el contrato para el servicio de sincronización

@@ -3,7 +3,7 @@ package ports
 import (
 	"context"
 
-	"dev.rubentxu.devops-platform/remote_worker/internal/domain"
+	"dev.rubentxu.hodei-devops/remote_worker/internal/domain"
 )
 
 // MetricsService define el contrato para el servicio de métricas

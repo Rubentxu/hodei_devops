@@ -1,4 +1,4 @@
-module dev.rubentxu.devops-platform/archiva-go
+module dev.rubentxu.hodei-devops/archiva-go
 
 go 1.23.4
 

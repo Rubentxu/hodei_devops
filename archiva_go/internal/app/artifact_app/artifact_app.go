@@ -3,9 +3,9 @@ package artifact_app
 import (
 	"io"
 
-	"dev.rubentxu.devops-platform/archiva-go/internal/domain/artifact"
-	"dev.rubentxu.devops-platform/archiva-go/internal/domain/repository"
-	"dev.rubentxu.devops-platform/archiva-go/internal/domain/service"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/domain/artifact"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/domain/repository"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/domain/service"
 )
 
 type ArtifactApp struct {

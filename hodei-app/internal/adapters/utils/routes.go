@@ -1,19 +1,20 @@
 package utils
 
 import (
+	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/service/resource"
 	"net/http"
 	"os"
 	"path/filepath"
 
-	http_handlers "dev.rubentxu.devops-platform/orchestrator/internal/adapters/http"
-	"dev.rubentxu.devops-platform/orchestrator/internal/adapters/manager"
-	"dev.rubentxu.devops-platform/orchestrator/internal/adapters/resources"
-	"dev.rubentxu.devops-platform/orchestrator/internal/adapters/websockets"
+	http_handlers "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/incoming/http"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/service/manager"
+
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/incoming/websockets"
 
 	"github.com/pocketbase/pocketbase/core"
 	httpSwagger "github.com/swaggo/http-swagger"
 
-	_ "dev.rubentxu.devops-platform/orchestrator/docs"
+	_ "dev.rubentxu.hodei-devops/hodei-app/docs"
 )
 
 // SetupRoutes configura todas las rutas del servidor
@@ -21,7 +22,7 @@ func SetupRoutes(
 	e *core.ServeEvent,
 	wsHandler *websockets.WSHandler,
 	manager *manager.Manager,
-	resourcePoolManager *resources.ResourcePoolManager,
+	resourcePoolManager *resource.ResourcePoolManager,
 ) {
 	// Obtener directorio base
 	baseDir, _ := filepath.Abs(".")

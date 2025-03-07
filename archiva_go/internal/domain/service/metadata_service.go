@@ -1,8 +1,8 @@
 package service
 
 import (
-	"dev.rubentxu.devops-platform/archiva-go/internal/domain/artifact"
-	"dev.rubentxu.devops-platform/archiva-go/internal/domain/repository"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/domain/artifact"
+	"dev.rubentxu.hodei-devops/archiva-go/internal/domain/repository"
 )
 
 type MetadataService interface {

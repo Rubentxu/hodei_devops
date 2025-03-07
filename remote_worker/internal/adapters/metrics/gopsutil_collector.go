@@ -14,7 +14,7 @@ import (
 	"github.com/shirou/gopsutil/v3/net"
 	"github.com/shirou/gopsutil/v3/process"
 
-	"dev.rubentxu.devops-platform/remote_worker/internal/domain"
+	"dev.rubentxu.hodei-devops/remote_worker/internal/domain"
 )
 
 type GopsutilCollector struct {

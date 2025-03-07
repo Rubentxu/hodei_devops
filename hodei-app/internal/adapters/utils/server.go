@@ -4,9 +4,9 @@ import (
 	"log"
 	"os"
 
-	"dev.rubentxu.devops-platform/orchestrator/internal/adapters/manager"
-	"dev.rubentxu.devops-platform/orchestrator/internal/adapters/resources"
-	"dev.rubentxu.devops-platform/orchestrator/internal/adapters/websockets"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/incoming/websockets"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/service/manager"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/service/resource"
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
@@ -18,7 +18,7 @@ func Start(
 	app *pocketbase.PocketBase,
 	wsHandler *websockets.WSHandler,
 	manager *manager.Manager,
-	resourcePoolManager *resources.ResourcePoolManager,
+	resourcePoolManager *resource.ResourcePoolManager,
 ) {
 	// Determinar la dirección de escucha - usar 0.0.0.0 para permitir conexiones externas
 	bindAddr := os.Getenv("PB_ADDR")
