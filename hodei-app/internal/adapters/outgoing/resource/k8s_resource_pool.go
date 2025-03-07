@@ -85,7 +85,7 @@ func (k *KubernetesResourcePool) monitorTask(ctx context.Context, taskExecution 
 	podsClient := k8sClient.CoreV1().Pods(namespace) // Usar el namespace
 
 	watcher, err := podsClient.Watch(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=%s", taskExecution.WorkerID), //Usar el workerID que es el nombre
+		LabelSelector: fmt.Sprintf("app=%s", taskExecution.Task.TaskSpec.WorkerDefinitionID), //Usar el workerID que es el nombre
 	})
 	if err != nil {
 		fmt.Printf("error watching task: %v\n", err)
@@ -96,9 +96,9 @@ func (k *KubernetesResourcePool) monitorTask(ctx context.Context, taskExecution 
 	for {
 		select {
 		case <-timeout:
-			now := time.Now()
-			taskExecution.FinishTime = now
-			taskExecution.State = model.Failed
+			now := time.Now().UTC()
+			taskExecution.Status.EndTime = now
+			taskExecution.Status.State = model.Failed
 			return
 		case event, ok := <-watcher.ResultChan():
 			if !ok {
@@ -113,11 +113,11 @@ func (k *KubernetesResourcePool) monitorTask(ctx context.Context, taskExecution 
 			switch pod.Status.Phase {
 			case apiv1.PodSucceeded:
 				now := time.Now()
-				taskExecution.FinishTime = now
-				taskExecution.State = model.Completed
-				if svc, err := k8sClient.CoreV1().Services(namespace).Get(ctx, taskExecution.WorkerID+"-service", metav1.GetOptions{}); err == nil {
+				taskExecution.Status.EndTime = now
+				taskExecution.Status.State = model.Completed
+				if svc, err := k8sClient.CoreV1().Services(namespace).Get(ctx, taskExecution.WorkerDef.ID.String()+"-service", metav1.GetOptions{}); err == nil {
 					for _, port := range svc.Spec.Ports {
-						taskExecution.HostPorts = append(taskExecution.HostPorts, fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, port.Port))
+						taskExecution.Status.Endpoint.Port = fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, port.Port)
 					}
 					taskExecution.Status.Endpoint = &model.WorkerEndpoint{
 						Address: svc.Spec.ClusterIP,                        // ClusterIP del servicio
@@ -127,14 +127,14 @@ func (k *KubernetesResourcePool) monitorTask(ctx context.Context, taskExecution 
 				return
 			case apiv1.PodFailed:
 				now := time.Now()
-				taskExecution.FinishTime = now
-				taskExecution.State = model.Failed
+				taskExecution.Status.EndTime = now
+				taskExecution.Status.State = model.Failed
 				return
 			case apiv1.PodRunning:
-				taskExecution.State = model.Running
+				taskExecution.Status.State = model.Running
 				for _, container := range pod.Spec.Containers {
 					for _, port := range container.Ports {
-						taskExecution.HostPorts = append(taskExecution.HostPorts, fmt.Sprintf("%s:%d", pod.Status.PodIP, port.ContainerPort))
+						taskExecution.Status.Endpoint.Port = fmt.Sprintf("%s:%d", pod.Status.PodIP, port.ContainerPort)
 					}
 				}
 				taskExecution.Status.Endpoint = &model.WorkerEndpoint{
@@ -232,13 +232,13 @@ func (k *KubernetesResourcePool) aggregateNodeStats(stats *model.Stats, nodes *v
 	}
 }
 
-func (k *KubernetesResourcePool) Matches(task model.Task) bool {
+func (k *KubernetesResourcePool) Matches(definition model.WorkerDefinition) bool {
 	// Implementación básica.  ¡Ajusta esto a tu WorkerSpec real!
 	// Por ejemplo, podrías verificar si hay recursos suficientes,
 	// o si el namespace existe.
 
 	// Comprobación básica (ejemplo, debe adaptarse a tu WorkerSpec)
-	if task.WorkerSpec.Type != "kubernetes" {
+	if definition.Spec.Type != "kubernetes" {
 		return false
 	}
 

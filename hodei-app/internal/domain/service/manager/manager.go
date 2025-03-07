@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
+	"k8s.io/apimachinery/pkg/util/rand"
 
 	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/worker"
@@ -16,8 +17,6 @@ import (
 	"sync"
 
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // Manager manages task execution.
@@ -25,16 +24,15 @@ import (
 //go:generate mockery --name=Manager --output=mocks --case=underscore
 type Manager struct {
 	mu               sync.Mutex
-	pendingTasksChan chan uuid.UUID
+	pendingTasksChan chan ports.TaskContext
 	taskDb           ports.Store[model.Task]
-	taskOperationDb  ports.Store[ports.TaskOperation]
 	scheduler        ports.Scheduler
-	worker           *worker.Worker
+	worker           *worker.WorkerInstanceManager
 	poolManager      *resource.ResourcePoolManager
 }
 
 // New creates a new Manager instance.
-func New(schedulerType string, dbType string, worker *worker.Worker, sizePendingsTask int, app core.App, poolManager *resource.ResourcePoolManager) (*Manager, error) {
+func New(schedulerType string, dbType string, worker *worker.WorkerInstanceManager, sizePendingsTask int, app core.App, poolManager *resource.ResourcePoolManager) (*Manager, error) {
 	// Crear Scheduler
 	var currentSheduler ports.Scheduler
 	switch schedulerType {
@@ -48,7 +46,6 @@ func New(schedulerType string, dbType string, worker *worker.Worker, sizePending
 
 	// Crear Stores
 	var taskDb ports.Store[model.Task]
-	var taskOperationDb ports.Store[ports.TaskOperation]
 	var err error // Declarar err aquí para que esté disponible en todo el bloque
 
 	switch dbType {
@@ -64,14 +61,12 @@ func New(schedulerType string, dbType string, worker *worker.Worker, sizePending
 	default:
 		return nil, fmt.Errorf("invalid dbType: %currentSheduler", dbType)
 	}
-	taskOperationDb = repository.NewCacheStore[ports.TaskOperation]()
 
 	m := Manager{
-		pendingTasksChan: make(chan uuid.UUID, sizePendingsTask), // Buffer para 1000 tareas
+		pendingTasksChan: make(chan ports.TaskContext, sizePendingsTask), // Buffer para 1000 tareas
 		taskDb:           taskDb,
-		taskOperationDb:  taskOperationDb,
 		scheduler:        currentSheduler,
-		worker:           worker, // Guardar la instancia del Worker
+		worker:           worker, // Guardar la instancia del WorkerInstanceManager
 		poolManager:      poolManager,
 	}
 
@@ -86,59 +81,78 @@ func (m *Manager) GetResourcePool(id string) *ports.ResourcePool {
 	return nil
 }
 
-// AddTask añade una nueva Task a la cola de pendientes.
-func (m *Manager) AddTask(taskDef model.Task, ctx context.Context) (ports.TaskOperation, error) {
+// AddTask añade una nueva Execution a la cola de pendientes.
+func (m *Manager) AddTask(taskDef model.Task, ctx context.Context) (ports.TaskContext, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	log.Printf("Añadiendo tarea en manager %s", taskDef.ID)
 	outputChan := make(chan model.ProcessOutput, 100)
-	stateChan := make(chan model.State, 10) // Canal para el estado
-	errChan := make(chan error, 1)          // Canal para errores
+	stateChan := make(chan model.TaskState, 10) // Canal para el estado
+	errChan := make(chan error, 1)
+
+	// TODO: Recuperar WorkerDefinition de la base de datos a partir de taskDef.WorkerDefinitionID
 
 	execution := model.TaskExecution{
-		ID:         uuid.New(),
-		TaskID:     taskDef.ID,
-		Name:       taskDef.Name,
-		State:      model.Pending, // O Scheduled
-		WorkerSpec: taskDef.WorkerSpec,
+		ID: model.NewAggregateID(),
+		Metadata: model.NewMetadata(
+			taskDef.Metadata.Name+randString(5),
+			taskDef.Metadata.Description,
+		),
+		Status: model.ExecutionStatus{
+			StartTime: time.Now(),
+			State:     model.Pending,
+		},
+		// TODO: Guardar la definición de WorkerDefinition en la TaskExecution
 	}
 
-	operation := ports.TaskOperation{
-		Task:       execution,
+	taskContext := ports.TaskContext{
+		Execution:  execution,
 		OutputChan: outputChan,
 		StateChan:  stateChan, // Asignar el canal de estado
 		ErrChan:    errChan,   // Asignar el canal de errores
 		Ctx:        ctx,
 	}
 
-	err := m.taskOperationDb.Put(taskDef.ID.String(), operation)
-	if err != nil {
-		return ports.TaskOperation{}, fmt.Errorf("error al guardar la task operation: %w", err)
-	}
 	log.Printf("Tarea %s añadida al registro de tareas operables", taskDef.ID)
 
-	err = m.taskDb.Put(taskDef.ID.String(), taskDef)
+	err := m.taskDb.Put(taskDef.ID.String(), taskDef)
 	if err != nil {
-		return ports.TaskOperation{}, fmt.Errorf("error al guardar la tarea: %w", err)
+		return ports.TaskContext{}, fmt.Errorf("error al guardar la tarea: %w", err)
 	}
 
 	select {
-	case m.pendingTasksChan <- taskDef.ID: // Enviar ID al channel
+	case m.pendingTasksChan <- taskContext: // Enviar ID al channel
 		log.Printf("Tarea %s enviada al channel", taskDef.ID)
 	default:
-		return ports.TaskOperation{}, fmt.Errorf("cola llena")
+		return ports.TaskContext{}, fmt.Errorf("cola llena")
 	}
 
-	return operation, nil
+	return taskContext, nil
+}
+
+func randString(n int) string {
+	if n <= 0 {
+		return ""
+	}
+
+	const lowercase = "abcdefghijklmnopqrstuvwxyz"
+	const digits = "0123456789"
+	const charset = lowercase + digits + "-"
+
+	// Asegurar que el primer carácter sea una letra minúscula
+	b := make([]byte, n)
+	b[0] = lowercase[rand.Intn(len(lowercase))]
+
+	// Resto de caracteres pueden ser letras minúsculas, números o guiones
+	for i := 1; i < n; i++ {
+		b[i] = charset[rand.Intn(len(charset))]
+	}
+
+	return string(b)
 }
 
 // SelectWorker elige un ResourcePool para una tarea.
-func (m *Manager) SelectWorker(taskDefID uuid.UUID) (*ports.ResourcePool, error) {
-	// Obtener la definición de la tarea
-	taskDef, err := m.taskDb.Get(taskDefID.String())
-	if err != nil {
-		return nil, fmt.Errorf("tarea no encontrada: %w", err)
-	}
+func (m *Manager) SelectWorker(definition model.WorkerDefinition) (*ports.ResourcePool, error) {
 
 	// Obtener la lista de pools activos del ResourcePoolManager
 	activePools := m.poolManager.ListActivePools()
@@ -146,12 +160,12 @@ func (m *Manager) SelectWorker(taskDefID uuid.UUID) (*ports.ResourcePool, error)
 		return nil, fmt.Errorf("no hay ResourcePools disponibles")
 	}
 
-	log.Printf("Seleccionando un worker para la tarea %s", taskDef.ID)
+	log.Printf("Seleccionando un worker para el workerDefinition %s", definition.ID)
 
-	candidatePools := m.scheduler.SelectCandidateNodes(taskDef, activePools)
+	candidatePools := m.scheduler.SelectCandidateNodes(definition, activePools)
 	log.Printf("Candidate pools: %v", candidatePools)
 
-	scores := m.scheduler.Score(taskDef, candidatePools)
+	scores := m.scheduler.Score(candidatePools)
 	log.Printf("Scores: %v", scores)
 
 	selectedPool := m.scheduler.Pick(scores, candidatePools)
@@ -159,7 +173,7 @@ func (m *Manager) SelectWorker(taskDefID uuid.UUID) (*ports.ResourcePool, error)
 		return nil, fmt.Errorf("no se pudo seleccionar un ResourcePool")
 	}
 
-	log.Printf("Worker seleccionado: %s", (*selectedPool).GetID())
+	log.Printf("WorkerInstanceManager seleccionado: %s", (*selectedPool).GetID())
 	return selectedPool, nil
 }
 
@@ -172,24 +186,19 @@ func (m *Manager) ProcessTasks() {
 }
 
 // processTask maneja la lógica de una sola tarea:  selección, lanzamiento y actualización.
-// processTask ahora delega la ejecución al Worker.
-func (m *Manager) processTask(taskDefID uuid.UUID) {
+// processTask ahora delega la ejecución al WorkerInstanceManager.
+func (m *Manager) processTask(taskContext ports.TaskContext) {
+	taskDefID := taskContext.Execution.ID
 	log.Printf("Iniciando el procesamiento de la tarea %s", taskDefID)
-
-	// 1. Obtener la definición de la tarea
-	_, err := m.taskDb.Get(taskDefID.String())
-	if err != nil {
-		log.Printf("Error obteniendo la definición de la tarea %s: %v", taskDefID, err)
-		return
-	}
+	workerDefinition := taskContext.Execution.WorkerDef
 
 	// 2. Seleccionar un ResourcePool usando el nuevo método que trabaja con el ResourcePoolManager
-	selectedPool, err := m.SelectWorker(taskDefID)
+	selectedPool, err := m.SelectWorker(workerDefinition)
 	if err != nil {
 		log.Printf("Error seleccionando un worker para la tarea %s: %v", taskDefID, err)
 		return
 	}
-	log.Printf("Worker seleccionado: %s", (*selectedPool).GetID())
+	log.Printf("WorkerInstanceManager seleccionado: %s", (*selectedPool).GetID())
 
 	// 3. Verificar que el pool seleccionado existe
 	if selectedPool == nil {
@@ -197,32 +206,26 @@ func (m *Manager) processTask(taskDefID uuid.UUID) {
 		return
 	}
 
-	// 4. Crear una TaskExecution
-	operation, err := m.taskOperationDb.Get(taskDefID.String())
-	if err != nil {
-		log.Printf("Error obteniendo la tarea %s: %v", taskDefID, err)
-		return
-	}
 	log.Printf("Tarea %s asignada al worker %s", taskDefID, (*selectedPool).GetID())
 
 	resourceClient := (*selectedPool).GetResourceInstanceClient()
-	operation.Client = resourceClient
-	m.taskOperationDb.Put(taskDefID.String(), operation)
+	taskContext.Client = resourceClient
 
-	// 5. Delegar la ejecución al Worker
-	result := m.worker.AddTask(operation)
+	// 5. Delegar la ejecución al WorkerInstanceManager
+	result := m.worker.AddTask(taskContext)
 	log.Printf("Tarea %s enviada al worker", taskDefID)
 	log.Printf("Result: %v", result)
 
 	// 6. Actualizar el estado de la tarea
 	if result != nil {
 		log.Printf("Error al iniciar la tarea %s en el worker: %v", taskDefID, result.Error)
-		operation.Task.State = model.Failed
-		operation.Task.Error = result.Error()
+		taskContext.Execution.Status.State = model.Failed
+		taskContext.Execution.Status.Message = result.Error()
+
 	} else {
 		log.Printf("Tarea %s completada con éxito en el worker", taskDefID)
-		operation.Task.State = model.Completed
-		operation.Task.FinishTime = time.Now()
+		taskContext.Execution.Status.State = model.Completed
+		taskContext.Execution.Status.EndTime = time.Now().UTC()
 	}
 
 	log.Printf("Tarea %s procesada", taskDefID)
@@ -258,11 +261,11 @@ func (m *Manager) doHealthChecks() {
 func (m *Manager) checkTaskHealth(exec *model.TaskExecution) error {
 	// TODO: Implementar la lógica de verificación de salud real.
 	//  Por ahora, solo imprimimos un mensaje.
-	log.Printf("Verificando la salud de la tarea %s (Execution ID: %s)", exec.TaskID, exec.ID)
+	log.Printf("Verificando la salud de la tarea %s (Execution ID: %s)", exec.Task.ID, exec.ID)
 	return nil
 }
 
-func (m *Manager) StopTask(id string) error {
-	log.Printf("Deteniendo la tarea %s", id)
-	return m.worker.StopTask(id)
+func (m *Manager) StopTask(taskContext ports.TaskContext) error {
+	log.Printf("Deteniendo la tarea %s", taskContext.Execution.ID)
+	return m.worker.StopTask(taskContext)
 }

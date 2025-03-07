@@ -27,15 +27,15 @@ import (
 
 // DockerWorker implementa WorkerInstance para Docker
 type DockerWorker struct {
-	task       model.TaskExecution
+	execution  model.TaskExecution
 	endpoint   *model.WorkerEndpoint
 	grpcConfig config.GrpcConnectionsConfig
 	dockerCfg  resource.DockerResourcesPoolConfig
 	client     *dockerclient.Client
 }
 
-func (d *DockerWorker) GetID() string {
-	return d.task.Name
+func (d *DockerWorker) GetID() model.AggregateID {
+	return d.execution.ID
 }
 
 func (d *DockerWorker) GetName() string {
@@ -52,7 +52,7 @@ func NewDockerWorker(task model.TaskExecution, grpcCfg config.GrpcConnectionsCon
 	cli := resourceClient.GetNativeClient().(*dockerclient.Client)
 
 	return &DockerWorker{
-		task:       task,
+		execution:  task,
 		grpcConfig: grpcCfg,
 		dockerCfg:  resourceClient.GetConfig().(resource.DockerResourcesPoolConfig),
 		client:     cli,
@@ -61,7 +61,7 @@ func NewDockerWorker(task model.TaskExecution, grpcCfg config.GrpcConnectionsCon
 }
 
 func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputChan chan<- model.ProcessOutput) (*model.WorkerEndpoint, error) {
-	log.Printf("Iniciando DockerWorker con spec=%v", d.task.WorkerSpec)
+	log.Printf("Iniciando DockerWorker con spec=%v", d.execution.WorkerDef.Spec)
 
 	// Environment variables con rutas dentro del contenedor
 	baseEnvs := map[string]string{
@@ -91,7 +91,7 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 	d.grpcConfig.JWTToken = token // Guardar el token generado para uso posterior
 	log.Printf("Token JWT generado y configurado para autenticación")
 
-	workerImage := d.task.WorkerSpec.Image
+	workerImage := d.execution.WorkerDef.Spec.Image
 	if workerImage == "" {
 		workerImage = "posts_mpv-remote-process:latest"
 	}
@@ -129,12 +129,12 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 	log.Printf("- Configuración de red: %s", hostCfg.NetworkMode)
 
 	// Si hay un working directory en la spec, asegurarse de que sea absoluto
-	if d.task.WorkerSpec.WorkingDir != "" {
-		absWorkingDir, err := d.toAbsolutePath(d.task.WorkerSpec.WorkingDir)
+	if d.execution.WorkerDef.Spec.WorkingDir != "" {
+		absWorkingDir, err := d.toAbsolutePath(d.execution.WorkerDef.Spec.WorkingDir)
 		if err != nil {
 			d.sendLogsMessage(outputChan, fmt.Sprintf("Warning: usando working dir relativo: %v", err))
 		} else {
-			d.task.WorkerSpec.WorkingDir = absWorkingDir
+			d.execution.WorkerDef.Spec.WorkingDir = absWorkingDir
 		}
 	}
 
@@ -143,7 +143,7 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 	defer cancel()
 
 	// Verificar si existe algún contenedor anterior con el mismo nombre y eliminarlo
-	containerName := fmt.Sprintf("task-%s", d.task.Name)
+	containerName := fmt.Sprintf("execution-%s", d.execution.Metadata.Name)
 	if err := d.cleanupExistingContainer(ctx, containerName); err != nil {
 		d.sendLogsMessage(outputChan, fmt.Sprintf("Warning al limpiar contenedor anterior: %v", err))
 	}
@@ -218,7 +218,7 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 
 	// Guardamos el endpoint
 	d.endpoint = &model.WorkerEndpoint{
-		WorkerID: d.task.Name,
+		WorkerID: d.execution.Metadata.Name,
 		Address:  hostAddress,
 		Port:     hostPort,
 	}
@@ -237,7 +237,7 @@ func (d *DockerWorker) sendErrorMessage(outputChan chan<- model.ProcessOutput, e
 	outputChan <- model.ProcessOutput{
 		IsError:   true,
 		Output:    errMsg,
-		ProcessID: d.task.ID.String(),
+		ProcessID: d.execution.ID.String(),
 	}
 }
 
@@ -248,7 +248,7 @@ func (d *DockerWorker) sendLogsMessage(outputChan chan<- model.ProcessOutput, ms
 	outputChan <- model.ProcessOutput{
 		IsError:   false,
 		Output:    msg,
-		ProcessID: d.task.ID.String(),
+		ProcessID: d.execution.ID.String(),
 		Status:    model.PENDING,
 	}
 }
@@ -285,17 +285,17 @@ func (d *DockerWorker) Run(ctx context.Context, t model.TaskExecution, outputCha
 	}
 	defer grpcClient.Close()
 
-	cmds := d.task.WorkerSpec.Command
+	cmds := d.execution.Task.TaskSpec.Command
 	if len(cmds) == 0 {
 		cmds = []string{"echo", "Hola desde DockerWorker"}
 	}
 
 	log.Printf("Ejecutando comando: %v", cmds)
 	d.sendLogsMessage(outputChan, fmt.Sprintf("Ejecutando comando: %v", cmds))
-	log.Printf("Environment: %v", d.task.WorkerSpec.Env)
-	d.sendLogsMessage(outputChan, fmt.Sprintf("Environment: %v", d.task.WorkerSpec.Env))
-	log.Printf("WorkingDir: %s", d.task.WorkerSpec.WorkingDir)
-	d.sendLogsMessage(outputChan, fmt.Sprintf("WorkingDir: %s", d.task.WorkerSpec.WorkingDir))
+	log.Printf("Environment: %v", d.execution.WorkerDef.Spec.Env)
+	d.sendLogsMessage(outputChan, fmt.Sprintf("Environment: %v", d.execution.WorkerDef.Spec.Env))
+	log.Printf("WorkingDir: %s", d.execution.WorkerDef.Spec.WorkingDir)
+	d.sendLogsMessage(outputChan, fmt.Sprintf("WorkingDir: %s", d.execution.WorkerDef.Spec.WorkingDir))
 
 	// Llamar al proceso remoto con timeout
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -305,8 +305,8 @@ func (d *DockerWorker) Run(ctx context.Context, t model.TaskExecution, outputCha
 		runCtx,
 		t.ID.String(),
 		cmds,
-		d.task.WorkerSpec.Env,
-		d.task.WorkerSpec.WorkingDir,
+		d.execution.WorkerDef.Spec.Env,
+		d.execution.WorkerDef.Spec.WorkingDir,
 		outputChan,
 	); err != nil {
 		log.Printf("Error en StartProcess: %v", err)
@@ -322,7 +322,7 @@ func (d *DockerWorker) Stop(ctx context.Context) (bool, string, error) {
 		return true, "No hay contenedor que detener", nil
 	}
 
-	containerName := fmt.Sprintf("task-%s", d.task.Name)
+	containerName := fmt.Sprintf("execution-%s", d.execution.Metadata.Name)
 	if err := d.cleanupExistingContainer(ctx, containerName); err != nil {
 		return false, "", fmt.Errorf("error deteniendo contenedor: %v", err)
 	}

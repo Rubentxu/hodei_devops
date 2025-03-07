@@ -12,21 +12,21 @@ type Greedy struct {
 	Name string
 }
 
-func NewGreedy() *Greedy {
+func NewGreedy() ports.Scheduler {
 	return &Greedy{Name: "greedy"}
 }
 
-func (g *Greedy) SelectCandidateNodes(t model.Task, pools []*ports.ResourcePool) []*ports.ResourcePool {
+func (g *Greedy) SelectCandidateNodes(definition model.WorkerDefinition, pools []*ports.ResourcePool) []*ports.ResourcePool {
 	candidates := []*ports.ResourcePool{}
 	for _, pool := range pools {
-		if (*pool).Matches(t) {
+		if (*pool).Matches(definition) {
 			candidates = append(candidates, pool)
 		}
 	}
 	return candidates
 }
 
-func (g *Greedy) Score(t model.Task, pools []*ports.ResourcePool) map[string]float64 {
+func (g *Greedy) Score(pools []*ports.ResourcePool) map[string]float64 {
 	log.Println("Running Greedy Score")
 	scores := make(map[string]float64)
 	for _, pool := range pools {

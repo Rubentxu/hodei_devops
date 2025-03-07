@@ -19,20 +19,21 @@ type Epvm struct {
 	// los modelos de predicción, etc.
 }
 
-func NewEpvm() *Epvm {
+func NewEpvm() ports.Scheduler {
 	return &Epvm{Name: "epvm"}
 }
-func (e *Epvm) SelectCandidateNodes(t model.Task, pools []*ports.ResourcePool) []*ports.ResourcePool {
+
+func (e *Epvm) SelectCandidateNodes(definition model.WorkerDefinition, pools []*ports.ResourcePool) []*ports.ResourcePool {
 	candidates := []*ports.ResourcePool{}
 	for _, pool := range pools {
-		if (*pool).Matches(t) {
+		if (*pool).Matches(definition) {
 			candidates = append(candidates, pool)
 		}
 	}
 	return candidates
 }
 
-func (e *Epvm) Score(t model.Task, pools []*ports.ResourcePool) map[string]float64 {
+func (e *Epvm) Score(pools []*ports.ResourcePool) map[string]float64 {
 	scores := make(map[string]float64)
 	// Aquí va la lógica de puntuación de EPVM.  Esto es lo más complejo
 	// y específico de tu implementación de EPVM.  Necesitarás:

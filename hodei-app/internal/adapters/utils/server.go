@@ -4,7 +4,6 @@ import (
 	"log"
 	"os"
 
-	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/incoming/websockets"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/service/manager"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/service/resource"
 
@@ -16,7 +15,7 @@ import (
 // Start inicia el servidor HTTP con todas las configuraciones necesarias
 func Start(
 	app *pocketbase.PocketBase,
-	wsHandler *websockets.WSHandler,
+	//wsHandler *websockets.WSHandler,
 	manager *manager.Manager,
 	resourcePoolManager *resource.ResourcePoolManager,
 ) {
@@ -32,7 +31,7 @@ func Start(
 		e.Router.GET("/static/{path...}", apis.Static(os.DirFS("./pb_public"), false))
 
 		// Configurar endpoints del worker
-		SetupRoutes(e, wsHandler, manager, resourcePoolManager)
+		//SetupRoutes(e, wsHandler, manager, resourcePoolManager)
 
 		return e.Next()
 	})

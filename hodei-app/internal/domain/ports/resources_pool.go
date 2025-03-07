@@ -14,7 +14,7 @@ type ResourcePoolConfig interface {
 type ResourcePool interface {
 	GetID() string
 	GetStats() (*model.Stats, error)
-	Matches(task model.Task) bool
+	Matches(definition model.WorkerDefinition) bool
 	GetResourceInstanceClient() ResourceIntanceClient
 	GetWorkerTemplate(id string) (WorkerTemplate, error)
 	AddWorkerTemplate(template WorkerTemplate) error

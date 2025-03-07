@@ -45,7 +45,7 @@ func NewWorkerState(workerInstance ports.WorkerInstance, taskID string) *WorkerS
 			log.Printf("[%s] Error deteniendo worker: %v", taskID, err)
 			return err
 		} else if stopped {
-			log.Printf("[%s] Worker detenido: %s", taskID, msg)
+			log.Printf("[%s] WorkerInstanceManager detenido: %s", taskID, msg)
 		}
 		return nil
 	}

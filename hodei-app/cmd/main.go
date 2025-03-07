@@ -1,42 +1,44 @@
 package main
 
 import (
-	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/incoming/websockets"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository"
-	adapters "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/resource"
+
 	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/worker"
-	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/worker/factories"
-	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/utils"
+
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/migrations"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/service/resource"
 	"log"
+	"os"
+
+	adapters "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/resource"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/worker/factories"
 
 	"dev.rubentxu.hodei-devops/hodei-app/config"
-
-	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/service/manager"
-
-	"github.com/pocketbase/pocketbase"
+	resourcepool "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/resource_pool"
 )
 
 func main() {
-	// Configurar ruta para la base de datos SQLite
-	dbPath := "./data/hodei-app.db"
-
-	// Asegurar que el directorio exista
-	if err := utils.EnsureDirectoryExists(dbPath); err != nil {
-		log.Fatalf("Error al crear directorio para la base de datos: %v", err)
+	connStr := os.Getenv("POSTGRES_CONNECTION_STRING")
+	if connStr == "" {
+		log.Fatal("POSTGRES_CONNECTION_STRING no está definida en las variables de entorno")
 	}
 
-	// Crear nueva instancia de PocketBase
-	app := pocketbase.New()
-	if app == nil {
-		log.Fatalf("Error creando la instancia de PocketBase")
-	}
+	// Ruta a los scripts de migración
+	migrationsPath := "./migrations"
 
-	// Inicializar la base de datos
-	if err := repository.Initialize(app, dbPath); err != nil {
-		log.Fatalf("Error al inicializar la base de datos: %v", err)
+	// Inicializar la base de datos PostgreSQL directamente usando InitializePostgres
+	db, err := migrations.InitializePostgres(connStr, migrationsPath)
+	if err != nil {
+		log.Fatalf("Error al inicializar la base de datos: %s", err)
 	}
+	defer db.Close()
+
+	// Crear repositorios usando la conexión inicializada
+	_ = resourcepool.NewResourcePoolReadRepository(db)
+	_ = resourcepool.NewResourcePoolWriteRepository(db)
+
+	// Continuar con la inicialización de la aplicación...
 
 	// Cargar configuración
 	cfg := config.Load()
@@ -44,22 +46,11 @@ func main() {
 
 	// Inicializar componentes de la aplicación
 	workerFactory := factories.NewWorkerInstanceFactory(cfg.GRPC)
-	worker := worker.NewWorker(
+	_ = worker.NewWorker(
 		cfg.WorkerName,
 		cfg.MaxConcurrentTasks,
 		workerFactory,
 	)
-
-	// Crear stores
-	templateStore, err := repository.NewPocketBaseStore[ports.WorkerTemplate](app, "worker_templates")
-	if err != nil {
-		log.Fatalf("Error creando el store para templates: %v", err)
-	}
-
-	configStore, err := repository.NewPocketBaseStore[map[string]interface{}](app, "resource_pool_configs")
-	if err != nil {
-		log.Fatalf("Error creando el store para configuraciones: %v", err)
-	}
 
 	// Configurar resource pool
 	poolFactory := adapters.NewDefaultResourcePoolFactory()
@@ -76,16 +67,16 @@ func main() {
 	}
 
 	// Crear manager y websocket handler
-	manager, err := manager.New("greedy", cfg.StorageType, worker, 100, app, resourcePoolManager)
-	if err != nil {
-		log.Fatalf("Error creando el manager: %v", err)
-	}
-
-	wsHandler := websockets.NewWSHandler(manager)
-	go manager.ProcessTasks()
-
-	// Iniciar servidor
-	utils.Start(app, wsHandler, manager, resourcePoolManager)
+	//manager, err := manager.New("greedy", cfg.StorageType, worker, 100, app, resourcePoolManager)
+	//if err != nil {
+	//	log.Fatalf("Error creando el manager: %v", err)
+	//}
+	//
+	//wsHandler := websockets.NewWSHandler(manager)
+	//go manager.ProcessTasks()
+	//
+	//// Iniciar servidor
+	//utils.Start(app, wsHandler, manager, resourcePoolManager)
 }
 
 func setupDefaultPool(resourcePoolManager *resource.ResourcePoolManager, poolFactory ports.ResourcePoolFactory) error {

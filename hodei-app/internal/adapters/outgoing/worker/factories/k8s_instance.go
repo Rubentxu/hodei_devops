@@ -25,36 +25,36 @@ import (
 
 // K8sWorker implementa WorkerInstance para ejecutar un Pod que contenga el servidor gRPC.
 type K8sWorker struct {
-	task       model.TaskExecution
+	execution  model.TaskExecution
 	endpoint   *model.WorkerEndpoint
 	grpcConfig config.GrpcConnectionsConfig
 	k8sCfg     resource.KubernetesResoucesPoolConfig
 	clientset  *kubernetes.Clientset
 }
 
-func (k *K8sWorker) GetID() string {
-	return k.task.ID.String()
-}
-
-func (k *K8sWorker) GetName() string {
-	return k.task.Name
-}
-
-func (k *K8sWorker) GetType() string {
-	return "kubernetes"
-}
-
 // NewK8sWorker crea una instancia de K8sWorker con la misma firma que DockerWorker
-func NewK8sWorker(task model.TaskExecution, grpcConfig config.GrpcConnectionsConfig, client ports.ResourceIntanceClient) (ports.WorkerInstance, error) {
+func NewK8sWorker(execution model.TaskExecution, grpcConfig config.GrpcConnectionsConfig, client ports.ResourceIntanceClient) (ports.WorkerInstance, error) {
 	k8sCfg := client.GetConfig().(resource.KubernetesResoucesPoolConfig)
 	clientset := client.GetNativeClient().(*kubernetes.Clientset)
 
 	return &K8sWorker{
-		task:       task,
+		execution:  execution,
 		grpcConfig: grpcConfig,
 		k8sCfg:     k8sCfg,
 		clientset:  clientset,
 	}, nil
+}
+
+func (k *K8sWorker) GetID() model.AggregateID {
+	return k.execution.ID
+}
+
+func (k *K8sWorker) GetName() string {
+	return k.execution.Metadata.Name
+}
+
+func (k *K8sWorker) GetType() string {
+	return "kubernetes"
 }
 
 // loadPodTemplateFromFile carga y parsea un template de Pod desde un archivo YAML
@@ -79,7 +79,7 @@ func loadPodTemplateFromFile(templatePath string) (*apiv1.Pod, error) {
 
 // Start crea el Pod en Kubernetes y espera a que esté en Running, luego setea k.endpoint
 func (k *K8sWorker) Start(ctx context.Context, templatePath string, outputChan chan<- model.ProcessOutput) (*model.WorkerEndpoint, error) {
-	log.Printf("Iniciando K8sWorker con spec=%v y templatePath=%s", k.task.WorkerSpec, templatePath)
+	log.Printf("Iniciando K8sWorker con spec=%v y templatePath=%s", k.execution.WorkerDef.Spec, templatePath)
 
 	// Cargar el template del Pod desde el archivo YAML pasado como argumento
 	podTemplate, err := loadPodTemplateFromFile(templatePath)
@@ -91,7 +91,7 @@ func (k *K8sWorker) Start(ctx context.Context, templatePath string, outputChan c
 	// **Personalizar el template del Pod**
 
 	// 1. Nombre del Pod
-	podName := fmt.Sprintf("task-%s", k.task.Name)
+	podName := fmt.Sprintf("execution-%s", k.execution.Metadata.Name)
 	podTemplate.ObjectMeta.Name = podName
 	log.Printf("Personalizando Pod con nombre: %s", podName)
 
@@ -129,7 +129,7 @@ func (k *K8sWorker) Start(ctx context.Context, templatePath string, outputChan c
 	}
 
 	// 5. Imagen del contenedor (usar WorkerSpec.Image si se define, sino usar k.k8sCfg.DefaultImage, sino usar la del template)
-	workerImage := k.task.WorkerSpec.Image
+	workerImage := k.execution.WorkerDef.Spec.Image
 	if workerImage == "" {
 		k.sendErrorMessage(outputChan, "No se definió imagen para el Pod ")
 		return nil, fmt.Errorf("no se definió imagen para el Pod")
@@ -142,10 +142,10 @@ func (k *K8sWorker) Start(ctx context.Context, templatePath string, outputChan c
 	}
 
 	// 6. Variables de entorno (append WorkerSpec.Env a las env vars existentes en el template)
-	envVars := buildK8sEnvVars(k.task.WorkerSpec.Env)
+	envVars := buildK8sEnvVars(k.execution.WorkerDef.Spec.Env)
 	if len(podTemplate.Spec.Containers) > 0 {
 		podTemplate.Spec.Containers[0].Env = append(podTemplate.Spec.Containers[0].Env, envVars...) // Append para mergear
-		log.Printf("Añadiendo variables de entorno de WorkerSpec: %v", k.task.WorkerSpec.Env)
+		log.Printf("Añadiendo variables de entorno de WorkerSpec: %v", k.execution.WorkerDef.Spec.Env)
 	}
 
 	// **PodSpec ya está configurado desde el template y personalizado.**
@@ -182,7 +182,7 @@ func (k *K8sWorker) Start(ctx context.Context, templatePath string, outputChan c
 
 	// Configurar endpoint
 	k.endpoint = &model.WorkerEndpoint{
-		WorkerID: k.task.Name,
+		WorkerID: k.execution.ID.String(),
 		Address:  podIP,   // IP interna del Pod
 		Port:     "50051", // Puerto del contenedor gRPC (asumiendo que es fijo en el template o config)
 	}
@@ -199,7 +199,7 @@ func (k *K8sWorker) sendErrorMessage(outputChan chan<- model.ProcessOutput, errM
 	outputChan <- model.ProcessOutput{
 		IsError:   true,
 		Output:    errMsg,
-		ProcessID: k.task.ID.String(),
+		ProcessID: k.execution.ID.String(),
 	}
 }
 
@@ -211,17 +211,17 @@ func (k *K8sWorker) Run(ctx context.Context, t model.TaskExecution, outputChan c
 	}
 	defer grpcClient.Close()
 
-	cmds := k.task.WorkerSpec.Command
+	cmds := k.execution.Task.TaskSpec.Command
 	if len(cmds) == 0 {
 		cmds = []string{"echo", "Hola desde K8sWorker"}
 	}
-	envMap := k.task.WorkerSpec.Env
+	envMap := k.execution.WorkerDef.Spec.Env
 	if envMap == nil {
 		envMap = map[string]string{}
 	}
 
 	// Llamar al proceso remoto (StartProcess)
-	if err := grpcClient.StartProcess(ctx, t.ID.String(), cmds, envMap, k.task.WorkerSpec.WorkingDir, outputChan); err != nil {
+	if err := grpcClient.StartProcess(ctx, t.ID.String(), cmds, envMap, k.execution.WorkerDef.Spec.WorkingDir, outputChan); err != nil {
 		return fmt.Errorf("error en StartProcess: %v", err)
 	}
 
@@ -243,7 +243,7 @@ func (k *K8sWorker) Stop(ctx context.Context) (bool, string, error) {
 	log.Printf("Stop K8s process success=%v, msg=%v", success, msg)
 
 	// En caso quieras eliminar el Pod:
-	// err = k.clientset.CoreV1().Pods("default").Delete(ctx, "task-"+k.task.Name, metav1.DeleteOptions{})
+	// err = k.clientset.CoreV1().Pods("default").Delete(ctx, "execution-"+k.execution.Name, metav1.DeleteOptions{})
 	// if err != nil { ... }
 
 	return success, msg, nil

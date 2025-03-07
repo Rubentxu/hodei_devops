@@ -2,10 +2,10 @@ package model
 
 import "log"
 
-type State int
+type TaskState int
 
 const (
-	Pending State = iota
+	Pending TaskState = iota
 	Scheduled
 	Running
 	Completed
@@ -15,11 +15,11 @@ const (
 	Done
 )
 
-func (s State) String() []string {
+func (s TaskState) String() []string {
 	return []string{"Pending", "Scheduled", "Running", "Completed", "Failed", "Stopped", "Unknown"}
 }
 
-var stateTransitionMap = map[State][]State{
+var stateTransitionMap = map[TaskState][]TaskState{
 	Pending:   {Scheduled},
 	Scheduled: {Scheduled, Running, Failed, Stopped},
 	Running:   {Running, Completed, Failed, Scheduled, Stopped},
@@ -29,7 +29,7 @@ var stateTransitionMap = map[State][]State{
 	Unknown:   {Pending, Scheduled, Running, Completed, Failed, Stopped},
 }
 
-func Contains(states []State, state State) bool {
+func Contains(states []TaskState, state TaskState) bool {
 	for _, s := range states {
 		if s == state {
 			return true
@@ -38,7 +38,7 @@ func Contains(states []State, state State) bool {
 	return false
 }
 
-func ValidStateTransition(src State, dst State) bool {
+func ValidStateTransition(src TaskState, dst TaskState) bool {
 	log.Printf("attempting to transition from %#v to %#v\n", src, dst)
 	return Contains(stateTransitionMap[src], dst)
 }
