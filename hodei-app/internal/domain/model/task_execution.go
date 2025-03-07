@@ -14,6 +14,10 @@ type TaskExecution struct {
 	WorkerDef WorkerDefinition `json:"worker_def"` // Worker definition
 }
 
+func (t TaskExecution) GetID() AggregateID {
+	return t.ID
+}
+
 type ExecutionStatus struct {
 	Endpoint  *WorkerEndpoint
 	State     TaskState `json:"state"`

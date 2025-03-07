@@ -19,6 +19,10 @@ type WorkerDefinition struct {
 	Status   WorkerStatus
 }
 
+func (w WorkerDefinition) GetID() AggregateID {
+	return w.ID
+}
+
 // WorkerSpec describe cómo y dónde se va a ejecutar la tarea.
 // Por ejemplo, "docker" vs "k8s", parámetros, etc.
 type WorkerSpec struct {

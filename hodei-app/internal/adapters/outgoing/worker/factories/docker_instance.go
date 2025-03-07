@@ -285,7 +285,7 @@ func (d *DockerWorker) Run(ctx context.Context, t model.TaskExecution, outputCha
 	}
 	defer grpcClient.Close()
 
-	cmds := d.execution.Task.TaskSpec.Command
+	cmds := d.execution.Task.Spec.Command
 	if len(cmds) == 0 {
 		cmds = []string{"echo", "Hola desde DockerWorker"}
 	}

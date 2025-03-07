@@ -211,7 +211,7 @@ func (k *K8sWorker) Run(ctx context.Context, t model.TaskExecution, outputChan c
 	}
 	defer grpcClient.Close()
 
-	cmds := k.execution.Task.TaskSpec.Command
+	cmds := k.execution.Task.Spec.Command
 	if len(cmds) == 0 {
 		cmds = []string{"echo", "Hola desde K8sWorker"}
 	}

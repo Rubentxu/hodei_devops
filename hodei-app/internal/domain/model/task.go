@@ -7,7 +7,11 @@ import (
 type Task struct {
 	ID       AggregateID
 	Metadata Metadata
-	TaskSpec TaskSpec
+	Spec     TaskSpec
+}
+
+func (t Task) GetID() AggregateID {
+	return t.ID
 }
 
 type TaskSpec struct {
@@ -29,7 +33,7 @@ func NewTask(name, description string, command []string, params []ParamDefinitio
 			name,
 			description,
 		),
-		TaskSpec: TaskSpec{
+		Spec: TaskSpec{
 			Command:     command,
 			Params:      params,
 			ParamValues: make(map[string]interface{}),
