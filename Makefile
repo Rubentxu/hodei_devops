@@ -1,7 +1,7 @@
 TEST_SCRIPT=./testProcess.sh
 PROTOC = protoc
-PROTO_DIR = protos/remote_process
-PROTO_FILE = $(PROTO_DIR)/remote_process.proto
+PROTO_DIR = protos/remote_worker
+PROTO_FILE = $(PROTO_DIR)/remote_worker.proto
 GO_OUT = .
 
 # Directorios para certificados
@@ -12,8 +12,8 @@ PROD_CERT_DIR := $(CERT_DIR)/prod
 # Nombres de archivos de certificados
 CA_KEY := ca-key.pem
 CA_CERT := ca-cert.pem
-SERVER_KEY := remote_process-key.pem
-SERVER_CERT := remote_process-cert.pem
+SERVER_KEY := remote_worker-key.pem
+SERVER_CERT := remote_worker-cert.pem
 CLIENT_KEY := worker-client-key.pem
 CLIENT_CERT := worker-client-cert.pem
 
@@ -37,8 +37,8 @@ DOCKER_SOCKET ?= /var/run/docker.sock
 
 # Swagger configuration
 SWAGGER_UI_VERSION ?= v4.15.5
-SWAGGER_UI_DIR = orchestrator/swagger-ui
-API_DOCS_DIR = orchestrator/api
+SWAGGER_UI_DIR = hodei-app/swagger-ui
+API_DOCS_DIR = hodei-app/api
 
 # Detectar Sistema Operativo
 ifeq ($(OS),Windows_NT)
@@ -73,21 +73,21 @@ proto:
 	          $(PROTO_FILE)
 
 .PHONY: test
-test: proto build run-remote_process run-orchestrator
-	@sleep 2 # Espera a que el servidor y el orchestratore se inicien
+test: proto build run-remote_worker run-hodei-app
+	@sleep 2 # Espera a que el servidor y el hodei-appe se inicien
 	@echo "🧪 Ejecutando pruebas..."
 	@echo "🧪 Ejecutando pruebas shell..."
 	@bash $(TEST_SCRIPT)
 	
 
 .PHONY: test-go
-test-go: stop-remote_process stop-orchestrator clean build run-remote_process run-orchestrator
-	@sleep 5 # Increase sleep time to ensure the remote_process starts
+test-go: stop-remote_worker stop-hodei-app clean build run-remote_worker run-hodei-app
+	@sleep 5 # Increase sleep time to ensure the remote_worker starts
 	@echo "🧪 Ejecutando pruebas Go..."
 	@JWT_SECRET="$(JWT_SECRET)" JWT_TOKEN="$(JWT_TOKEN)" go test -v ./tests/...
 	@echo "✅ Pruebas Go completadas."
-	@$(MAKE) stop-remote_process
-	@$(MAKE) stop-orchestrator
+	@$(MAKE) stop-remote_worker
+	@$(MAKE) stop-hodei-app
 
 .PHONY: test-integration
 test-integration:
@@ -98,21 +98,21 @@ test-integration:
 test-all: test test-integration
 
 .PHONY: clean
-clean: stop-remote_process stop-orchestrator
+clean: stop-remote_worker stop-hodei-app
 	@echo "🧹 Limpiando binarios..."
 ifeq ($(DETECTED_OS),Windows)
-	@$(RM) bin$(SEP)remote_process.exe 2>NUL || true
-	@$(RM) bin$(SEP)orchestrator.exe 2>NUL || true
+	@$(RM) bin$(SEP)remote_worker.exe 2>NUL || true
+	@$(RM) bin$(SEP)hodei-app.exe 2>NUL || true
 	@$(RM) bin$(SEP)archiva-go.exe 2>NUL || true
 else
-	@$(RM) bin/remote_process bin/orchestrator bin/archiva-go 2>/dev/null || true
+	@$(RM) bin/remote_worker bin/hodei-app bin/archiva-go 2>/dev/null || true
 endif
 
 .PHONY: build
 build:
 	@echo "🏗️  Construyendo binarios..."
-	go build -o bin/remote_process remote_process/cmd/main.go
-	go build -o bin/orchestrator orchestrator/cmd/main.go
+	go build -o bin/remote_worker remote_worker/cmd/main.go
+	go build -o bin/hodei-app hodei-app/cmd/main.go
 	go build -o bin/archiva-go archiva_go/cmd/main.go
 
 # Directorios para certificados - Cross-platform
@@ -138,11 +138,11 @@ ifeq ($(DETECTED_OS),Windows)
 			-addext "subjectAltName = DNS:localhost,DNS:remote-process,DNS:worker" && \
 		openssl genrsa -out $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(SERVER_KEY)) 4096 && \
 		openssl req -new -key $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(SERVER_KEY)) \
-			-out $(call normalize_path,$(DEV_CERT_DIR)$(SEP)remote_process.csr) \
+			-out $(call normalize_path,$(DEV_CERT_DIR)$(SEP)remote_worker.csr) \
 			-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=remote-process" && \
 		echo "subjectAltName=DNS:localhost,DNS:remote-process,DNS:worker" > $(call normalize_path,$(DEV_CERT_DIR)$(SEP)extfile.cnf) && \
 		openssl x509 -req \
-			-in $(call normalize_path,$(DEV_CERT_DIR)$(SEP)remote_process.csr) \
+			-in $(call normalize_path,$(DEV_CERT_DIR)$(SEP)remote_worker.csr) \
 			-CA $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CA_CERT)) \
 			-CAkey $(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(CA_KEY)) \
 			-CAcreateserial \
@@ -175,11 +175,11 @@ else
 			-addext "subjectAltName = DNS:localhost,DNS:remote-process,DNS:worker"; \
 		openssl genrsa -out $(DEV_CERT_DIR)/$(SERVER_KEY) 4096; \
 		openssl req -new -key $(DEV_CERT_DIR)/$(SERVER_KEY) \
-			-out $(DEV_CERT_DIR)/remote_process.csr \
+			-out $(DEV_CERT_DIR)/remote_worker.csr \
 			-subj "/C=ES/ST=Madrid/L=Madrid/O=DevOps/OU=Platform/CN=remote-process"; \
 		echo "subjectAltName=DNS:localhost,DNS:remote-process,DNS:worker" > $(DEV_CERT_DIR)/extfile.cnf; \
 		openssl x509 -req \
-			-in $(DEV_CERT_DIR)/remote_process.csr \
+			-in $(DEV_CERT_DIR)/remote_worker.csr \
 			-CA $(DEV_CERT_DIR)/$(CA_CERT) \
 			-CAkey $(DEV_CERT_DIR)/$(CA_KEY) \
 			-CAcreateserial \
@@ -206,10 +206,10 @@ else
 endif
 
 
-# Run remote_process - Cross-platform
-.PHONY: run-remote_process
-run-remote_process: stop-remote_process build
-	@echo "🚀 Starting remote_process with TLS and JWT in development mode..."
+# Run remote_worker - Cross-platform
+.PHONY: run-remote_worker
+run-remote_worker: stop-remote_worker build
+	@echo "🚀 Starting remote_worker with TLS and JWT in development mode..."
 ifeq ($(DETECTED_OS),Windows)
 	@set SERVER_CERT_PATH=$(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(SERVER_CERT))& ^
 	set SERVER_KEY_PATH=$(call normalize_path,$(DEV_CERT_DIR)$(SEP)$(SERVER_KEY))& ^
@@ -217,8 +217,8 @@ ifeq ($(DETECTED_OS),Windows)
 	set APPLICATION_PORT=50051& ^
 	set JWT_SECRET=$(JWT_SECRET)& ^
 	set ENV=development& ^
-	start /B cmd /C bin$(SEP)remote_process > bin$(SEP)remote_process.log 2>&1
-	@echo %ERRORLEVEL% > bin$(SEP)remote_process.pid
+	start /B cmd /C bin$(SEP)remote_worker > bin$(SEP)remote_worker.log 2>&1
+	@echo %ERRORLEVEL% > bin$(SEP)remote_worker.pid
 else
 	@SERVER_CERT_PATH=$(DEV_CERT_DIR)/$(SERVER_CERT) \
 	SERVER_KEY_PATH=$(DEV_CERT_DIR)/$(SERVER_KEY) \
@@ -226,32 +226,32 @@ else
 	APPLICATION_PORT=50051 \
 	JWT_SECRET="$(JWT_SECRET)" \
 	ENV=development \
-	./bin/remote_process > ./bin/remote_process.log 2>&1 & echo $$! > ./bin/remote_process.pid
+	./bin/remote_worker > ./bin/remote_worker.log 2>&1 & echo $$! > ./bin/remote_worker.pid
 endif
 
-# Run orchestrator - Cross-platform
-.PHONY: run-orchestrator
-run-orchestrator: stop-orchestrator build
-	@echo "🚀 Starting orchestrator with TLS and JWT in development mode..."
+# Run hodei-app - Cross-platform
+.PHONY: run-hodei-app
+run-hodei-app: stop-hodei-app build
+	@echo "🚀 Starting hodei-app with TLS and JWT in development mode..."
 ifeq ($(DETECTED_OS),Windows)
 	@set JWT_TOKEN=$(JWT_TOKEN)& ^
-	start /B cmd /C bin$(SEP)orchestrator serve --dir=".\test_pb_data" > bin$(SEP)orchestrator.log 2>&1
-	@echo %ERRORLEVEL% > bin$(SEP)orchestrator.pid
+	start /B cmd /C bin$(SEP)hodei-app serve --dir=".\test_pb_data" > bin$(SEP)hodei-app.log 2>&1
+	@echo %ERRORLEVEL% > bin$(SEP)hodei-app.pid
 else
 	@JWT_TOKEN="$(JWT_TOKEN)" \
 	DEFAULT_DOCKER_POOL=true \
-	./bin/orchestrator serve --dir="./test_pb_data" > ./bin/orchestrator.log 2>&1 & echo $$! > ./bin/orchestrator.pid
+	./bin/hodei-app serve --dir="./test_pb_data" > ./bin/hodei-app.log 2>&1 & echo $$! > ./bin/hodei-app.pid
 endif
 
-.PHONY: stop-orchestrator
-stop-orchestrator:
-	@echo "🛑 Deteniendo orchestrator..."
+.PHONY: stop-hodei-app
+stop-hodei-app:
+	@echo "🛑 Deteniendo hodei-app..."
 ifeq ($(DETECTED_OS),Windows)
-	@if exist bin$(SEP)orchestrator.pid (for /f %i in (bin$(SEP)orchestrator.pid) do taskkill /F /PID %i 2>NUL || true)
-	@$(RM) bin$(SEP)orchestrator.pid 2>NUL || true
+	@if exist bin$(SEP)hodei-app.pid (for /f %i in (bin$(SEP)hodei-app.pid) do taskkill /F /PID %i 2>NUL || true)
+	@$(RM) bin$(SEP)hodei-app.pid 2>NUL || true
 else
-	@if [ -f ./bin/orchestrator.pid ]; then kill -9 `cat ./bin/orchestrator.pid` 2>/dev/null || true; fi
-	@$(RM) ./bin/orchestrator.pid 2>/dev/null || true
+	@if [ -f ./bin/hodei-app.pid ]; then kill -9 `cat ./bin/hodei-app.pid` 2>/dev/null || true; fi
+	@$(RM) ./bin/hodei-app.pid 2>/dev/null || true
 endif
 
 .PHONY: run-archiva-go
@@ -262,13 +262,13 @@ run-archiva-go: stop-archiva-go build
 .PHONY: test-tls
 test-tls: certs-dev
 	@echo "🧪 Testing TLS configuration..."
-	@echo "Testing remote_process certificate:"
+	@echo "Testing remote_worker certificate:"
 	@openssl x509 -in $(DEV_CERT_DIR)/$(SERVER_CERT) -text -noout | grep "Subject:"
-	@echo "Testing orchestrator certificate:"
+	@echo "Testing hodei-app certificate:"
 	@openssl x509 -in $(DEV_CERT_DIR)/$(CLIENT_CERT) -text -noout | grep "Subject:"
-	@echo "Verifying remote_process certificate against CA:"
+	@echo "Verifying remote_worker certificate against CA:"
 	@openssl verify -CAfile $(DEV_CERT_DIR)/$(CA_CERT) $(DEV_CERT_DIR)/$(SERVER_CERT)
-	@echo "Verifying orchestrator certificate against CA:"
+	@echo "Verifying hodei-app certificate against CA:"
 	@openssl verify -CAfile $(DEV_CERT_DIR)/$(CA_CERT) $(DEV_CERT_DIR)/$(CLIENT_CERT)
 
 .PHONY: clean-certs
@@ -297,9 +297,9 @@ help-certs:
 	@echo "  make test-tls         - Test TLS configuration"
 	@echo "  make clean-certs      - Remove all certificates"
 	@echo "Development Commands:"
-	@echo "  make run-remote_process   - Run remote_process with TLS in development"
-	@echo "  make run-remote_process   - Run remote_process with TLS in development"
-	@echo "  make run-orchestrator   - Run orchestrator with TLS in development"
+	@echo "  make run-remote_worker   - Run remote_worker with TLS in development"
+	@echo "  make run-remote_worker   - Run remote_worker with TLS in development"
+	@echo "  make run-hodei-app   - Run hodei-app with TLS in development"
 	@echo "  make docker-compose-dev - Run all services with TLS in development"
 
 .PHONY: install-swagger
@@ -334,15 +334,15 @@ swagger-serve: swagger-gen
 swagger: swagger-gen swagger-ui
 	@echo "✅ Swagger setup complete"
 
-.PHONY: stop-remote_process
-stop-remote_process:
+.PHONY: stop-remote_worker
+stop-remote_worker:
 	@echo "🛑 Deteniendo servidor..."
 ifeq ($(DETECTED_OS),Windows)
-	@if exist bin$(SEP)remote_process.pid (for /f %i in (bin$(SEP)remote_process.pid) do taskkill /F /PID %i 2>NUL || true)
-	@$(RM) bin$(SEP)remote_process.pid 2>NUL || true
+	@if exist bin$(SEP)remote_worker.pid (for /f %i in (bin$(SEP)remote_worker.pid) do taskkill /F /PID %i 2>NUL || true)
+	@$(RM) bin$(SEP)remote_worker.pid 2>NUL || true
 else
-	@if [ -f ./bin/remote_process.pid ]; then kill -9 `cat ./bin/remote_process.pid` 2>/dev/null || true; fi
-	@$(RM) ./bin/remote_process.pid 2>/dev/null || true
+	@if [ -f ./bin/remote_worker.pid ]; then kill -9 `cat ./bin/remote_worker.pid` 2>/dev/null || true; fi
+	@$(RM) ./bin/remote_worker.pid 2>/dev/null || true
 endif
 
 
@@ -371,7 +371,7 @@ check-docker:
 
 # Targets para construcción de imágenes Docker
 .PHONY: docker-build-all
-docker-build-all: docker-build-orchestrator docker-build-remote-process
+docker-build-all: docker-build-hodei-app docker-build-remote-process
 
 # Añadir targets para compilar binarios específicamente para imágenes Docker
 .PHONY: build-for-docker
@@ -379,23 +379,23 @@ build-for-docker: proto
 	@echo "🏗️  Construyendo binarios para Docker en $(DETECTED_OS)..."
 	@$(MKDIR) bin
 ifeq ($(DETECTED_OS),Windows)
-	@set CGO_ENABLED=0&&set GOOS=linux&&set GOARCH=amd64&&go build -o bin$(SEP)remote_process.exe remote_process$(SEP)cmd$(SEP)main.go
-	@set CGO_ENABLED=0&&set GOOS=linux&&set GOARCH=amd64&&go build -o bin$(SEP)orchestrator.exe orchestrator$(SEP)cmd$(SEP)main.go
+	@set CGO_ENABLED=0&&set GOOS=linux&&set GOARCH=amd64&&go build -o bin$(SEP)remote_worker.exe remote_worker$(SEP)cmd$(SEP)main.go
+	@set CGO_ENABLED=0&&set GOOS=linux&&set GOARCH=amd64&&go build -o bin$(SEP)hodei-app.exe hodei-app$(SEP)cmd$(SEP)main.go
 else
-	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin$(SEP)remote_process remote_process$(SEP)cmd$(SEP)main.go
-	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin$(SEP)orchestrator orchestrator$(SEP)cmd$(SEP)main.go
+	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin$(SEP)remote_worker remote_worker$(SEP)cmd$(SEP)main.go
+	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin$(SEP)hodei-app hodei-app$(SEP)cmd$(SEP)main.go
 endif
 	@echo "✅ Binarios construidos para Docker en directorio bin/"
 
-.PHONY: docker-build-orchestrator
-docker-build-orchestrator: build-for-docker
-	@echo "🐳 Construyendo imagen de Docker para orchestrator..."
-	docker build -t hodei/orchestrator:latest -f build/orchestrator/Dockerfile .
+.PHONY: docker-build-hodei-app
+docker-build-hodei-app: build-for-docker
+	@echo "🐳 Construyendo imagen de Docker para hodei-app..."
+	docker build -t hodei/hodei-app:latest -f build/hodei-app/Dockerfile .
 
 .PHONY: docker-build-remote-process
 docker-build-remote-process: build-for-docker
-	@echo "🐳 Construyendo imagen de Docker para remote_process..."
-	docker build -t hodei/remote-process-worker:latest -f build/remote_process/Dockerfile .
+	@echo "🐳 Construyendo imagen de Docker para remote_worker..."
+	docker build -t hodei/remote-process-worker:latest -f build/remote_worker/Dockerfile .
 
 
 
@@ -403,12 +403,12 @@ docker-build-remote-process: build-for-docker
 # Target para test en Docker con generación de certificados
 .PHONY: test-docker
 test-docker: check-docker certs-dev build
-	@echo "🐳 Launching orchestrator container via docker-compose..."
+	@echo "🐳 Launching hodei-app container via docker-compose..."
 	@docker compose -f docker-compose.test.yml up -d --build
 	@JWT_SECRET="$(JWT_SECRET)" \
     JWT_TOKEN="$(JWT_TOKEN)" \
-    WS_BASE_URL="ws://orchestrator:8090" \
-    API_BASE_URL="http://orchestrator:8090" \
+    WS_BASE_URL="ws://hodei-app:8090" \
+    API_BASE_URL="http://hodei-app:8090" \
     WORKER_IMAGE="hodei/remote-process-worker:latest" \
     go test -v ./tests/tasks_api_test.go
 
@@ -424,12 +424,12 @@ helm-deploy: docker-build-all certs-dev setup-helm-certs
 	@echo "🚢 Desplegando en Kubernetes usando Helm..."
 ifeq ($(DETECTED_OS),Windows)
 	helm upgrade --install hodei-chart .\hodei-chart ^
-		--set orchestrator.config.grpc.jwtSecret="$(JWT_SECRET)" ^
-		--set orchestrator.config.grpc.jwtToken="$(JWT_TOKEN)"
+		--set hodei-app.config.grpc.jwtSecret="$(JWT_SECRET)" ^
+		--set hodei-app.config.grpc.jwtToken="$(JWT_TOKEN)"
 else
 	helm upgrade --install hodei-chart ./hodei-chart \
-		--set orchestrator.config.grpc.jwtSecret="$(JWT_SECRET)" \
-		--set orchestrator.config.grpc.jwtToken="$(JWT_TOKEN)"
+		--set hodei-app.config.grpc.jwtSecret="$(JWT_SECRET)" \
+		--set hodei-app.config.grpc.jwtToken="$(JWT_TOKEN)"
 endif
 
 # Target para preparar certificados para Helm (compatible con Windows/Linux)
@@ -446,12 +446,12 @@ endif
 
 .PHONY: test-containers
 test-containers: check-docker certs-dev build
-	@echo "🧹 Eliminando contenedor hodei-orchestrator previo (si existe)..."
-	@docker rm -f hodei-orchestrator || true
+	@echo "🧹 Eliminando contenedor hodei-hodei-app previo (si existe)..."
+	@docker rm -f hodei-hodei-app || true
 	@echo "🧪 Ejecutando tests con testcontainers-go..."
 	@JWT_SECRET="$(JWT_SECRET)" \
 	JWT_TOKEN="$(JWT_TOKEN)" \
-	WS_BASE_URL="ws://orchestrator:8090" \
-	API_BASE_URL="http://orchestrator:8090" \
+	WS_BASE_URL="ws://hodei-app:8090" \
+	API_BASE_URL="http://hodei-app:8090" \
 	WORKER_IMAGE="hodei/remote-process-worker:latest" \
 	go test -v ./tests/tasks_api_test.go

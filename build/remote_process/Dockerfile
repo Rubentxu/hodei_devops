@@ -17,7 +17,7 @@ RUN curl -L -o grpcurl.tar.gz https://github.com/fullstorydev/grpcurl/releases/d
 WORKDIR /app
 
 # Copia el binario precompilado y el script health check
-COPY ./bin/remote_process .
+COPY ./bin/remote_worker .
 COPY ./grpc_health_check.sh .
 
 # Copia los certificados
@@ -33,7 +33,7 @@ RUN groupadd -g ${DOCKER_GID} appgroup && \
 # Establecer propietario y permisos
 RUN chown -R appuser:appgroup /app /certs
 RUN chmod +x /app/grpc_health_check.sh
-RUN chmod +x /app/remote_process
+RUN chmod +x /app/remote_worker
 # Configurar permisos para certificados
 RUN find /certs -type d -exec chmod 755 {} \; && \
     find /certs -type f -name "*.pem" -exec chmod 644 {} \; && \
@@ -46,4 +46,4 @@ USER appuser
 EXPOSE 50051
 
 # Comando para ejecutar el servidor
-CMD ["./remote_process"]
+CMD ["./remote_worker"]

@@ -12,7 +12,7 @@ To get the application URL, run these commands:
 
 Services deployed:
 - Orchestrator: {{ include "hodei-devops.fullname" . }}-orchestrator:{{ .Values.orchestrator.service.ports.http }}
-- Remote Process Worker: {{ include "hodei-devops.fullname" . }}-remote-process-worker:{{ .Values.remote_process_worker.service.port }}
+- Remote Process Worker: {{ include "hodei-devops.fullname" . }}-remote-process-worker:{{ .Values.remote_worker_worker.service.port }}
 
 For more information about Hodei DevOps, please visit:
 https://github.com/your-org/hodei-devops

@@ -5,21 +5,21 @@ metadata:
   labels:
     {{- include "hodei-devops.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.remote_process_worker.replicas }}
+  replicas: {{ .Values.remote_worker_worker.replicas }}
   selector:
     matchLabels:
-      app: {{ .Values.remote_process_worker.name }}
+      app: {{ .Values.remote_worker_worker.name }}
   template:
     metadata:
       labels:
-        app: {{ .Values.remote_process_worker.name }}
+        app: {{ .Values.remote_worker_worker.name }}
     spec:
       containers:
-        - name: {{ .Values.remote_process_worker.name }}
-          image: "{{ .Values.remote_process_worker.image.repository }}:{{ .Values.remote_process_worker.image.tag }}"
-          imagePullPolicy: {{ .Values.remote_process_worker.image.pullPolicy }}
+        - name: {{ .Values.remote_worker_worker.name }}
+          image: "{{ .Values.remote_worker_worker.image.repository }}:{{ .Values.remote_worker_worker.image.tag }}"
+          imagePullPolicy: {{ .Values.remote_worker_worker.image.pullPolicy }}
           ports:
-            - containerPort: {{ .Values.remote_process_worker.service.port }}
+            - containerPort: {{ .Values.remote_worker_worker.service.port }}
           env:
             - name: SERVER_CERT_PATH
               value: {{ printf "%s/%s" .Values.tls.mountPath .Values.tls.serverCert }}
@@ -28,7 +28,7 @@ spec:
             - name: CA_CERT_PATH
               value: {{ printf "%s/%s" .Values.tls.mountPath .Values.tls.caCert }}
             - name: APPLICATION_PORT
-              value: "{{ .Values.remote_process_worker.service.port }}"
+              value: "{{ .Values.remote_worker_worker.service.port }}"
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
@@ -39,7 +39,7 @@ spec:
               mountPath: {{ .Values.tls.mountPath }}
               readOnly: true
           resources:
-            {{- toYaml .Values.remote_process_worker.resources | nindent 12 }}
+            {{- toYaml .Values.remote_worker_worker.resources | nindent 12 }}
       volumes:
         - name: tls-certs
           secret:

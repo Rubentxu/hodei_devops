@@ -166,9 +166,9 @@ La seguridad es fundamental en Remote Process Service. Se recomienda revisar det
 
 ```go
 accessibleRoles := map[string][]string{
-    "/remote_process.RemoteProcessService/StartProcess": {"admin", "operator"},
-    "/remote_process.RemoteProcessService/CollectMetrics": {"admin", "operator", "viewer"},
-    "/remote_process.RemoteProcessService/SyncFiles": {"admin", "operator"},
+    "/remote_worker.RemoteProcessService/StartProcess": {"admin", "operator"},
+    "/remote_worker.RemoteProcessService/CollectMetrics": {"admin", "operator", "viewer"},
+    "/remote_worker.RemoteProcessService/SyncFiles": {"admin", "operator"},
 }
 ```
 

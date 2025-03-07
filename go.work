@@ -1,12 +1,12 @@
 go 1.23.4
 
-toolchain go1.23.6
+toolchain go1.23.4
 
 use (
 	./archiva_go
-	./orchestrator
+	./hodei-app
 	./protos
-	./remote_process
+	./remote_worker
 	./tests
 )
 

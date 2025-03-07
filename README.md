@@ -63,12 +63,12 @@ A continuación se explica cada uno de los más relevantes:
   Genera el código en Go a partir de los archivos Protocol Buffers (.proto). Este comando crea los archivos necesarios (`.pb.go` y `.grpc.pb.go`) para que los servicios gRPC funcionen correctamente.
 
 - **make build**  
-  Compila los binarios de los diferentes servicios (remote_process, orchestrator y archiva-go). El resultado se ubica en el directorio `bin`, facilitando su ejecución y despliegue.
+  Compila los binarios de los diferentes servicios (remote_worker, orchestrator y archiva-go). El resultado se ubica en el directorio `bin`, facilitando su ejecución y despliegue.
 
 - **make test**  
   Ejecuta una serie de pasos:
    1. Genera el código proto y compila los binarios.
-   2. Inicia los servicios `remote_process` y `orchestrator`.
+   2. Inicia los servicios `remote_worker` y `orchestrator`.
    3. Ejecuta el script de pruebas (`testProcess.sh`), que valida la funcionalidad general del sistema.
 
 - **make test-go**  
@@ -87,8 +87,8 @@ A continuación se explica cada uno de los más relevantes:
 - **make certs-dev**  
   Genera los certificados y claves necesarios para el entorno de desarrollo. Si los certificados ya existen, notifica que están disponibles. Esto es esencial para habilitar la comunicación segura (TLS) entre los servicios.
 
-- **make run-remote_process**  
-  Inicia el servicio `remote_process` en modo desarrollo, configurando variables de entorno necesarias (como rutas de certificados, puerto y JWT). Además, redirige la salida a un archivo de log y guarda el PID para facilitar su gestión.
+- **make run-remote_worker**  
+  Inicia el servicio `remote_worker` en modo desarrollo, configurando variables de entorno necesarias (como rutas de certificados, puerto y JWT). Además, redirige la salida a un archivo de log y guarda el PID para facilitar su gestión.
 
 - **make run-orchestrator**  
   Arranca el servicio `orchestrator` con las configuraciones de TLS y JWT en modo desarrollo, redirigiendo la salida a un log y almacenando el PID correspondiente.
@@ -96,7 +96,7 @@ A continuación se explica cada uno de los más relevantes:
 - **make run-archiva-go**  
   Ejecuta el binario del servicio `archiva-go`, de forma similar a los otros servicios, permitiendo su monitoreo mediante logs y gestión a través del archivo de PID.
 
-- **make stop-remote_process, stop-orchestrator, stop-archiva-go**  
+- **make stop-remote_worker, stop-orchestrator, stop-archiva-go**  
   Cada uno de estos comandos se encarga de detener el servicio correspondiente usando el PID almacenado en el directorio `bin`. Esto permite reiniciar los servicios de forma controlada durante el desarrollo o en caso de incidencias.
 
 

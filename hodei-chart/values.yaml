@@ -17,10 +17,10 @@ certificados:
     cert: "worker-client-cert.pem"
     key: "worker-client-key.pem"
   remoteProcess:
-    cert: "remote_process-cert.pem"
-    key: "remote_process-key.pem"
+    cert: "remote_worker-cert.pem"
+    key: "remote_worker-key.pem"
 
-remote_process_worker:
+remote_worker_worker:
   name: remote-process-worker
   image:
     repository: hodei/remote-process-worker
@@ -56,8 +56,8 @@ orchestrator:
     # Configuración gRPC
     grpc:
       certsMountPath: "/certs"
-      serverCertPath: "/certs/remote_process-cert.pem"
-      serverKeyPath: "/certs/remote_process-key.pem"
+      serverCertPath: "/certs/remote_worker-cert.pem"
+      serverKeyPath: "/certs/remote_worker-key.pem"
       clientCertPath: "/certs/worker-client-cert.pem"
       clientKeyPath: "/certs/worker-key.pem"
       caCertPath: "/certs/ca-cert.pem"

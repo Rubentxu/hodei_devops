@@ -4,8 +4,8 @@ set -e
 # --- Configuración ---
 GRPC_SERVER_ADDRESS="localhost:50051"
 CERT_DIR="certs/dev"
-SERVER_CERT="${CERT_DIR}/remote_process-cert.pem"
-SERVER_KEY="${CERT_DIR}/remote_process-key.pem"
+SERVER_CERT="${CERT_DIR}/remote_worker-cert.pem"
+SERVER_KEY="${CERT_DIR}/remote_worker-key.pem"
 CA_CERT="${CERT_DIR}/ca-cert.pem"
 JWT_SECRET="test_secret_key_for_development_1234567890"
 MAX_RETRIES=5
@@ -40,7 +40,7 @@ gen_jwt() {
 build_server() {
     header "Compilando servidor..."
     mkdir -p "${BIN_DIR}"
-    go build -o "${BIN_DIR}/remote_process" remote_process/cmd/main.go
+    go build -o "${BIN_DIR}/remote_worker" remote_worker/cmd/main.go
 }
 
 # --- Iniciar servidor ---
@@ -52,7 +52,7 @@ start_server() {
     SERVER_KEY_PATH="${SERVER_KEY}" \
     CA_CERT_PATH="${CA_CERT}" \
     JWT_SECRET="${JWT_SECRET}" \
-    "${BIN_DIR}/remote_process" > "${BIN_DIR}/server.log" 2>&1 &
+    "${BIN_DIR}/remote_worker" > "${BIN_DIR}/server.log" 2>&1 &
     SERVER_PID=$!
     echo "PID: $SERVER_PID | Logs: ${BIN_DIR}/server.log"
 }
@@ -106,7 +106,7 @@ run_metrics_tests() {
             -key "${CERT_DIR}/worker-client-key.pem" \
             -max-time 60 \
             "${GRPC_SERVER_ADDRESS}" \
-            remote_process.RemoteProcessService/CollectMetrics 2>&1 | tee "${TMP_OUTPUT}" &
+            remote_worker.RemoteProcessService/CollectMetrics 2>&1 | tee "${TMP_OUTPUT}" &
 
         # Mostrar las trazas en tiempo real
         tail -f "${TMP_OUTPUT}" &

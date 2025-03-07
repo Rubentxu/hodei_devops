@@ -10,7 +10,7 @@ run_health_check() {
     curl -X POST http://localhost:8080/health \
          -H "Content-Type: application/json" \
          -d '{
-               "remote_process_server_address": "localhost:50051",
+               "remote_worker_server_address": "localhost:50051",
                "process_id": "'$process_id'",
                "check_interval": '$check_interval'
              }' &
@@ -24,7 +24,7 @@ echo "===================="
 curl -X POST http://localhost:8080/run \
      -H "Content-Type: application/json" \
      -d '{
-           "remote_process_server_address": "localhost:50051",
+           "remote_worker_server_address": "localhost:50051",
            "command": ["ping", "-c", "5", "google.com"],
            "process_id": "ping-google",
            "check_interval": 5
@@ -39,7 +39,7 @@ echo "===================="
 curl -X POST http://localhost:8080/run \
      -H "Content-Type: application/json" \
      -d '{
-           "remote_process_server_address": "localhost:50051",
+           "remote_worker_server_address": "localhost:50051",
            "command": ["ls", "-la"],
            "process_id": "list-dir",
            "check_interval": 5,
@@ -55,7 +55,7 @@ echo "===================="
 curl -X POST http://localhost:8080/run \
      -H "Content-Type: application/json" \
      -d '{
-           "remote_process_server_address": "localhost:50051",
+           "remote_worker_server_address": "localhost:50051",
            "command": ["bash", "-c", "for i in {1..10}; do echo Looping... iteration $i; sleep 1; done"],
            "process_id": "loop-10",
            "check_interval": 5
@@ -70,7 +70,7 @@ echo "===================="
 curl -X POST http://localhost:8080/run \
      -H "Content-Type: application/json" \
      -d '{
-           "remote_process_server_address": "localhost:50051",
+           "remote_worker_server_address": "localhost:50051",
            "command": ["printenv"],
            "process_id": "env",
            "check_interval": 5,
@@ -89,7 +89,7 @@ echo "===================="
 curl -X POST http://localhost:8080/run \
      -H "Content-Type: application/json" \
      -d '{
-           "remote_process_server_address": "localhost:50051",
+           "remote_worker_server_address": "localhost:50051",
            "command": ["bash", "-c", "echo VAR1 is ${VAR1}"],
            "process_id": "echo-env-var",
            "check_interval": 5,
@@ -107,7 +107,7 @@ echo "===================="
 curl -X POST http://localhost:8080/run \
      -H "Content-Type: application/json" \
      -d '{
-           "remote_process_server_address": "localhost:50051",
+           "remote_worker_server_address": "localhost:50051",
            "command": ["echo", "Hello, World!"],
            "process_id": "echo-message",
            "check_interval": 5
@@ -122,7 +122,7 @@ echo "===================="
 curl -X POST http://localhost:8080/run \
      -H "Content-Type: application/json" \
      -d '{
-           "remote_process_server_address": "localhost:50051",
+           "remote_worker_server_address": "localhost:50051",
            "command": ["bash", "-c", "i=1; while true; do echo \"Long process 1... iteration $i\"; i=$((i+1)); sleep 5; done"],
            "process_id": "long-process-1",
            "check_interval": 5
@@ -144,7 +144,7 @@ stop_process() {
     curl -X POST http://localhost:8080/stop \
          -H "Content-Type: application/json" \
          -d '{
-               "remote_process_server_address": "localhost:50051",
+               "remote_worker_server_address": "localhost:50051",
                "process_id": "'$process_id'"
              }'
     
