@@ -133,3 +133,5 @@ k8s/
 *.pb
 test_pb_data/
 hodei-chart/certs/
+
+Tareas.md

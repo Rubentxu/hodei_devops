@@ -26,9 +26,7 @@ func (id AggregateID) String() string {
 
 type ResourcePoolSpec struct {
 	PoolID       string                 `json:"poolID"`
-	Name         string                 `json:"name"`
 	Type         string                 `json:"type"`
-	Description  string                 `json:"description,omitempty"`
 	ExtendedSpec map[string]interface{} `json:"config,omitempty"`
 }
 

@@ -25,6 +25,7 @@ type WriteOnlyRepository[T model.AggregateRoot, ID model.AggregateID] interface 
 	Update(ctx context.Context, entity T) error
 	Delete(ctx context.Context, id ID) error
 	BatchSave(ctx context.Context, entities []T) error
+	BatchUpdate(ctx context.Context, entities []T) error
 	BatchDelete(ctx context.Context, ids []ID) error
 	WithTransaction(ctx context.Context, fn func(txCtx context.Context) error) error
 }

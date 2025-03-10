@@ -206,3 +206,4 @@ require (
 	tags.cncf.io/container-device-interface v0.7.2 // indirect
 )
 
+replace dev.rubentxu.hodei-devops/hodei-app => ../hodei-app

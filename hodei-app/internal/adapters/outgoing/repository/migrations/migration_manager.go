@@ -58,7 +58,7 @@ func InitializePostgres(connStr string, scriptPath string) (*sql.DB, error) {
 	migrationManager := NewMigrationManager(db, scriptPath)
 
 	// Inicializar la tabla de migraciones
-	if err := migrationManager.initMigrationTable(); err != nil {
+	if err := migrationManager.InitMigrationTable(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -73,8 +73,8 @@ func InitializePostgres(connStr string, scriptPath string) (*sql.DB, error) {
 	return db, nil
 }
 
-// initMigrationTable crea la tabla para registrar las migraciones aplicadas
-func (m *MigrationManager) initMigrationTable() error {
+// InitMigrationTable crea la tabla para registrar las migraciones aplicadas
+func (m *MigrationManager) InitMigrationTable() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
