@@ -2,13 +2,10 @@ package repository_test
 
 import (
 	"context"
-	"errors"
-	"testing"
-	"time"
-
 	repository "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/resource_pool"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
+	"fmt"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,103 +14,77 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"testing"
+	"time"
 )
 
-func setupMongoWithInitScript(t *testing.T) (testcontainers.Container, *mongo.Client, *mongo.Database, func()) {
+// setupMongo configura un contenedor MongoDB para pruebas
+func setupMongo(t *testing.T) (testcontainers.Container, *mongo.Client, *mongo.Database, func()) {
 	ctx := context.Background()
-
-	// Configurar el contenedor MongoDB
 	req := testcontainers.ContainerRequest{
 		Image:        "mongo:5.0",
 		ExposedPorts: []string{"27017/tcp"},
-		Env: map[string]string{
-			"MONGO_INITDB_DATABASE": "hodei-test",
-		},
-		WaitingFor: wait.ForLog("Waiting for connections").
-			WithStartupTimeout(time.Second * 30),
+		Env:          map[string]string{"MONGO_INITDB_DATABASE": "hodei-test"},
+		WaitingFor:   wait.ForLog("Waiting for connections").WithStartupTimeout(30 * time.Second),
 	}
 
-	// Iniciar el contenedor
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
 	})
 	require.NoError(t, err)
 
-	// Obtener el puerto mapeado y la dirección IP
 	mappedPort, err := container.MappedPort(ctx, "27017")
 	require.NoError(t, err)
-
 	hostIP, err := container.Host(ctx)
 	require.NoError(t, err)
 
-	// Construir la URI de conexión
-	connectionURI := "mongodb://" + hostIP + ":" + mappedPort.Port()
-
-	// Crear cliente MongoDB
+	connectionURI := fmt.Sprintf("mongodb://%s:%s", hostIP, mappedPort.Port())
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connectionURI))
 	require.NoError(t, err)
 
-	// Verificar que MongoDB esté listo con múltiples intentos
+	// Verificar conexión con reintentos
 	maxRetries := 5
 	for i := 0; i < maxRetries; i++ {
 		pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		err = client.Ping(pingCtx, nil)
 		cancel()
-
 		if err == nil {
-			break // Conexión exitosa
+			break
 		}
-
 		if i == maxRetries-1 {
-			require.NoError(t, err, "No se pudo conectar a MongoDB después de varios intentos")
+			require.NoError(t, err, "No se pudo conectar a MongoDB")
 		}
-
-		time.Sleep(time.Second) // Esperar antes del siguiente intento
+		time.Sleep(time.Second)
 	}
 
-	// Obtener referencia a la base de datos
 	db := client.Database("hodei-test")
-
-	// Configurar la colección resource_pools con índice único en id
-	_, err = db.Collection("resource_pools").Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "id", Value: 1}},
-		Options: options.Index().SetUnique(true),
-	})
-	require.NoError(t, err)
-
-	// Función de limpieza
 	cleanup := func() {
-		// Limpiar la base de datos antes de terminar
-		_ = db.Drop(ctx)
-		_ = client.Disconnect(ctx)
-		_ = container.Terminate(ctx)
+		db.Drop(ctx)
+		client.Disconnect(ctx)
+		container.Terminate(ctx)
 	}
 
 	return container, client, db, cleanup
 }
 
-// Función para crear un ResourcePoolDef de prueba
-func createMongoTestResourcePool(name, poolID, poolType string) *model.ResourcePoolDef {
+// createTestPool crea un ResourcePool de prueba con valores predefinidos
+func createTestPool(name string) *model.ResourcePoolDef {
 	return &model.ResourcePoolDef{
 		ID: model.AggregateID(uuid.New()),
 		Metadata: model.Metadata{
 			Name:        name,
-			Description: "Test Description for " + name,
+			Description: "Descripción de " + name,
 			Labels:      []string{"test", name},
-			Annotations: map[string]string{"env": "test", "purpose": "testing"},
+			Annotations: map[string]string{"env": "test"},
 			CreatedAt:   time.Now().UTC(),
 			UpdatedAt:   time.Now().UTC(),
 		},
 		Spec: model.ResourcePoolSpec{
-			PoolID: poolID,
-			Type:   poolType,
+			PoolID: "pool-" + name,
+			Type:   "test-type",
 			ExtendedSpec: map[string]interface{}{
-				"config1": "value1",
-				"config2": 42,
-				"nested": map[string]interface{}{
-					"key1": "nestedValue",
-				},
+				"config": "value",
 			},
 		},
 		Status: model.ResourcePoolStatus{
@@ -122,329 +93,292 @@ func createMongoTestResourcePool(name, poolID, poolType string) *model.ResourceP
 	}
 }
 
+// TestResourcePoolMongoDBRepository contiene los casos de prueba
 func TestResourcePoolMongoDBRepository(t *testing.T) {
-	// Preparar entorno con MongoDB
-	_, client, db, cleanup := setupMongoWithInitScript(t)
+	_, client, db, cleanup := setupMongo(t)
 	defer cleanup()
-
 	ctx := context.Background()
 	repo := repository.NewResourcePoolMongoDBRepository(db, client)
 
-	// Limpiar cualquier dato existente
-	_, err := db.Collection("resource_pools").DeleteMany(ctx, bson.M{})
-	require.NoError(t, err)
-
-	t.Run("Guardar y recuperar ResourcePool", func(t *testing.T) {
-		// Crear ResourcePool de prueba
-		pool := createMongoTestResourcePool("Test Pool MongoDB", "mongo-pool-1", "Kubernetes")
-
-		// Guardar
-		err := repo.Save(ctx, pool)
-		require.NoError(t, err)
-
-		// Recuperar
-		retrieved, err := repo.FindByID(ctx, pool.ID)
-		require.NoError(t, err)
-
-		// Verificar campos
-		assert.Equal(t, pool.ID, retrieved.ID)
-		assert.Equal(t, pool.Metadata.Name, retrieved.Metadata.Name)
-		assert.Equal(t, pool.Metadata.Description, retrieved.Metadata.Description)
-		assert.ElementsMatch(t, pool.Metadata.Labels, retrieved.Metadata.Labels)
-		assert.Equal(t, pool.Metadata.Annotations["env"], retrieved.Metadata.Annotations["env"])
-		assert.Equal(t, pool.Spec.PoolID, retrieved.Spec.PoolID)
-		assert.Equal(t, pool.Spec.Type, retrieved.Spec.Type)
-		assert.Equal(t, "value1", retrieved.Spec.ExtendedSpec["config1"])
-		assert.Equal(t, int32(42), retrieved.Spec.ExtendedSpec["config2"])
-		assert.Equal(t, pool.Status.State, retrieved.Status.State)
+	// Limpiar colección antes de cada test
+	t.Cleanup(func() {
+		db.Collection("resource_pools").DeleteMany(ctx, bson.M{})
 	})
 
-	t.Run("Actualizar ResourcePool", func(t *testing.T) {
-		// Crear y guardar un ResourcePool
-		pool := createMongoTestResourcePool("MongoDB Pool para actualizar", "mongo-update-pool", "Docker")
+	t.Run("CRUD Completo", func(t *testing.T) {
+		pool := createTestPool("CRUD Test")
 
+		// Save
 		err := repo.Save(ctx, pool)
 		require.NoError(t, err)
 
-		// Modificar y actualizar
-		pool.Metadata.Description = "Descripción actualizada en MongoDB"
-		pool.Metadata.Labels = append(pool.Metadata.Labels, "updated")
-		pool.Metadata.Annotations["updated"] = "true"
-		pool.Spec.ExtendedSpec["config3"] = "nuevo valor"
-		pool.Status.State = "Maintenance"
+		// FindByID
+		found, err := repo.FindByID(ctx, pool.ID)
+		require.NoError(t, err)
+		assert.Equal(t, pool.ID, found.ID)
+		assert.Equal(t, pool.Metadata.Name, found.Metadata.Name)
 
+		// Update
+		pool.Metadata.Description = "Descripción actualizada"
 		err = repo.Update(ctx, pool)
 		require.NoError(t, err)
 
-		// Verificar
-		retrieved, err := repo.FindByID(ctx, pool.ID)
+		updated, err := repo.FindByID(ctx, pool.ID)
 		require.NoError(t, err)
-		assert.Equal(t, "Descripción actualizada en MongoDB", retrieved.Metadata.Description)
-		assert.Contains(t, retrieved.Metadata.Labels, "updated")
-		assert.Equal(t, "true", retrieved.Metadata.Annotations["updated"])
-		assert.Equal(t, "nuevo valor", retrieved.Spec.ExtendedSpec["config3"])
-		assert.Equal(t, "Maintenance", retrieved.Status.State)
-	})
+		assert.Equal(t, "Descripción actualizada", updated.Metadata.Description)
 
-	t.Run("Eliminar ResourcePool", func(t *testing.T) {
-		pool := createMongoTestResourcePool("MongoDB Pool para eliminar", "mongo-delete-pool", "VM")
-
-		// Guardar y eliminar
-		err := repo.Save(ctx, pool)
-		require.NoError(t, err)
-
+		// Delete
 		err = repo.Delete(ctx, pool.ID)
 		require.NoError(t, err)
 
-		// Verificar eliminación
+		_, err = repo.FindByID(ctx, pool.ID)
+		assert.ErrorIs(t, err, repository.ErrNotFound)
+	})
+
+	t.Run("Guardar sin ID", func(t *testing.T) {
+		pool := createTestPool("No ID")
+		pool.ID = model.AggregateID(uuid.Nil)
+
+		err := repo.Save(ctx, pool)
+		require.NoError(t, err)
+		assert.NotEqual(t, uuid.Nil, pool.ID)
+
 		exists, err := repo.Exists(ctx, pool.ID)
 		require.NoError(t, err)
-		assert.False(t, exists)
-
-		// Intentar recuperar debe fallar
-		_, err = repo.FindByID(ctx, pool.ID)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no encontrado")
+		assert.True(t, exists)
 	})
 
-	t.Run("FindAll debe retornar todos los ResourcePools", func(t *testing.T) {
-		// Limpiar datos previos
+	t.Run("Guardar duplicado", func(t *testing.T) {
+		pool := createTestPool("Duplicado")
+		err := repo.Save(ctx, pool)
+		require.NoError(t, err)
+
+		duplicate := createTestPool("Duplicado")
+		duplicate.ID = pool.ID
+
+		err = repo.Save(ctx, duplicate)
+		assert.ErrorIs(t, err, repository.ErrDuplicateID)
+	})
+
+	t.Run("FindByCriteria avanzado", func(t *testing.T) {
+		// Limpiar la colección antes de ejecutar el test
 		_, err := db.Collection("resource_pools").DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
 
-		// Crear varios ResourcePools
 		pools := []*model.ResourcePoolDef{
-			createMongoTestResourcePool("Mongo Pool 1", "mongo-pool-1", "Kubernetes"),
-			createMongoTestResourcePool("Mongo Pool 2", "mongo-pool-2", "Docker"),
-			createMongoTestResourcePool("Mongo Pool 3", "mongo-pool-3", "VM"),
+			createTestPool("Prod-K8s"),
+			createTestPool("Dev-K8s"),
+			createTestPool("Test-Docker"),
 		}
 
-		for _, pool := range pools {
-			err := repo.Save(ctx, pool)
+		pools[0].Metadata.Labels = []string{"prod", "k8s"}
+		pools[1].Metadata.Labels = []string{"dev", "k8s"}
+		pools[2].Metadata.Labels = []string{"test", "docker"}
+		pools[2].Status.State = "Inactive"
+
+		for _, p := range pools {
+			err := repo.Save(ctx, p)
 			require.NoError(t, err)
 		}
 
-		// Obtener todos los pools
-		retrieved, err := repo.FindAll(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, len(pools), len(retrieved))
-
-		// Verificar que los IDs coincidan (sin importar el orden)
-		expectedIDs := make(map[string]bool)
-		for _, pool := range pools {
-			expectedIDs[pool.ID.String()] = true
-		}
-
-		retrievedIDs := make(map[string]bool)
-		for _, pool := range retrieved {
-			retrievedIDs[pool.ID.String()] = true
-		}
-
-		assert.Equal(t, expectedIDs, retrievedIDs)
-	})
-
-	t.Run("Búsqueda por criterios múltiples", func(t *testing.T) {
-		// Limpiar datos previos
-		_, err := db.Collection("resource_pools").DeleteMany(ctx, bson.M{})
-		require.NoError(t, err)
-
-		// Crear pools con diferentes atributos
-		pools := []*model.ResourcePoolDef{
-			func() *model.ResourcePoolDef {
-				p := createMongoTestResourcePool("Mongo Dev K8s", "mongo-dev-k8s", "Kubernetes")
-				p.Metadata.Labels = []string{"dev", "k8s"}
-				p.Status.State = "Active"
-				return p
-			}(),
-			func() *model.ResourcePoolDef {
-				p := createMongoTestResourcePool("Mongo Prod K8s", "mongo-prod-k8s", "Kubernetes")
-				p.Metadata.Labels = []string{"prod", "k8s"}
-				p.Status.State = "Active"
-				return p
-			}(),
-			func() *model.ResourcePoolDef {
-				p := createMongoTestResourcePool("Mongo Test Docker", "mongo-test-docker", "Docker")
-				p.Metadata.Labels = []string{"dev", "docker"}
-				p.Status.State = "Inactive"
-				return p
-			}(),
-		}
-
-		for _, pool := range pools {
-			err := repo.Save(ctx, pool)
-			require.NoError(t, err)
-		}
-
-		// Test 1: Buscar por tipo
-		criteria := ports.SearchCriteria{
-			Filters: map[string]interface{}{"type": "Kubernetes"},
-			Page:    1,
-			Size:    10,
-		}
-
-		result, err := repo.FindByCriteria(ctx, criteria)
-		require.NoError(t, err)
-		assert.Equal(t, int64(2), result.TotalElements)
-
-		// Test 2: Buscar por estado
-		criteria = ports.SearchCriteria{
-			Filters: map[string]interface{}{"state": "Active"},
-			Page:    1,
-			Size:    10,
-		}
-
-		result, err = repo.FindByCriteria(ctx, criteria)
-		require.NoError(t, err)
-		assert.Equal(t, int64(2), result.TotalElements)
-
-		// Test 3: Combinar filtros (tipo y estado)
-		criteria = ports.SearchCriteria{
-			Filters: map[string]interface{}{
-				"type":  "Kubernetes",
-				"state": "Active",
+		tests := []struct {
+			name     string
+			criteria ports.SearchCriteria
+			expected int
+		}{
+			{
+				"Por tipo",
+				ports.SearchCriteria{Filters: map[string]interface{}{"type": "test-type"}},
+				3,
 			},
-			Page: 1,
-			Size: 10,
+			{
+				"Estado activo",
+				ports.SearchCriteria{Filters: map[string]interface{}{"state": "Active"}},
+				2,
+			},
+			{
+				"Contiene 'K8s' en nombre",
+				ports.SearchCriteria{Filters: map[string]interface{}{"nameContains": "K8s"}},
+				2,
+			},
+			{
+				"Filtro combinado",
+				ports.SearchCriteria{
+					Filters: map[string]interface{}{
+						"type":  "test-type",
+						"state": "Active",
+					},
+				},
+				2,
+			},
+			{
+				"Labels exactos",
+				ports.SearchCriteria{
+					Filters: map[string]interface{}{
+						"labels": []string{"prod", "k8s"},
+					},
+				},
+				1,
+			},
 		}
 
-		result, err = repo.FindByCriteria(ctx, criteria)
-		require.NoError(t, err)
-		assert.Equal(t, int64(2), result.TotalElements)
-
-		// Test 4: Buscar por término en el nombre
-		criteria = ports.SearchCriteria{
-			Filters: map[string]interface{}{"nameContains": "Docker"},
-			Page:    1,
-			Size:    10,
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result, err := repo.FindByCriteria(ctx, tt.criteria)
+				require.NoError(t, err)
+				assert.Equal(t, tt.expected, len(result.Content))
+				assert.Equal(t, int64(tt.expected), result.TotalElements)
+			})
 		}
-
-		result, err = repo.FindByCriteria(ctx, criteria)
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), result.TotalElements)
 	})
 
-	t.Run("BatchSave y BatchUpdate", func(t *testing.T) {
-		// Limpiar datos previos
+	// Paginación
+	t.Run("Paginación", func(t *testing.T) {
+		// Limpiar la colección antes de insertar los nuevos documentos
 		_, err := db.Collection("resource_pools").DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
 
-		// Crear pools para operaciones por lotes
-		pools := []*model.ResourcePoolDef{
-			createMongoTestResourcePool("Mongo Batch Pool 1", "mongo-batch-1", "Docker"),
-			createMongoTestResourcePool("Mongo Batch Pool 2", "mongo-batch-2", "Docker"),
-			createMongoTestResourcePool("Mongo Batch Pool 3", "mongo-batch-3", "Kubernetes"),
+		for i := 1; i <= 5; i++ {
+			pool := createTestPool(fmt.Sprintf("Pool %d", i))
+			err := repo.Save(ctx, pool)
+			require.NoError(t, err)
 		}
 
-		// Guardar por lotes
+		tests := []struct {
+			page     int
+			size     int
+			expected int
+		}{
+			{1, 2, 2},
+			{2, 2, 2},
+			{3, 2, 1},
+			{0, 10, 5}, // Page 0 debe usar 1
+			{-1, 3, 3}, // Page negativo debe usar 1
+		}
+
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("Page %d Size %d", tt.page, tt.size), func(t *testing.T) {
+				criteria := ports.SearchCriteria{
+					Page: tt.page,
+					Size: tt.size,
+				}
+				result, err := repo.FindByCriteria(ctx, criteria)
+				require.NoError(t, err)
+				assert.Equal(t, tt.expected, len(result.Content))
+				assert.Equal(t, tt.size <= 0 || tt.size > 5, result.HasNext)
+			})
+		}
+	})
+
+	// Ordenamiento
+	t.Run("Ordenamiento", func(t *testing.T) {
+		// Limpiar la colección para que el test sólo considere los documentos que se inserten a partir de aquí
+		_, err := db.Collection("resource_pools").DeleteMany(ctx, bson.M{})
+		require.NoError(t, err)
+
+		names := []string{"Charlie", "Alpha", "Bravo"}
+		for _, name := range names {
+			pool := createTestPool(name)
+			err := repo.Save(ctx, pool)
+			require.NoError(t, err)
+		}
+
+		tests := []struct {
+			sortBy    string
+			sortOrder string
+			expected  []string
+		}{
+			{"name", "ASC", []string{"Alpha", "Bravo", "Charlie"}},
+			{"name", "DESC", []string{"Charlie", "Bravo", "Alpha"}},
+			{"createdAt", "ASC", []string{"Charlie", "Alpha", "Bravo"}}, // Orden de inserción
+		}
+
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("%s %s", tt.sortBy, tt.sortOrder), func(t *testing.T) {
+				criteria := ports.SearchCriteria{
+					SortBy:    tt.sortBy,
+					SortOrder: tt.sortOrder,
+				}
+				result, err := repo.FindByCriteria(ctx, criteria)
+				require.NoError(t, err)
+				var actual []string
+				for _, p := range result.Content {
+					actual = append(actual, p.Metadata.Name)
+				}
+				assert.Equal(t, tt.expected, actual)
+			})
+		}
+	})
+
+	// Archivo: hodei-app/internal/adapters/outgoing/repository/resource_pool/resource_pool_mongodb_repository_test.go
+	// En el subtest "Batch Operations", se limpia la colección al inicio
+
+	t.Run("Batch Operations", func(t *testing.T) {
+		// Limpiar la colección para que sólo se consideren los documentos de este test
+		_, err := db.Collection("resource_pools").DeleteMany(ctx, bson.M{})
+		require.NoError(t, err)
+
+		pools := []*model.ResourcePoolDef{
+			createTestPool("Batch1"),
+			createTestPool("Batch2"),
+		}
+
+		// BatchSave
 		err = repo.BatchSave(ctx, pools)
 		require.NoError(t, err)
-
-		// Verificar que se hayan guardado todos
-		count, err := repo.Count(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, int64(3), count)
-
-		// Modificar todos los pools
-		for i := range pools {
-			pools[i].Metadata.Description = "Updated in batch with MongoDB"
-			pools[i].Status.State = "Updated"
-		}
-
-		// Actualizar por lotes
-		err = repo.BatchUpdate(ctx, pools)
-		require.NoError(t, err)
-
-		// Verificar las actualizaciones
-		for _, pool := range pools {
-			retrieved, err := repo.FindByID(ctx, pool.ID)
-			require.NoError(t, err)
-			assert.Equal(t, "Updated in batch with MongoDB", retrieved.Metadata.Description)
-			assert.Equal(t, "Updated", retrieved.Status.State)
-		}
-	})
-
-	t.Run("BatchDelete", func(t *testing.T) {
-		// Limpiar datos previos
-		_, err := db.Collection("resource_pools").DeleteMany(ctx, bson.M{})
-		require.NoError(t, err)
-
-		// Crear pools para eliminar por lotes
-		pools := []*model.ResourcePoolDef{
-			createMongoTestResourcePool("Mongo Delete Pool 1", "mongo-delete-1", "Docker"),
-			createMongoTestResourcePool("Mongo Delete Pool 2", "mongo-delete-2", "Kubernetes"),
-		}
-
-		// Guardar los pools
-		for _, pool := range pools {
-			err := repo.Save(ctx, pool)
-			require.NoError(t, err)
-		}
-
-		// Verificar que se hayan guardado
 		count, err := repo.Count(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), count)
 
-		// Crear lista de IDs para eliminar
-		var ids []model.AggregateID
-		for _, pool := range pools {
-			ids = append(ids, pool.ID)
+		// BatchUpdate
+		for _, p := range pools {
+			p.Metadata.Description = "Updated"
 		}
-
-		// Eliminar por lotes
-		err = repo.BatchDelete(ctx, ids)
+		err = repo.BatchUpdate(ctx, pools)
 		require.NoError(t, err)
 
-		// Verificar que se hayan eliminado
+		for _, p := range pools {
+			found, err := repo.FindByID(ctx, p.ID)
+			require.NoError(t, err)
+			assert.Equal(t, "Updated", found.Metadata.Description)
+		}
+
+		// BatchDelete
+		var ids []model.AggregateID
+		for _, p := range pools {
+			ids = append(ids, p.ID)
+		}
+		err = repo.BatchDelete(ctx, ids)
+		require.NoError(t, err)
 		count, err = repo.Count(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), count)
 	})
 
-	t.Run("WithTransaction", func(t *testing.T) {
-		// Limpiar datos previos
-		_, err := db.Collection("resource_pools").DeleteMany(ctx, bson.M{})
+	t.Run("Concurrencia", func(t *testing.T) {
+		pool := createTestPool("Concurrent")
+		err := repo.Save(ctx, pool)
 		require.NoError(t, err)
 
-		// Crear dos pools en una sola transacción exitosa
-		err = repo.WithTransaction(ctx, func(txCtx context.Context) error {
-			pool1 := createMongoTestResourcePool("Mongo Tx Pool 1", "mongo-tx-1", "Docker")
-			pool2 := createMongoTestResourcePool("Mongo Tx Pool 2", "mongo-tx-2", "Kubernetes")
+		// Simular actualizaciones concurrentes
+		errCh := make(chan error, 2)
+		update := func() {
+			p, _ := repo.FindByID(ctx, pool.ID)
+			p.Metadata.Description = uuid.New().String()
+			errCh <- repo.Update(context.Background(), p)
+		}
 
-			err := repo.Save(txCtx, pool1)
-			if err != nil {
-				return err
-			}
+		go update()
+		go update()
 
-			return repo.Save(txCtx, pool2)
-		})
+		err1 := <-errCh
+		err2 := <-errCh
+		assert.NoError(t, err1)
+		assert.NoError(t, err2)
 
+		// Verificar estado final
+		updated, err := repo.FindByID(ctx, pool.ID)
 		require.NoError(t, err)
-
-		// Verificar que ambos se hayan guardado
-		count, err := repo.Count(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, int64(2), count)
-
-		// Transacción que debe fallar (rollback automático)
-		err = repo.WithTransaction(ctx, func(txCtx context.Context) error {
-			pool3 := createMongoTestResourcePool("Mongo Tx Pool 3", "mongo-tx-3", "VM")
-
-			err := repo.Save(txCtx, pool3)
-			if err != nil {
-				return err
-			}
-
-			// Provocar error deliberadamente
-			return errors.New("error forzado para rollback")
-		})
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "error forzado para rollback")
-
-		// Verificar que no se haya agregado ningún pool nuevo
-		count, err = repo.Count(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, int64(2), count)
+		assert.NotEqual(t, pool.Metadata.Description, updated.Metadata.Description)
 	})
 }

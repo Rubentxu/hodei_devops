@@ -83,8 +83,3 @@ func (r *ResourcePoolMongoDBRepository) BatchUpdate(ctx context.Context, entitie
 func (r *ResourcePoolMongoDBRepository) BatchDelete(ctx context.Context, ids []model.AggregateID) error {
 	return r.writeRepo.BatchDelete(ctx, ids)
 }
-
-// WithTransaction ejecuta una función dentro de una transacción
-func (r *ResourcePoolMongoDBRepository) WithTransaction(ctx context.Context, fn func(txCtx context.Context) error) error {
-	return r.writeRepo.WithTransaction(ctx, fn)
-}
