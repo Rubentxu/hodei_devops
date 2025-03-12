@@ -2,11 +2,36 @@ package rp_repository
 
 import (
 	"context"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/generic"
 
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
 	"go.mongodb.org/mongo-driver/mongo"
 )
+
+var _ ports.WriteOnlyRepository[*model.ResourcePoolDef] = (*generic.GenericMongoDBWriteRepository[*model.ResourcePoolDef, ResourcePoolDocument])(nil)
+var _ ports.ReadOnlyRepository[*model.ResourcePoolDef] = (*generic.GenericMongoDBReadRepository[*model.ResourcePoolDef, ResourcePoolDocument])(nil)
+var _ ports.Repository[*model.ResourcePoolDef, model.AggregateID] = (*ResourcePoolMongoDBRepository)(nil)
+
+// NewResourcePoolMongoDBRepository crea una nueva instancia del repositorio combinado (lectura+escritura)
+func NewResourcePoolMongoDBWriteRepository(db *mongo.Database, generator ports.IDGenerator) ports.WriteOnlyRepository[*model.ResourcePoolDef] {
+	converter := NewResourcePoolDocumentConverter(generator)
+	return generic.NewGenericMongoDBWriteRepository[*model.ResourcePoolDef, ResourcePoolDocument](
+		db,
+		ResourcePoolCollection,
+		converter,
+	)
+}
+
+// NewResourcePoolMongoDBReadRepository crea un repositorio de lectura para ResourcePoolDef
+func NewResourcePoolMongoDBReadRepository(db *mongo.Database, generator ports.IDGenerator) ports.ReadOnlyRepository[*model.ResourcePoolDef] {
+	converter := NewResourcePoolDocumentConverter(generator)
+	return generic.NewGenericMongoDBReadRepository[*model.ResourcePoolDef, ResourcePoolDocument](
+		db,
+		ResourcePoolCollection,
+		converter,
+	)
+}
 
 // ResourcePoolMongoDBRepository implementa la interfaz Repository completa para ResourcePoolDef en MongoDB
 type ResourcePoolMongoDBRepository struct {
@@ -15,13 +40,12 @@ type ResourcePoolMongoDBRepository struct {
 }
 
 // Aseguramos que se implementa la interfaz Repository completa
-var _ ports.Repository[*model.ResourcePoolDef, model.AggregateID] = (*ResourcePoolMongoDBRepository)(nil)
 
 // NewResourcePoolMongoDBRepository crea una nueva instancia del repositorio combinado (lectura+escritura)
-func NewResourcePoolMongoDBRepository(db *mongo.Database, client *mongo.Client, generator ports.IDGenerator) ports.Repository[*model.ResourcePoolDef, model.AggregateID] {
+func NewResourcePoolMongoDBRepository(db *mongo.Database, generator ports.IDGenerator) ports.Repository[*model.ResourcePoolDef, model.AggregateID] {
 	return &ResourcePoolMongoDBRepository{
-		readRepo:  NewResourcePoolMongoDBReadRepository(db),
-		writeRepo: NewResourcePoolMongoDBWriteRepository(db, client, generator),
+		readRepo:  NewResourcePoolMongoDBReadRepository(db, generator),
+		writeRepo: NewResourcePoolMongoDBWriteRepository(db, generator),
 	}
 }
 

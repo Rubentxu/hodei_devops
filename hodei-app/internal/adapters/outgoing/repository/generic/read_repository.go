@@ -28,6 +28,7 @@ type DocumentConverter[T model.AggregateRoot, D any] interface {
 	ToDocument(entity T, ctx context.Context) D
 	BuildFilter(filters map[string]interface{}) bson.M
 	MapSortField(field string) string
+	GenerateID() model.AggregateID
 }
 
 // GenericMongoDBReadRepository implementación genérica de repositorio de lectura

@@ -10,17 +10,11 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-const (
-	ctxKeyOwner    = "owner"
-	ctxKeyTenantID = "tenantID"
-)
-
 // GenericMongoDBWriteRepository implementación genérica de repositorio de escritura
 type GenericMongoDBWriteRepository[T model.AggregateRoot, D any] struct {
 	collection     *mongo.Collection
 	collectionName string
 	converter      DocumentConverter[T, D]
-	generator      ports.IDGenerator
 }
 
 // NewGenericMongoDBWriteRepository crea una nueva instancia del repositorio genérico
@@ -28,25 +22,16 @@ func NewGenericMongoDBWriteRepository[T model.AggregateRoot, D any](
 	db *mongo.Database,
 	collectionName string,
 	converter DocumentConverter[T, D],
-	generator ports.IDGenerator,
 ) ports.WriteOnlyRepository[T] {
 	return &GenericMongoDBWriteRepository[T, D]{
 		collection:     db.Collection(collectionName),
 		collectionName: collectionName,
 		converter:      converter,
-		generator:      generator,
 	}
 }
 
 // Save guarda una entidad y devuelve la entidad con el ID generado
 func (r *GenericMongoDBWriteRepository[T, D]) Save(ctx context.Context, entity T) (T, error) {
-	// Asignar ID si no tiene
-	if entity.GetID() == "" {
-		// Usar reflection o type assertion para establecer el ID
-		if assignable, ok := any(entity).(interface{ SetID(id model.AggregateID) }); ok {
-			assignable.SetID(r.generator.NewID())
-		}
-	}
 
 	doc := r.converter.ToDocument(entity, ctx)
 	_, err := r.collection.InsertOne(ctx, doc)
@@ -98,15 +83,6 @@ func (r *GenericMongoDBWriteRepository[T, D]) Delete(ctx context.Context, id mod
 func (r *GenericMongoDBWriteRepository[T, D]) BatchSave(ctx context.Context, entities []T) ([]T, error) {
 	if len(entities) == 0 {
 		return nil, nil
-	}
-
-	// Asignar IDs si es necesario
-	for i := range entities {
-		if entities[i].GetID() == "" {
-			if assignable, ok := any(entities[i]).(interface{ SetID(id model.AggregateID) }); ok {
-				assignable.SetID(r.generator.NewID())
-			}
-		}
 	}
 
 	docs := make([]interface{}, len(entities))

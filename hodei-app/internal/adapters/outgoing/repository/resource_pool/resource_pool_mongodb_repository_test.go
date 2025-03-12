@@ -93,11 +93,11 @@ func createTestPool(name string) *model.ResourcePoolDef {
 }
 
 func TestResourcePoolMongoDBRepository(t *testing.T) {
-	_, client, db, cleanup := setupMongo(t)
+	_, _, db, cleanup := setupMongo(t)
 	defer cleanup()
 	ctx := context.Background()
 	generator := generator_id.NewIDGenerator("")
-	repo := repository.NewResourcePoolMongoDBRepository(db, client, generator)
+	repo := repository.NewResourcePoolMongoDBRepository(db, generator)
 	const resourcePoolCollection = "resource_pools"
 
 	// Limpiar la colección antes de cada test
