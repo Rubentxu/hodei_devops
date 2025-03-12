@@ -1,18 +1,16 @@
 package model
 
 import (
-	"errors"
+	"github.com/go-playground/validator"
 )
 
-// ResourcePoolReadRepository implementa la interfaz ReadOnlyRepository para ResourcePoolDef
 var _ AggregateRoot = (*ResourcePoolDef)(nil)
 
-// ResourcePoolDef model
 type ResourcePoolDef struct {
-	ID       AggregateID        `db:"_id" json:"id"`
-	Metadata Metadata           `db:"metadata" json:"metadata"`
-	Spec     ResourcePoolSpec   `db:"spec" json:"spec"`
-	Status   ResourcePoolStatus `db:"status" json:"status"`
+	ID       AggregateID        `json:"id" validate:"required"`
+	Metadata Metadata           `json:"metadata" validate:"required"`
+	Spec     ResourcePoolSpec   `json:"spec" validate:"required"`
+	Status   ResourcePoolStatus `json:"status" validate:"required"`
 }
 
 func (r *ResourcePoolDef) GetID() AggregateID {
@@ -20,31 +18,33 @@ func (r *ResourcePoolDef) GetID() AggregateID {
 }
 
 type ResourcePoolSpec struct {
-	PoolID       string                 `json:"poolID"`
-	Type         string                 `json:"type"`
-	ExtendedSpec map[string]interface{} `json:"config,omitempty"`
+	PoolID       string                 `json:"poolID" validate:"required"`
+	Type         string                 `json:"type" validate:"required,oneof=Kubernetes Docker VM"`
+	ExtendedSpec map[string]interface{} `json:"config,omitempty" validate:"required"`
 }
 
-type ResourcePoolStatus struct { // Añadido ResourcePoolStatus (asumiendo que lo necesitas aunque no estaba en tu ejemplo de uso)
-	State string `json:"state"` // Ejemplo de campo de estado
-
+type ResourcePoolStatus struct {
+	State string `json:"state" validate:"required,oneof=PENDING ACTIVE INACTIVE ERROR DELETED"`
 }
 
-// Validate implementación de ejemplo (MOVIDO AQUI para tener el código completo en un solo lugar)
 func (r *ResourcePoolDef) Validate() error {
-	if r.Spec.PoolID == "" {
-		return errors.New("poolID es requerido")
+	validate := validator.New()
+
+	// Registrar validación personalizada si fuera necesaria
+	if err := validate.RegisterValidation("pooltype", ValidatePoolType); err != nil {
+		return err
 	}
 
+	return validate.Struct(r)
+}
+
+// Función auxiliar de validación si necesitas lógica personalizada
+func ValidatePoolType(fl validator.FieldLevel) bool {
+	value := fl.Field().String()
 	validTypes := map[string]bool{
 		"Kubernetes": true,
 		"Docker":     true,
 		"VM":         true,
 	}
-
-	if !validTypes[r.Spec.Type] {
-		return errors.New("tipo de recurso inválido")
-	}
-
-	return nil
+	return validTypes[value]
 }

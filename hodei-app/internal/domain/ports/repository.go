@@ -3,6 +3,7 @@ package ports
 import (
 	"context"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
+	"errors"
 )
 
 type Repository[T model.AggregateRoot, ID model.AggregateID] interface {
@@ -50,7 +51,9 @@ type SearchResult[T model.AggregateRoot] struct {
 	HasPrevious   bool
 }
 
-type ErrNotFound error
+var ( // ErrNotFound se devuelve cuando no se encuentra una entidad
+	ErrNotFound = errors.New("entity not found")
+)
 
 // IDGenerator es una interfaz para generar IDs de agregados.
 type IDGenerator interface {

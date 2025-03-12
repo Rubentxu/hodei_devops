@@ -5,9 +5,9 @@ import (
 )
 
 type Task struct {
-	ID       AggregateID
-	Metadata Metadata
-	Spec     TaskSpec
+	ID       AggregateID `json:"id" validate:"required"`
+	Metadata Metadata    `json:"metadata" validate:"required"`
+	Spec     TaskSpec    `json:"spec" validate:"required"`
 }
 
 func (t Task) GetID() AggregateID {
@@ -15,10 +15,10 @@ func (t Task) GetID() AggregateID {
 }
 
 type TaskSpec struct {
-	WorkerDefinitionID AggregateID            `json:"worker_id" yaml:"worker_id" db:"worker_id"`
-	Command            []string               `json:"command" yaml:"command" db:"command"`
-	Params             []ParamDefinition      `json:"params" yaml:"params" db:"params"`
-	ParamValues        map[string]interface{} `json:"param_values" yaml:"param_values" db:"param_values"`
+	WorkerDefinitionID AggregateID            `json:"worker_id" validate:"required"`
+	Command            []string               `json:"command" validate:"required,min=1"`
+	Params             []ParamDefinition      `json:"params" validate:"dive"`
+	ParamValues        map[string]interface{} `json:"param_values"`
 }
 
 // NewTask crea una nueva tarea con valores predeterminados
@@ -40,23 +40,18 @@ func NewTask(name, description string, command []string, params []ParamDefinitio
 	}, nil
 }
 
-// ParamDefinition define la estructura de un parámetro en un formulario
 type ParamDefinition struct {
-	Key         string      `json:"key" yaml:"key" db:"key"`                                 // Identificador único del parámetro
-	Type        ParamType   `json:"type" yaml:"type" db:"type"`                              // Tipo de dato del parámetro
-	Label       string      `json:"label" yaml:"label" db:"label"`                           // Etiqueta para mostrar en UI
-	Description string      `json:"description" yaml:"description" db:"description"`         // Ayuda o descripción
-	Required    bool        `json:"required" yaml:"required" db:"required"`                  // Si es obligatorio
-	Default     interface{} `json:"default,omitempty" yaml:"default,omitempty" db:"default"` // Valor por defecto
-	Group       string      `json:"group,omitempty" yaml:"group,omitempty" db:"group"`       // Grupo lógico para organización
-	Order       int         `json:"order" yaml:"order" db:"order"`                           // Orden de visualización
-
-	// Validaciones
-	Validations ParamValidations `json:"validations,omitempty" yaml:"validations,omitempty" db:"validations"`
-
-	// Para tipos específicos
-	Options []ParamOption    `json:"options,omitempty" yaml:"options,omitempty" db:"options"` // Para select, radio, etc.
-	Depends *ParamDependency `json:"depends,omitempty" yaml:"depends,omitempty" db:"depends"` // Para campos que dependen de otros
+	Key         string           `json:"key" validate:"required"`
+	Type        ParamType        `json:"type" validate:"required,oneof=string integer number boolean select multiselect object array date datetime file password"`
+	Label       string           `json:"label" validate:"required"`
+	Description string           `json:"description"`
+	Required    bool             `json:"required"`
+	Default     interface{}      `json:"default,omitempty"`
+	Group       string           `json:"group,omitempty"`
+	Order       int              `json:"order" validate:"gte=0"`
+	Validations ParamValidations `json:"validations,omitempty" validate:"omitempty"`
+	Options     []ParamOption    `json:"options,omitempty" validate:"omitempty,dive"`
+	Depends     *ParamDependency `json:"depends,omitempty" validate:"omitempty"`
 }
 
 type ParamType string
@@ -77,25 +72,25 @@ const (
 )
 
 type ParamValidations struct {
-	MinLength       *int          `json:"minLength,omitempty" yaml:"minLength,omitempty" db:"min_length"`
-	MaxLength       *int          `json:"maxLength,omitempty" yaml:"maxLength,omitempty" db:"max_length"`
-	Pattern         string        `json:"pattern,omitempty" yaml:"pattern,omitempty" db:"pattern"`
-	Min             *float64      `json:"min,omitempty" yaml:"min,omitempty" db:"min"`
-	Max             *float64      `json:"max,omitempty" yaml:"max,omitempty" db:"max"`
-	Enum            []interface{} `json:"enum,omitempty" yaml:"enum,omitempty" db:"enum"`
-	Format          string        `json:"format,omitempty" yaml:"format,omitempty" db:"format"`
-	CustomValidator string        `json:"customValidator,omitempty" yaml:"customValidator,omitempty" db:"custom_validator"`
+	MinLength       *int          `json:"minLength,omitempty" validate:"omitempty,gte=0"`
+	MaxLength       *int          `json:"maxLength,omitempty" validate:"omitempty,gtefield=MinLength"`
+	Pattern         string        `json:"pattern,omitempty" validate:"omitempty"`
+	Min             *float64      `json:"min,omitempty" validate:"omitempty"`
+	Max             *float64      `json:"max,omitempty" validate:"omitempty,gtefield=Min"`
+	Enum            []interface{} `json:"enum,omitempty" validate:"omitempty,min=1"`
+	Format          string        `json:"format,omitempty" validate:"omitempty"`
+	CustomValidator string        `json:"customValidator,omitempty" validate:"omitempty"`
 }
 
 type ParamOption struct {
-	Value       interface{} `json:"value" yaml:"value" db:"value"`
-	Label       string      `json:"label" yaml:"label" db:"label"`
-	Description string      `json:"description,omitempty" yaml:"description,omitempty" db:"description"`
-	Disabled    bool        `json:"disabled,omitempty" yaml:"disabled,omitempty" db:"disabled"`
+	Value       interface{} `json:"value" validate:"required"`
+	Label       string      `json:"label" validate:"required"`
+	Description string      `json:"description,omitempty"`
+	Disabled    bool        `json:"disabled,omitempty"`
 }
 
 type ParamDependency struct {
-	Field    string      `json:"field" yaml:"field" db:"field"`
-	Operator string      `json:"operator" yaml:"operator" db:"operator"` // equals, not_equals, contains, etc.
-	Value    interface{} `json:"value" yaml:"value" db:"value"`
+	Field    string      `json:"field" validate:"required"`
+	Operator string      `json:"operator" validate:"required,oneof=equals not_equals contains"`
+	Value    interface{} `json:"value" validate:"required"`
 }
