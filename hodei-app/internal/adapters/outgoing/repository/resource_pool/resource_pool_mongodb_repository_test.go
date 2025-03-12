@@ -98,11 +98,10 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 	ctx := context.Background()
 	generator := generator_id.NewIDGenerator("")
 	repo := repository.NewResourcePoolMongoDBRepository(db, generator)
-	const resourcePoolCollection = "resource_pools"
 
 	// Limpiar la colección antes de cada test
 	t.Cleanup(func() {
-		db.Collection(resourcePoolCollection).DeleteMany(ctx, bson.M{})
+		db.Collection(repository.ResourcePoolCollection).DeleteMany(ctx, bson.M{})
 	})
 
 	t.Run("CRUD Completo", func(t *testing.T) {
@@ -161,7 +160,7 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 
 	t.Run("FindByCriteria avanzado", func(t *testing.T) {
 		// Limpiar la colección antes de ejecutar el test
-		_, err := db.Collection(resourcePoolCollection).DeleteMany(ctx, bson.M{})
+		_, err := db.Collection(repository.ResourcePoolCollection).DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
 
 		pools := []*model.ResourcePoolDef{
@@ -232,7 +231,7 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 
 	t.Run("Paginación", func(t *testing.T) {
 		// Limpiar la colección antes de insertar los nuevos documentos
-		_, err := db.Collection(resourcePoolCollection).DeleteMany(ctx, bson.M{})
+		_, err := db.Collection(repository.ResourcePoolCollection).DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
 
 		for i := 1; i <= 5; i++ {
@@ -268,7 +267,7 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 
 	t.Run("Ordenamiento", func(t *testing.T) {
 		// Limpiar la colección para que el test sólo considere los documentos insertados a partir de aquí
-		_, err := db.Collection(resourcePoolCollection).DeleteMany(ctx, bson.M{})
+		_, err := db.Collection(repository.ResourcePoolCollection).DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
 
 		names := []string{"Charlie", "Alpha", "Bravo"}
@@ -307,7 +306,7 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 
 	t.Run("Batch Operations", func(t *testing.T) {
 		// Limpiar la colección para que sólo se consideren los documentos de este test
-		_, err := db.Collection(resourcePoolCollection).DeleteMany(ctx, bson.M{})
+		_, err := db.Collection(repository.ResourcePoolCollection).DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
 
 		pools := []*model.ResourcePoolDef{

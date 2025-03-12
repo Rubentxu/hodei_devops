@@ -2,7 +2,9 @@ package task_repository
 
 import (
 	"context"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/generic"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"regexp"
@@ -85,10 +87,18 @@ type ParamDependencyDB struct {
 }
 
 // TaskDocumentConverter implementa la interfaz DocumentConverter para Task
-type TaskDocumentConverter struct{}
+type TaskDocumentConverter struct {
+	generator ports.IDGenerator
+}
 
-func NewTaskDocumentConverter() *TaskDocumentConverter {
-	return &TaskDocumentConverter{}
+func NewTaskDocumentConverter(generator ports.IDGenerator) generic.DocumentConverter[*model.Task, TaskDocument] {
+	return &TaskDocumentConverter{
+		generator: generator,
+	}
+}
+
+func (c *TaskDocumentConverter) GenerateID() model.AggregateID {
+	return c.generator.NewID()
 }
 
 // ToModel convierte un documento de MongoDB a un modelo de dominio Task
@@ -172,6 +182,9 @@ func (c *TaskDocumentConverter) ToModel(doc TaskDocument) (*model.Task, error) {
 
 // ToDocument convierte un modelo de dominio Task a un documento de MongoDB
 func (c *TaskDocumentConverter) ToDocument(entity *model.Task, ctx context.Context) TaskDocument {
+	if entity.ID == "" {
+		entity.ID = c.GenerateID()
+	}
 	return TaskDocument{
 		ID: entity.ID.String(),
 		Metadata: TaskMeta{

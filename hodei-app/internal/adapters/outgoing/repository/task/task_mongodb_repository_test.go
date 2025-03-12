@@ -3,15 +3,14 @@ package task_repository_test
 
 import (
 	"context"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/generic"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 
-	"testing"
-	"time"
-
+	generator_id "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository"
 	repository "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/task"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
@@ -19,6 +18,8 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"testing"
+	"time"
 )
 
 func setupMongoTasksWithInitScript(t *testing.T) (testcontainers.Container, *mongo.Client, *mongo.Database, func()) {
@@ -62,9 +63,25 @@ func setupMongoTasksWithInitScript(t *testing.T) (testcontainers.Container, *mon
 
 	db := client.Database("hodei-test")
 	cleanup := func() {
-		db.Drop(ctx)
-		client.Disconnect(ctx)
-		container.Terminate(ctx)
+		ctx := context.Background()
+		if db != nil {
+			err := db.Drop(ctx)
+			if err != nil {
+				t.Logf("Error al eliminar la base de datos: %v", err)
+			}
+		}
+		if client != nil {
+			err := client.Disconnect(ctx)
+			if err != nil {
+				t.Logf("Error al desconectar el cliente: %v", err)
+			}
+		}
+		if container != nil {
+			err := container.Terminate(ctx)
+			if err != nil {
+				t.Logf("Error al terminar el contenedor: %v", err)
+			}
+		}
 	}
 
 	return container, client, db, cleanup
@@ -92,22 +109,23 @@ func createTestTask(name string) *model.Task {
 }
 
 func TestTaskMongoDBRepository(t *testing.T) {
-	_, client, db, cleanup := setupMongoTasksWithInitScript(t)
+	_, _, db, cleanup := setupMongoTasksWithInitScript(t)
 	defer cleanup()
 	ctx := context.Background()
-	repo := repository.NewTaskMongoDBRepository(db, client)
+	generator := generator_id.NewIDGenerator("")
+	repo := repository.NewTaskMongoDBRepository(db, generator)
 
 	// Limpiar la colección antes de cada test.
 	t.Cleanup(func() {
-		_, err := db.Collection(repository.TaskCollection).DeleteMany(ctx, bson.M{})
-		require.NoError(t, err)
+		db.Collection(repository.TaskCollection).DeleteMany(ctx, bson.M{})
 	})
 
 	t.Run("CRUD Completo", func(t *testing.T) {
 		task := createTestTask("CRUD Test")
 		// Save
-		err := repo.Save(ctx, task)
+		saved, err := repo.Save(ctx, task)
 		require.NoError(t, err)
+		require.NotEqual(t, model.AggregateID(""), saved.ID)
 
 		// FindByID
 		found, err := repo.FindByID(ctx, task.ID)
@@ -134,8 +152,9 @@ func TestTaskMongoDBRepository(t *testing.T) {
 	t.Run("Guardar sin ID", func(t *testing.T) {
 		task := createTestTask("Sin ID")
 		task.ID = model.AggregateID("")
-		err := repo.Save(ctx, task)
+		saved, err := repo.Save(ctx, task)
 		require.NoError(t, err)
+		assert.NotEqual(t, model.AggregateID(""), saved.ID)
 		// Se debe asignar un nuevo ID
 		assert.NotEqual(t, uuid.Nil, task.ID)
 
@@ -146,13 +165,13 @@ func TestTaskMongoDBRepository(t *testing.T) {
 
 	t.Run("Guardar duplicado", func(t *testing.T) {
 		task := createTestTask("Duplicado")
-		err := repo.Save(ctx, task)
+		saved, err := repo.Save(ctx, task)
 		require.NoError(t, err)
 
 		duplicate := createTestTask("Duplicado")
-		duplicate.ID = task.ID
-		err = repo.Save(ctx, duplicate)
-		require.ErrorIs(t, err, repository.ErrDuplicateID)
+		duplicate.ID = saved.ID
+		_, err = repo.Save(ctx, duplicate)
+		require.ErrorIs(t, err, generic.ErrDuplicateID)
 	})
 
 	t.Run("FindByCriteria avanzado", func(t *testing.T) {
@@ -172,7 +191,7 @@ func TestTaskMongoDBRepository(t *testing.T) {
 		tasks[2].Metadata.Labels = []string{"test", "docker"}
 
 		for _, task := range tasks {
-			err := repo.Save(ctx, task)
+			_, err := repo.Save(ctx, task)
 			require.NoError(t, err)
 		}
 
@@ -209,7 +228,7 @@ func TestTaskMongoDBRepository(t *testing.T) {
 
 		for i := 1; i <= 5; i++ {
 			task := createTestTask(fmt.Sprintf("Task %d", i))
-			err = repo.Save(ctx, task)
+			_, err = repo.Save(ctx, task)
 			require.NoError(t, err)
 		}
 
@@ -243,7 +262,7 @@ func TestTaskMongoDBRepository(t *testing.T) {
 		nombres := []string{"Charlie", "Alpha", "Bravo"}
 		for _, nombre := range nombres {
 			task := createTestTask(nombre)
-			err = repo.Save(ctx, task)
+			_, err = repo.Save(ctx, task)
 			require.NoError(t, err)
 		}
 
@@ -283,7 +302,7 @@ func TestTaskMongoDBRepository(t *testing.T) {
 		}
 
 		// BatchSave
-		err = repo.BatchSave(ctx, tasks)
+		savedPools, err := repo.BatchSave(ctx, tasks)
 		require.NoError(t, err)
 		count, err := repo.Count(ctx)
 		require.NoError(t, err)
@@ -293,7 +312,7 @@ func TestTaskMongoDBRepository(t *testing.T) {
 		for _, task := range tasks {
 			task.Metadata.Description = "Updated"
 		}
-		err = repo.BatchUpdate(ctx, tasks)
+		err = repo.BatchUpdate(ctx, savedPools)
 		require.NoError(t, err)
 
 		for _, task := range tasks {
@@ -319,12 +338,12 @@ func TestTaskMongoDBRepository(t *testing.T) {
 		require.NoError(t, err)
 
 		task := createTestTask("Concurrente")
-		err = repo.Save(ctx, task)
+		saved, err := repo.Save(ctx, task)
 		require.NoError(t, err)
 
 		errCh := make(chan error, 2)
 		updateFunc := func() {
-			tsk, err := repo.FindByID(ctx, task.ID)
+			tsk, err := repo.FindByID(ctx, saved.ID)
 			if err == nil {
 				tsk.Metadata.Description = uuid.New().String()
 				err = repo.Update(ctx, tsk)

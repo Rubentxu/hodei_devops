@@ -2,84 +2,106 @@ package task_repository
 
 import (
 	"context"
-
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/generic"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-// Aseguramos que la implementación cumpla con la interfaz Repository
+// Verificación de implementación de interfaces
+var _ ports.WriteOnlyRepository[*model.Task] = (*generic.GenericMongoDBWriteRepository[*model.Task, TaskDocument])(nil)
+var _ ports.ReadOnlyRepository[*model.Task] = (*generic.GenericMongoDBReadRepository[*model.Task, TaskDocument])(nil)
 var _ ports.Repository[*model.Task, model.AggregateID] = (*TaskMongoDBRepository)(nil)
 
-// TaskMongoDBRepository implementa la interfaz Repository para Task combinando los repositorios de lectura y escritura
-type TaskMongoDBRepository struct {
-	reader ports.ReadOnlyRepository[*model.Task, model.AggregateID]
-	writer ports.WriteOnlyRepository[*model.Task, model.AggregateID]
+// NewTaskMongoDBWriteRepository crea un repositorio de escritura para Task
+func NewTaskMongoDBWriteRepository(db *mongo.Database, generator ports.IDGenerator) ports.WriteOnlyRepository[*model.Task] {
+	converter := NewTaskDocumentConverter(generator)
+	return generic.NewGenericMongoDBWriteRepository[*model.Task, TaskDocument](
+		db,
+		TaskCollection,
+		converter,
+	)
 }
 
-// NewTaskMongoDBRepository crea una nueva instancia del repositorio combinado para MongoDB
-func NewTaskMongoDBRepository(db *mongo.Database, client *mongo.Client) ports.Repository[*model.Task, model.AggregateID] {
+// NewTaskMongoDBReadRepository crea un repositorio de lectura para Task
+func NewTaskMongoDBReadRepository(db *mongo.Database, generator ports.IDGenerator) ports.ReadOnlyRepository[*model.Task] {
+	converter := NewTaskDocumentConverter(generator)
+	return generic.NewGenericMongoDBReadRepository[*model.Task, TaskDocument](
+		db,
+		TaskCollection,
+		converter,
+	)
+}
+
+// TaskMongoDBRepository implementa la interfaz Repository completa para Task en MongoDB
+type TaskMongoDBRepository struct {
+	readRepo  ports.ReadOnlyRepository[*model.Task]
+	writeRepo ports.WriteOnlyRepository[*model.Task]
+}
+
+// NewTaskMongoDBRepository crea una nueva instancia del repositorio combinado
+func NewTaskMongoDBRepository(db *mongo.Database, generator ports.IDGenerator) ports.Repository[*model.Task, model.AggregateID] {
 	return &TaskMongoDBRepository{
-		reader: NewTaskMongoDBReadRepository(db),
-		writer: NewTaskMongoDBWriteRepository(db, client),
+		readRepo:  NewTaskMongoDBReadRepository(db, generator),
+		writeRepo: NewTaskMongoDBWriteRepository(db, generator),
 	}
 }
 
-// Implementación de los métodos de ReadOnlyRepository
+// Métodos de lectura (ReadOnlyRepository)
 
-// FindByID recupera una Task por su ID
+// FindByID busca un Task por su ID
 func (r *TaskMongoDBRepository) FindByID(ctx context.Context, id model.AggregateID) (*model.Task, error) {
-	return r.reader.FindByID(ctx, id)
+	return r.readRepo.FindByID(ctx, id)
 }
 
-// FindAll recupera todas las Tasks
+// FindAll retorna todos los Task
 func (r *TaskMongoDBRepository) FindAll(ctx context.Context) ([]*model.Task, error) {
-	return r.reader.FindAll(ctx)
+	return r.readRepo.FindAll(ctx)
 }
 
-// Count devuelve el número total de Tasks
+// Count devuelve el número total de Task
 func (r *TaskMongoDBRepository) Count(ctx context.Context) (int64, error) {
-	return r.reader.Count(ctx)
+	return r.readRepo.Count(ctx)
 }
 
-// Exists verifica si existe una Task con el ID proporcionado
+// Exists verifica si existe un Task con el ID proporcionado
 func (r *TaskMongoDBRepository) Exists(ctx context.Context, id model.AggregateID) (bool, error) {
-	return r.reader.Exists(ctx, id)
+	return r.readRepo.Exists(ctx, id)
 }
 
-// FindByCriteria busca Tasks aplicando criterios de búsqueda y paginación
+// FindByCriteria busca Task aplicando criterios de búsqueda y paginación
 func (r *TaskMongoDBRepository) FindByCriteria(ctx context.Context, criteria ports.SearchCriteria) (ports.SearchResult[*model.Task], error) {
-	return r.reader.FindByCriteria(ctx, criteria)
+	return r.readRepo.FindByCriteria(ctx, criteria)
 }
 
-// Implementación de los métodos de WriteOnlyRepository
+// Métodos de escritura (WriteOnlyRepository)
 
-// Save guarda una nueva Task en la base de datos
-func (r *TaskMongoDBRepository) Save(ctx context.Context, entity *model.Task) error {
-	return r.writer.Save(ctx, entity)
+// Save guarda un nuevo Task en la base de datos
+func (r *TaskMongoDBRepository) Save(ctx context.Context, entity *model.Task) (*model.Task, error) {
+	return r.writeRepo.Save(ctx, entity)
 }
 
-// Update actualiza una Task existente en la base de datos
+// Update actualiza un Task existente en la base de datos
 func (r *TaskMongoDBRepository) Update(ctx context.Context, entity *model.Task) error {
-	return r.writer.Update(ctx, entity)
+	return r.writeRepo.Update(ctx, entity)
 }
 
-// Delete elimina una Task por su ID
+// Delete elimina un Task por su ID
 func (r *TaskMongoDBRepository) Delete(ctx context.Context, id model.AggregateID) error {
-	return r.writer.Delete(ctx, id)
+	return r.writeRepo.Delete(ctx, id)
 }
 
-// BatchSave guarda múltiples Tasks en la base de datos
-func (r *TaskMongoDBRepository) BatchSave(ctx context.Context, entities []*model.Task) error {
-	return r.writer.BatchSave(ctx, entities)
+// BatchSave guarda múltiples Task en la base de datos
+func (r *TaskMongoDBRepository) BatchSave(ctx context.Context, entities []*model.Task) ([]*model.Task, error) {
+	return r.writeRepo.BatchSave(ctx, entities)
 }
 
-// BatchUpdate actualiza múltiples Tasks en la base de datos
+// BatchUpdate actualiza múltiples Task en la base de datos
 func (r *TaskMongoDBRepository) BatchUpdate(ctx context.Context, entities []*model.Task) error {
-	return r.writer.BatchUpdate(ctx, entities)
+	return r.writeRepo.BatchUpdate(ctx, entities)
 }
 
-// BatchDelete elimina múltiples Tasks por sus IDs
+// BatchDelete elimina múltiples Task por sus IDs
 func (r *TaskMongoDBRepository) BatchDelete(ctx context.Context, ids []model.AggregateID) error {
-	return r.writer.BatchDelete(ctx, ids)
+	return r.writeRepo.BatchDelete(ctx, ids)
 }

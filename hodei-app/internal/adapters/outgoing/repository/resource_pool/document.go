@@ -16,14 +16,12 @@ const (
 )
 
 type ResourcePoolDocument struct {
-	ID        string             `bson:"_id"`
-	Metadata  ResourcePoolMeta   `bson:"metadata"`
-	Spec      ResourcePoolSpec   `bson:"spec"`
-	Status    ResourcePoolStatus `bson:"status"`
-	Owner     string             `bson:"owner"`
-	TenantID  string             `bson:"tenant_id"`
-	CreatedAt time.Time          `bson:"created_at"`
-	UpdatedAt time.Time          `bson:"updated_at"`
+	ID       string             `bson:"_id"`
+	Metadata ResourcePoolMeta   `bson:"metadata"`
+	Spec     ResourcePoolSpec   `bson:"spec"`
+	Status   ResourcePoolStatus `bson:"status"`
+	Owner    string             `bson:"owner"`
+	TenantID string             `bson:"tenant_id"`
 }
 
 type ResourcePoolMeta struct {
@@ -108,8 +106,6 @@ func (c *ResourcePoolDocumentConverter) ToDocument(entity *model.ResourcePoolDef
 		Status: ResourcePoolStatus{
 			State: entity.Status.State,
 		},
-		CreatedAt: entity.Metadata.CreatedAt,
-		UpdatedAt: entity.Metadata.UpdatedAt,
 	}
 }
 

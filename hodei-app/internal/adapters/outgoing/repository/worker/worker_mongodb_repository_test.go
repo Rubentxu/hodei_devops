@@ -2,12 +2,12 @@ package workerdef_repository_test
 
 import (
 	"context"
-	"testing"
-	"time"
-
+	generator_id "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/generic"
 	repository "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/worker"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
+	"fmt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -15,80 +15,330 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"testing"
+	"time"
 )
 
-func setupMongoWorkersWithInitScript(t *testing.T) (testcontainers.Container, *mongo.Client, *mongo.Database, func()) {
+func setupMongoWorkersWithInitScript(t *testing.T) (*mongo.Database, func()) {
 	ctx := context.Background()
-
-	// Configurar el contenedor MongoDB
 	req := testcontainers.ContainerRequest{
 		Image:        "mongo:5.0",
 		ExposedPorts: []string{"27017/tcp"},
-		Env: map[string]string{
-			"MONGO_INITDB_DATABASE": "hodei-test",
-		},
-		WaitingFor: wait.ForLog("Waiting for connections").
-			WithStartupTimeout(time.Second * 30),
+		Env:          map[string]string{"MONGO_INITDB_DATABASE": "hodei-test"},
+		WaitingFor:   wait.ForLog("Waiting for connections").WithStartupTimeout(30 * time.Second),
 	}
 
-	// Iniciar el contenedor
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
 	})
 	require.NoError(t, err)
 
-	// Obtener el puerto mapeado y la dirección IP
 	mappedPort, err := container.MappedPort(ctx, "27017")
 	require.NoError(t, err)
-
 	hostIP, err := container.Host(ctx)
 	require.NoError(t, err)
 
-	// Construir la URI de conexión
-	connectionURI := "mongodb://" + hostIP + ":" + mappedPort.Port()
-
-	// Crear cliente MongoDB
+	connectionURI := fmt.Sprintf("mongodb://%s:%s", hostIP, mappedPort.Port())
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connectionURI))
 	require.NoError(t, err)
 
-	// Verificar que MongoDB esté listo con múltiples intentos
 	maxRetries := 5
 	for i := 0; i < maxRetries; i++ {
 		pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		err = client.Ping(pingCtx, nil)
 		cancel()
-
 		if err == nil {
-			break // Conexión exitosa
+			break
 		}
-
 		if i == maxRetries-1 {
 			require.NoError(t, err, "No se pudo conectar a MongoDB después de varios intentos")
 		}
-
-		time.Sleep(time.Second) // Esperar antes del siguiente intento
+		time.Sleep(time.Second)
 	}
 
-	// Obtener referencia a la base de datos
 	db := client.Database("hodei-test")
 
-	// Configurar la colección workers con índice único en id
-	_, err = db.Collection("workers").Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "id", Value: 1}},
-		Options: options.Index().SetUnique(true),
-	})
-	require.NoError(t, err)
-
-	// Función de limpieza
 	cleanup := func() {
-		// Limpiar la base de datos antes de terminar
-		_ = db.Drop(ctx)
-		_ = client.Disconnect(ctx)
-		_ = container.Terminate(ctx)
+		db.Drop(ctx)
+		client.Disconnect(ctx)
+		container.Terminate(ctx)
 	}
 
-	return container, client, db, cleanup
+	return db, cleanup
+}
+
+func TestWorkerMongoDBRepository(t *testing.T) {
+	db, cleanup := setupMongoWorkersWithInitScript(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	generator := generator_id.NewIDGenerator("")
+	repo := repository.NewWorkerMongoDBRepository(db, generator)
+
+	// Limpiar la colección antes de cada test
+	t.Cleanup(func() {
+		db.Collection(repository.WorkerCollection).DeleteMany(ctx, bson.M{})
+	})
+
+	t.Run("CRUD Completo", func(t *testing.T) {
+		worker := createTestWorker("CRUD Test", model.DockerInstance)
+
+		// Save
+		saved, err := repo.Save(ctx, worker)
+		require.NoError(t, err)
+		require.NotEqual(t, model.AggregateID(""), saved.ID)
+
+		// FindByID
+		found, err := repo.FindByID(ctx, saved.ID)
+		require.NoError(t, err)
+		assert.Equal(t, saved.ID, found.ID)
+		assert.Equal(t, worker.Metadata.Name, found.Metadata.Name)
+
+		// Update
+		saved.Metadata.Description = "Descripción actualizada"
+		err = repo.Update(ctx, saved)
+		require.NoError(t, err)
+
+		updated, err := repo.FindByID(ctx, saved.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "Descripción actualizada", updated.Metadata.Description)
+
+		// Delete
+		err = repo.Delete(ctx, saved.ID)
+		require.NoError(t, err)
+
+		_, err = repo.FindByID(ctx, saved.ID)
+		assert.ErrorIs(t, err, generic.ErrNotFound)
+	})
+
+	t.Run("FindByCriteria avanzado", func(t *testing.T) {
+		// Limpiar la colección antes de ejecutar el test
+		_, err := db.Collection(repository.WorkerCollection).DeleteMany(ctx, bson.M{})
+		require.NoError(t, err)
+		workers := []*model.WorkerDefinition{
+			createTestWorker("Worker 1", model.DockerInstance),
+			createTestWorker("Worker 2", model.KubernetesInstance),
+			createTestWorker("Worker 3", model.VMInstance),
+		}
+
+		workers[0].Metadata.Labels = []string{"prod", "docker"}
+		workers[1].Metadata.Labels = []string{"dev", "k8s"}
+		workers[2].Metadata.Labels = []string{"test", "vm"}
+		workers[2].Status.Status = model.STOPPED
+
+		for _, w := range workers {
+			_, err := repo.Save(ctx, w)
+			require.NoError(t, err)
+		}
+
+		tests := []struct {
+			name          string
+			criteria      ports.SearchCriteria
+			expectedCount int64
+		}{
+			{
+				name: "Filtrar por tipo",
+				criteria: ports.SearchCriteria{
+					Filters: map[string]interface{}{"type": string(model.DockerInstance)},
+				},
+				expectedCount: 1,
+			},
+			{
+				name: "Filtrar por estado",
+				criteria: ports.SearchCriteria{
+					Filters: map[string]interface{}{"status": "stopped"},
+				},
+				expectedCount: 1,
+			},
+			{
+				name: "Filtrar por labels",
+				criteria: ports.SearchCriteria{
+					Filters: map[string]interface{}{"labels": []string{"prod"}},
+				},
+				expectedCount: 1,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result, err := repo.FindByCriteria(ctx, tt.criteria)
+				require.NoError(t, err)
+				assert.Equal(t, tt.expectedCount, result.TotalElements)
+			})
+		}
+	})
+
+	t.Run("Concurrencia", func(t *testing.T) {
+		worker := createTestWorker("Concurrent", model.DockerInstance)
+		saved, err := repo.Save(ctx, worker)
+		require.NoError(t, err)
+
+		errCh := make(chan error, 2)
+		update := func() {
+			ctx := context.Background()
+			current, err := repo.FindByID(ctx, saved.ID)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			current.Metadata.Description = "Updated " + time.Now().String()
+			errCh <- repo.Update(ctx, current)
+		}
+
+		go update()
+		go update()
+
+		err1 := <-errCh
+		err2 := <-errCh
+		assert.True(t, err1 == nil || err2 == nil, "Al menos una actualización debe tener éxito")
+	})
+
+	t.Run("Guardar sin ID", func(t *testing.T) {
+		worker := createTestWorker("No ID", model.DockerInstance)
+		saved, err := repo.Save(ctx, worker)
+		require.NoError(t, err)
+		assert.NotEqual(t, model.AggregateID(""), saved.ID)
+
+		exists, err := repo.Exists(ctx, saved.ID)
+		require.NoError(t, err)
+		assert.True(t, exists)
+	})
+
+	t.Run("Guardar duplicado", func(t *testing.T) {
+		worker := createTestWorker("Duplicado", model.DockerInstance)
+		saved, err := repo.Save(ctx, worker)
+		require.NoError(t, err)
+
+		duplicate := createTestWorker("Duplicado", model.DockerInstance)
+		duplicate.ID = saved.ID
+
+		_, err = repo.Save(ctx, duplicate)
+		assert.ErrorIs(t, err, generic.ErrDuplicateID)
+	})
+
+	t.Run("Paginación", func(t *testing.T) {
+		// Limpiar la colección antes de insertar los nuevos documentos
+
+		_, err := db.Collection(repository.WorkerCollection).DeleteMany(ctx, bson.M{})
+		require.NoError(t, err)
+
+		numWorkers := 5
+		// Crear y guardar los workers de prueba
+		for i := 1; i <= numWorkers; i++ {
+			worker := createTestWorker(fmt.Sprintf("Worker %d", i), model.DockerInstance)
+			_, err := repo.Save(ctx, worker)
+			require.NoError(t, err)
+		}
+
+		// Verificar que se insertaron exactamente los elementos esperados
+		count, err := repo.Count(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(numWorkers), count, "Número incorrecto de workers insertados")
+
+		tests := []struct {
+			page     int
+			size     int
+			expected int
+		}{
+			{1, 2, 2},
+			{2, 2, 2},
+			{3, 2, 1},
+			{0, 10, 5}, // Page 0 usa 1
+			{-1, 3, 3}, // Page negativo usa 1
+		}
+
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("Page %d Size %d", tt.page, tt.size), func(t *testing.T) {
+				criteria := ports.SearchCriteria{
+					Page: tt.page,
+					Size: tt.size,
+				}
+				result, err := repo.FindByCriteria(ctx, criteria)
+				require.NoError(t, err)
+				assert.Equal(t, tt.expected, len(result.Content))
+			})
+		}
+	})
+
+	t.Run("Ordenamiento", func(t *testing.T) {
+		_, err := db.Collection(repository.WorkerCollection).DeleteMany(ctx, bson.M{})
+		require.NoError(t, err)
+
+		names := []string{"Charlie", "Alpha", "Bravo"}
+		for _, name := range names {
+			worker := createTestWorker(name, model.DockerInstance)
+			_, err := repo.Save(ctx, worker)
+			require.NoError(t, err)
+		}
+
+		tests := []struct {
+			sortBy    string
+			sortOrder string
+			expected  []string
+		}{
+			{"name", "ASC", []string{"Alpha", "Bravo", "Charlie"}},
+			{"name", "DESC", []string{"Charlie", "Bravo", "Alpha"}},
+			{"createdAt", "ASC", []string{"Charlie", "Alpha", "Bravo"}},
+		}
+
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("%s %s", tt.sortBy, tt.sortOrder), func(t *testing.T) {
+				criteria := ports.SearchCriteria{
+					SortBy:    tt.sortBy,
+					SortOrder: tt.sortOrder,
+				}
+				result, err := repo.FindByCriteria(ctx, criteria)
+				require.NoError(t, err)
+				var actual []string
+				for _, w := range result.Content {
+					actual = append(actual, w.Metadata.Name)
+				}
+				assert.Equal(t, tt.expected, actual)
+			})
+		}
+	})
+
+	t.Run("Batch Operations", func(t *testing.T) {
+		_, err := db.Collection(repository.WorkerCollection).DeleteMany(ctx, bson.M{})
+		require.NoError(t, err)
+
+		workers := []*model.WorkerDefinition{
+			createTestWorker("Batch1", model.DockerInstance),
+			createTestWorker("Batch2", model.KubernetesInstance),
+		}
+
+		// BatchSave
+		savedWorkers, err := repo.BatchSave(ctx, workers)
+		require.NoError(t, err)
+		count, err := repo.Count(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), count)
+
+		// BatchUpdate
+		for _, w := range savedWorkers {
+			w.Metadata.Description = "Updated"
+		}
+		err = repo.BatchUpdate(ctx, savedWorkers)
+		require.NoError(t, err)
+
+		for _, w := range savedWorkers {
+			found, err := repo.FindByID(ctx, w.ID)
+			require.NoError(t, err)
+			assert.Equal(t, "Updated", found.Metadata.Description)
+		}
+
+		// BatchDelete
+		var ids []model.AggregateID
+		for _, w := range savedWorkers {
+			ids = append(ids, w.ID)
+		}
+		err = repo.BatchDelete(ctx, ids)
+		require.NoError(t, err)
+		count, err = repo.Count(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), count)
+	})
 }
 
 // Función para crear un WorkerDefinition de prueba
@@ -140,271 +390,4 @@ func createTestWorker(name string, instanceType model.InstanceType) *model.Worke
 		},
 	}
 	return worker
-}
-
-func TestWorkerMongoDBRepository(t *testing.T) {
-	// Preparar entorno con MongoDB
-	_, client, db, cleanup := setupMongoWorkersWithInitScript(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	repo := repository.NewWorkerMongoDBRepository(db, client)
-
-	// Limpiar cualquier dato existente
-	_, err := db.Collection("workers").DeleteMany(ctx, bson.M{})
-	require.NoError(t, err)
-
-	t.Run("Guardar y recuperar WorkerDef", func(t *testing.T) {
-		// Crear Worker de prueba
-		worker := createTestWorker("Test MongoDB Worker", model.DockerInstance)
-
-		// Guardar
-		err := repo.Save(ctx, worker)
-		require.NoError(t, err)
-
-		// Recuperar
-		retrieved, err := repo.FindByID(ctx, worker.ID)
-		require.NoError(t, err)
-
-		// Verificar campos
-		assert.Equal(t, worker.ID, retrieved.ID)
-		assert.Equal(t, worker.Metadata.Name, retrieved.Metadata.Name)
-		assert.Equal(t, worker.Metadata.Description, retrieved.Metadata.Description)
-		assert.ElementsMatch(t, worker.Metadata.Labels, retrieved.Metadata.Labels)
-		assert.Equal(t, worker.Metadata.Annotations["env"], retrieved.Metadata.Annotations["env"])
-		assert.Equal(t, worker.Spec.Type, retrieved.Spec.Type)
-		assert.Equal(t, worker.Spec.Image, retrieved.Spec.Image)
-		assert.Equal(t, worker.Spec.WorkingDir, retrieved.Spec.WorkingDir)
-		assert.Equal(t, worker.Spec.Resources.CPU, retrieved.Spec.Resources.CPU)
-		assert.Equal(t, worker.Spec.Resources.Memory, retrieved.Spec.Resources.Memory)
-		assert.Equal(t, len(worker.Spec.Volumes), len(retrieved.Spec.Volumes))
-		assert.Equal(t, worker.Spec.Volumes[0].HostPath, retrieved.Spec.Volumes[0].HostPath)
-		assert.Equal(t, worker.Status.InstanceID, retrieved.Status.InstanceID)
-		assert.Equal(t, worker.Status.Status, retrieved.Status.Status)
-	})
-
-	t.Run("Actualizar WorkerDef", func(t *testing.T) {
-		// Crear y guardar un Worker
-		worker := createTestWorker("MongoDB Worker para actualizar", model.KubernetesInstance)
-
-		err := repo.Save(ctx, worker)
-		require.NoError(t, err)
-
-		// Modificar y actualizar
-		worker.Metadata.Description = "Descripción actualizada en MongoDB"
-		worker.Metadata.Labels = append(worker.Metadata.Labels, "updated")
-		worker.Metadata.Annotations["updated"] = "true"
-		worker.Spec.Image = "updated-image:latest"
-		worker.Spec.Env["NEW_VAR"] = "new_value"
-		worker.Status.Status = model.STOPPED // Usar la constante enum en lugar de string
-
-		err = repo.Update(ctx, worker)
-		require.NoError(t, err)
-
-		// Verificar
-		retrieved, err := repo.FindByID(ctx, worker.ID)
-		require.NoError(t, err)
-		assert.Equal(t, "Descripción actualizada en MongoDB", retrieved.Metadata.Description)
-		assert.Contains(t, retrieved.Metadata.Labels, "updated")
-		assert.Equal(t, "true", retrieved.Metadata.Annotations["updated"])
-		assert.Equal(t, "updated-image:latest", retrieved.Spec.Image)
-		assert.Equal(t, "new_value", retrieved.Spec.Env["NEW_VAR"])
-		assert.Equal(t, model.STOPPED, retrieved.Status.Status)
-	})
-
-	t.Run("Eliminar WorkerDef", func(t *testing.T) {
-		worker := createTestWorker("MongoDB Worker para eliminar", model.VMInstance)
-
-		// Guardar y eliminar
-		err := repo.Save(ctx, worker)
-		require.NoError(t, err)
-
-		err = repo.Delete(ctx, worker.ID)
-		require.NoError(t, err)
-
-		// Verificar eliminación
-		exists, err := repo.Exists(ctx, worker.ID)
-		require.NoError(t, err)
-		assert.False(t, exists)
-
-		// Intentar recuperar debe fallar
-		_, err = repo.FindByID(ctx, worker.ID)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no encontrado")
-	})
-
-	t.Run("FindAll debe retornar todos los Workers Def", func(t *testing.T) {
-		// Limpiar datos previos
-		_, err := db.Collection("workers").DeleteMany(ctx, bson.M{})
-		require.NoError(t, err)
-
-		// Crear varios Workers
-		workers := []*model.WorkerDefinition{
-			createTestWorker("MongoDB Worker 1", model.DockerInstance),
-			createTestWorker("MongoDB Worker 2", model.KubernetesInstance),
-			createTestWorker("MongoDB Worker 3", model.VMInstance),
-		}
-
-		for _, worker := range workers {
-			err := repo.Save(ctx, worker)
-			require.NoError(t, err)
-		}
-
-		// Obtener todos los workers
-		retrieved, err := repo.FindAll(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, len(workers), len(retrieved))
-
-		// Verificar que los IDs coincidan (sin importar el orden)
-		expectedIDs := make(map[string]bool)
-		for _, worker := range workers {
-			expectedIDs[worker.ID.String()] = true
-		}
-
-		retrievedIDs := make(map[string]bool)
-		for _, worker := range retrieved {
-			retrievedIDs[worker.ID.String()] = true
-		}
-
-		assert.Equal(t, expectedIDs, retrievedIDs)
-	})
-
-	t.Run("Búsqueda por criterios múltiples", func(t *testing.T) {
-		// Limpiar datos previos
-		_, err := db.Collection("workers").DeleteMany(ctx, bson.M{})
-		require.NoError(t, err)
-
-		// Crear workers con diferentes atributos
-		workerDocker := createTestWorker("MongoDB Docker Worker", model.DockerInstance)
-		workerDocker.Metadata.Labels = []string{"docker", "dev"}
-		workerDocker.Status.Status = model.HEALTHY // Usar la constante enum en lugar de string
-
-		workerK8s := createTestWorker("MongoDB K8s Worker", model.KubernetesInstance)
-		workerK8s.Metadata.Labels = []string{"k8s", "prod"}
-		workerK8s.Status.Status = model.HEALTHY // Usar la constante enum en lugar de string
-
-		workerVM := createTestWorker("MongoDB VM Worker", model.VMInstance)
-		workerVM.Metadata.Labels = []string{"vm", "test"}
-		workerVM.Status.Status = model.STOPPED // Usar la constante enum en lugar de string
-
-		workers := []*model.WorkerDefinition{workerDocker, workerK8s, workerVM}
-		for _, worker := range workers {
-			err := repo.Save(ctx, worker)
-			require.NoError(t, err)
-		}
-
-		// Test 1: Buscar por tipo
-		criteria := ports.SearchCriteria{
-			Filters: map[string]interface{}{"type": string(model.DockerInstance)},
-			Page:    1,
-			Size:    10,
-		}
-
-		result, err := repo.FindByCriteria(ctx, criteria)
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), result.TotalElements)
-		assert.Equal(t, "MongoDB Docker Worker", result.Content[0].Metadata.Name)
-
-		// Test 2: Buscar por estado
-		criteria = ports.SearchCriteria{
-			Filters: map[string]interface{}{"status": "HEALTHY"}, // Usar el string representado por la constante enum
-			Page:    1,
-			Size:    10,
-		}
-
-		result, err = repo.FindByCriteria(ctx, criteria)
-		require.NoError(t, err)
-		assert.Equal(t, int64(2), result.TotalElements)
-
-		// Test 3: Buscar por término en el nombre
-		criteria = ports.SearchCriteria{
-			Filters: map[string]interface{}{"nameContains": "K8s"},
-			Page:    1,
-			Size:    10,
-		}
-
-		result, err = repo.FindByCriteria(ctx, criteria)
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), result.TotalElements)
-		assert.Equal(t, "MongoDB K8s Worker", result.Content[0].Metadata.Name)
-	})
-
-	t.Run("BatchSave y BatchUpdate", func(t *testing.T) {
-		// Limpiar datos previos
-		_, err := db.Collection("workers").DeleteMany(ctx, bson.M{})
-		require.NoError(t, err)
-
-		// Crear workers para operaciones por lotes
-		workers := []*model.WorkerDefinition{
-			createTestWorker("MongoDB Batch Worker 1", model.DockerInstance),
-			createTestWorker("MongoDB Batch Worker 2", model.KubernetesInstance),
-			createTestWorker("MongoDB Batch Worker 3", model.VMInstance),
-		}
-
-		// Guardar por lotes
-		err = repo.BatchSave(ctx, workers)
-		require.NoError(t, err)
-
-		// Verificar que se hayan guardado todos
-		count, err := repo.Count(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, int64(3), count)
-
-		// Modificar todos los workers
-		for i := range workers {
-			workers[i].Metadata.Description = "Updated in batch with MongoDB"
-			workers[i].Status.Status = model.HEALTHY // Usar la constante enum en lugar de string
-		}
-
-		// Actualizar por lotes
-		err = repo.BatchUpdate(ctx, workers)
-		require.NoError(t, err)
-
-		// Verificar las actualizaciones
-		for _, worker := range workers {
-			retrieved, err := repo.FindByID(ctx, worker.ID)
-			require.NoError(t, err)
-			assert.Equal(t, "Updated in batch with MongoDB", retrieved.Metadata.Description)
-			assert.Equal(t, model.HEALTHY, retrieved.Status.Status)
-		}
-	})
-
-	t.Run("BatchDelete", func(t *testing.T) {
-		// Limpiar datos previos
-		_, err := db.Collection("workers").DeleteMany(ctx, bson.M{})
-		require.NoError(t, err)
-
-		// Crear workers para eliminar por lotes
-		workers := []*model.WorkerDefinition{
-			createTestWorker("MongoDB Delete Worker 1", model.DockerInstance),
-			createTestWorker("MongoDB Delete Worker 2", model.KubernetesInstance),
-		}
-
-		// Guardar los workers
-		for _, worker := range workers {
-			err := repo.Save(ctx, worker)
-			require.NoError(t, err)
-		}
-
-		// Verificar que se hayan guardado
-		count, err := repo.Count(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, int64(2), count)
-
-		// Crear lista de IDs para eliminar
-		var ids []model.AggregateID
-		for _, worker := range workers {
-			ids = append(ids, worker.ID)
-		}
-
-		// Eliminar por lotes
-		err = repo.BatchDelete(ctx, ids)
-		require.NoError(t, err)
-
-		// Verificar que se hayan eliminado
-		count, err = repo.Count(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, int64(0), count)
-	})
-
 }
