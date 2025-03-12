@@ -1,14 +1,13 @@
-package repository
+package rp_repository
 
 import (
 	"context"
-	"errors"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/generic"
 	"fmt"
 	"time"
 
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
-	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 )
@@ -18,55 +17,29 @@ const (
 	ctxKeyTenantID = "tenantID"
 )
 
-var (
-	ErrDuplicateID = errors.New("duplicate resource pool ID")
-	ErrNotFound    = errors.New("resource pool not found")
-)
+var _ ports.WriteOnlyRepository[*model.ResourcePoolDef] = (*ResourcePoolMongoDBWriteRepository)(nil)
 
 type ResourcePoolMongoDBWriteRepository struct {
 	collection *mongo.Collection
 	client     *mongo.Client
+	generator  ports.IDGenerator
 }
 
-func NewResourcePoolMongoDBWriteRepository(db *mongo.Database, client *mongo.Client) ports.WriteOnlyRepository[*model.ResourcePoolDef, model.AggregateID] {
+func NewResourcePoolMongoDBWriteRepository(db *mongo.Database, client *mongo.Client, generator ports.IDGenerator) ports.WriteOnlyRepository[*model.ResourcePoolDef] {
 	return &ResourcePoolMongoDBWriteRepository{
 		collection: db.Collection("resource_pools"),
 		client:     client,
+		generator:  generator,
 	}
 }
 
-type ResourcePoolDocument struct {
-	ID        string             `bson:"_id"`
-	Metadata  ResourcePoolMeta   `bson:"metadata"`
-	Spec      ResourcePoolSpec   `bson:"spec"`
-	Status    ResourcePoolStatus `bson:"status"`
-	Owner     string             `bson:"owner"`
-	TenantID  string             `bson:"tenant_id"`
-	CreatedAt time.Time          `bson:"created_at"`
-	UpdatedAt time.Time          `bson:"updated_at"`
-}
-
-type ResourcePoolMeta struct {
-	Name        string            `bson:"name"`
-	Description string            `bson:"description"`
-	Labels      []string          `bson:"labels"`
-	Annotations map[string]string `bson:"annotations"`
-	CreatedAt   time.Time         `bson:"created_at"`
-	UpdatedAt   time.Time         `bson:"updated_at"`
-}
-
-type ResourcePoolSpec struct {
-	PoolID string                 `bson:"pool_id"`
-	Type   string                 `bson:"type"`
-	Config map[string]interface{} `bson:"config"`
-}
-
-type ResourcePoolStatus struct {
-	State string `bson:"state"`
-}
-
+// modelToDocument convierte la entidad del dominio en un documento para MongoDB.
 func (r *ResourcePoolMongoDBWriteRepository) modelToDocument(entity *model.ResourcePoolDef, ctx context.Context) ResourcePoolDocument {
 	now := time.Now().UTC()
+
+	if entity.GetID() == "" {
+		entity.ID = r.generator.NewID()
+	}
 
 	if entity.Metadata.CreatedAt.IsZero() {
 		entity.Metadata.CreatedAt = now
@@ -98,9 +71,11 @@ func (r *ResourcePoolMongoDBWriteRepository) modelToDocument(entity *model.Resou
 	}
 }
 
-func (r *ResourcePoolMongoDBWriteRepository) Save(ctx context.Context, entity *model.ResourcePoolDef) error {
-	if entity.ID == model.AggregateID(uuid.Nil) {
-		entity.ID = model.NewAggregateID()
+// Save inserta una única entidad y devuelve la entidad con el ID asignado.
+func (r *ResourcePoolMongoDBWriteRepository) Save(ctx context.Context, entity *model.ResourcePoolDef) (*model.ResourcePoolDef, error) {
+
+	if entity.GetID() == "" {
+		entity.ID = r.generator.NewID()
 	}
 
 	doc := r.modelToDocument(entity, ctx)
@@ -108,16 +83,17 @@ func (r *ResourcePoolMongoDBWriteRepository) Save(ctx context.Context, entity *m
 	_, err := r.collection.InsertOne(ctx, doc)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
-			return fmt.Errorf("%w: %s", ErrDuplicateID, entity.ID)
+			return nil, fmt.Errorf("%w: %s", generic.ErrDuplicateID, entity.ID)
 		}
-		return fmt.Errorf("insert error: %w", err)
+		return nil, fmt.Errorf("insert error: %w", err)
 	}
 
-	return nil
+	return entity, nil
 }
 
+// Update actualiza la entidad existente.
 func (r *ResourcePoolMongoDBWriteRepository) Update(ctx context.Context, entity *model.ResourcePoolDef) error {
-	if entity.ID == model.AggregateID(uuid.Nil) {
+	if entity.ID == "" {
 		return fmt.Errorf("update requires valid ID")
 	}
 
@@ -130,12 +106,13 @@ func (r *ResourcePoolMongoDBWriteRepository) Update(ctx context.Context, entity 
 	}
 
 	if result.MatchedCount == 0 {
-		return fmt.Errorf("%w: %s", ErrNotFound, entity.ID)
+		return fmt.Errorf("%w: %s", generic.ErrNotFound, entity.ID)
 	}
 
 	return nil
 }
 
+// Delete elimina la entidad indicada.
 func (r *ResourcePoolMongoDBWriteRepository) Delete(ctx context.Context, id model.AggregateID) error {
 	result, err := r.collection.DeleteOne(ctx, bson.M{"_id": id.String()})
 	if err != nil {
@@ -143,33 +120,32 @@ func (r *ResourcePoolMongoDBWriteRepository) Delete(ctx context.Context, id mode
 	}
 
 	if result.DeletedCount == 0 {
-		return fmt.Errorf("%w: %s", ErrNotFound, id)
+		return fmt.Errorf("%w: %s", generic.ErrNotFound, id)
 	}
 
 	return nil
 }
 
-func (r *ResourcePoolMongoDBWriteRepository) BatchSave(ctx context.Context, entities []*model.ResourcePoolDef) error {
+// BatchSave inserta múltiples entidades y devuelve las entidades con sus IDs asignados.
+func (r *ResourcePoolMongoDBWriteRepository) BatchSave(ctx context.Context, entities []*model.ResourcePoolDef) ([]*model.ResourcePoolDef, error) {
 	if len(entities) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	docs := make([]interface{}, len(entities))
 	for i, entity := range entities {
-		if entity.ID == model.AggregateID(uuid.Nil) {
-			entity.ID = model.NewAggregateID()
-		}
 		docs[i] = r.modelToDocument(entity, ctx)
 	}
 
 	_, err := r.collection.InsertMany(ctx, docs)
 	if err != nil {
-		return fmt.Errorf("batch insert error: %w", err)
+		return nil, fmt.Errorf("batch insert error: %w", err)
 	}
 
-	return nil
+	return entities, nil
 }
 
+// BatchUpdate actualiza múltiples entidades.
 func (r *ResourcePoolMongoDBWriteRepository) BatchUpdate(ctx context.Context, entities []*model.ResourcePoolDef) error {
 	if len(entities) == 0 {
 		return nil
@@ -177,10 +153,9 @@ func (r *ResourcePoolMongoDBWriteRepository) BatchUpdate(ctx context.Context, en
 
 	var models []mongo.WriteModel
 	for _, entity := range entities {
-		if entity.ID == model.AggregateID(uuid.Nil) {
+		if entity.ID == model.AggregateID("") {
 			return fmt.Errorf("update requires valid ID")
 		}
-		// Convertir el modelo a documento
 		doc := r.modelToDocument(entity, ctx)
 		updateModel := mongo.NewUpdateOneModel().
 			SetFilter(bson.M{"_id": entity.ID.String()}).
@@ -196,6 +171,7 @@ func (r *ResourcePoolMongoDBWriteRepository) BatchUpdate(ctx context.Context, en
 	return nil
 }
 
+// BatchDelete elimina múltiples entidades.
 func (r *ResourcePoolMongoDBWriteRepository) BatchDelete(ctx context.Context, ids []model.AggregateID) error {
 	if len(ids) == 0 {
 		return nil

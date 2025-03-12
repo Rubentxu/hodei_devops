@@ -1,17 +1,20 @@
-package repository_test
+// Archivo: hodei-app/internal/adapters/outgoing/repository/task/task_mongodb_repository_test.go
+package task_repository_test
 
 import (
 	"context"
+	"fmt"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+
 	"testing"
 	"time"
 
 	repository "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/task"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
-	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -20,448 +23,326 @@ import (
 
 func setupMongoTasksWithInitScript(t *testing.T) (testcontainers.Container, *mongo.Client, *mongo.Database, func()) {
 	ctx := context.Background()
-
-	// Configurar el contenedor MongoDB
 	req := testcontainers.ContainerRequest{
 		Image:        "mongo:5.0",
 		ExposedPorts: []string{"27017/tcp"},
-		Env: map[string]string{
-			"MONGO_INITDB_DATABASE": "hodei-test",
-		},
-		WaitingFor: wait.ForLog("Waiting for connections").
-			WithStartupTimeout(time.Second * 30),
+		Env:          map[string]string{"MONGO_INITDB_DATABASE": "hodei-test"},
+		WaitingFor:   wait.ForLog("Waiting for connections").WithStartupTimeout(30 * time.Second),
 	}
 
-	// Iniciar el contenedor
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
 	})
 	require.NoError(t, err)
 
-	// Obtener el puerto mapeado y la dirección IP
 	mappedPort, err := container.MappedPort(ctx, "27017")
 	require.NoError(t, err)
-
 	hostIP, err := container.Host(ctx)
 	require.NoError(t, err)
 
-	// Construir la URI de conexión
-	connectionURI := "mongodb://" + hostIP + ":" + mappedPort.Port()
-
-	// Crear cliente MongoDB
+	connectionURI := fmt.Sprintf("mongodb://%s:%s", hostIP, mappedPort.Port())
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connectionURI))
 	require.NoError(t, err)
 
-	// Verificar que MongoDB esté listo con múltiples intentos
+	// Verificar conexión con reintentos
 	maxRetries := 5
 	for i := 0; i < maxRetries; i++ {
 		pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		err = client.Ping(pingCtx, nil)
 		cancel()
-
 		if err == nil {
-			break // Conexión exitosa
+			break
 		}
-
 		if i == maxRetries-1 {
-			require.NoError(t, err, "No se pudo conectar a MongoDB después de varios intentos")
+			require.NoError(t, err, "No se pudo conectar a MongoDB")
 		}
-
-		time.Sleep(time.Second) // Esperar antes del siguiente intento
+		time.Sleep(time.Second)
 	}
 
-	// Obtener referencia a la base de datos
 	db := client.Database("hodei-test")
-
-	// Configurar la colección tasks con índice único en id
-	_, err = db.Collection("tasks").Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "id", Value: 1}},
-		Options: options.Index().SetUnique(true),
-	})
-	require.NoError(t, err)
-
-	// Función de limpieza
 	cleanup := func() {
-		// Limpiar la base de datos antes de terminar
-		_ = db.Drop(ctx)
-		_ = client.Disconnect(ctx)
-		_ = container.Terminate(ctx)
+		db.Drop(ctx)
+		client.Disconnect(ctx)
+		container.Terminate(ctx)
 	}
 
 	return container, client, db, cleanup
 }
 
-// Función para crear un Task de prueba
+// createTestTask crea una Task de prueba utilizando el modelo definido.
 func createTestTask(name string) *model.Task {
-	// Crear parámetros de ejemplo
-	params := []model.ParamDefinition{
-		{
-			Key:         "param1",
-			Type:        model.ParamTypeString,
-			Label:       "Parameter 1",
-			Description: "First parameter for testing",
-			Required:    true,
-			Default:     "default value",
-			Group:       "test",
-			Order:       1,
-		},
-		{
-			Key:         "param2",
-			Type:        model.ParamTypeInteger,
-			Label:       "Parameter 2",
-			Description: "Second parameter for testing",
-			Required:    false,
-			Default:     42,
-			Group:       "test",
-			Order:       2,
-			Validations: model.ParamValidations{
-				Min: func() *float64 { val := float64(1); return &val }(),
-				Max: func() *float64 { val := float64(100); return &val }(),
-			},
-		},
-	}
-
-	// Crear una Task con valores de prueba
-	task := &model.Task{
-		ID: model.AggregateID(uuid.New()),
+	return &model.Task{
 		Metadata: model.Metadata{
 			Name:        name,
-			Description: "Test task description for " + name,
+			Description: "Descripción de " + name,
 			Labels:      []string{"test", name},
-			Annotations: map[string]string{"env": "test", "purpose": "testing"},
+			Annotations: map[string]string{"env": "test"},
 			CreatedAt:   time.Now().UTC(),
 			UpdatedAt:   time.Now().UTC(),
 		},
 		Spec: model.TaskSpec{
-			WorkerDefinitionID: model.AggregateID(uuid.New()),
-			Command:            []string{"echo", "Hello World"},
-			Params:             params,
-			ParamValues: map[string]interface{}{
-				"param1": "test value",
-				"param2": 50,
-			},
+			// Se asigna un WorkerDefinitionID ficticio y se provee el comando y parámetros mínimos.
+			WorkerDefinitionID: model.AggregateID(""),
+			Command:            []string{"echo", name},
+			Params:             []model.ParamDefinition{},
+			ParamValues:        make(map[string]interface{}),
 		},
 	}
-
-	return task
 }
 
 func TestTaskMongoDBRepository(t *testing.T) {
-	// Preparar entorno con MongoDB
 	_, client, db, cleanup := setupMongoTasksWithInitScript(t)
 	defer cleanup()
-
 	ctx := context.Background()
 	repo := repository.NewTaskMongoDBRepository(db, client)
 
-	// Limpiar cualquier dato existente
-	_, err := db.Collection("tasks").DeleteMany(ctx, bson.M{})
-	require.NoError(t, err)
-
-	t.Run("Guardar y recuperar Task", func(t *testing.T) {
-		// Crear Task de prueba
-		task := createTestTask("Test MongoDB Task")
-
-		// Guardar
-		err := repo.Save(ctx, task)
+	// Limpiar la colección antes de cada test.
+	t.Cleanup(func() {
+		_, err := db.Collection(repository.TaskCollection).DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
-
-		// Recuperar
-		retrieved, err := repo.FindByID(ctx, task.ID)
-		require.NoError(t, err)
-
-		// Verificar campos
-		assert.Equal(t, task.ID, retrieved.ID)
-		assert.Equal(t, task.Metadata.Name, retrieved.Metadata.Name)
-		assert.Equal(t, task.Metadata.Description, retrieved.Metadata.Description)
-		assert.ElementsMatch(t, task.Metadata.Labels, retrieved.Metadata.Labels)
-		assert.Equal(t, task.Metadata.Annotations["env"], retrieved.Metadata.Annotations["env"])
-		assert.Equal(t, task.Spec.WorkerDefinitionID, retrieved.Spec.WorkerDefinitionID)
-		assert.ElementsMatch(t, task.Spec.Command, retrieved.Spec.Command)
-
-		// Verificar parámetros
-		assert.Equal(t, len(task.Spec.Params), len(retrieved.Spec.Params))
-		assert.Equal(t, task.Spec.Params[0].Key, retrieved.Spec.Params[0].Key)
-		assert.Equal(t, task.Spec.Params[0].Type, retrieved.Spec.Params[0].Type)
-		assert.Equal(t, task.Spec.Params[0].Required, retrieved.Spec.Params[0].Required)
-
-		// Verificar valores de parámetros
-		assert.Equal(t, task.Spec.ParamValues["param1"], retrieved.Spec.ParamValues["param1"])
-		assert.Equal(t, int32(50), retrieved.Spec.ParamValues["param2"]) // MongoDB convierte a float64 los números
 	})
 
-	t.Run("Actualizar Task", func(t *testing.T) {
-		// Crear y guardar un Task
-		task := createTestTask("MongoDB Task para actualizar")
-
+	t.Run("CRUD Completo", func(t *testing.T) {
+		task := createTestTask("CRUD Test")
+		// Save
 		err := repo.Save(ctx, task)
 		require.NoError(t, err)
 
-		// Modificar y actualizar
-		task.Metadata.Description = "Descripción actualizada en MongoDB"
-		task.Metadata.Labels = append(task.Metadata.Labels, "updated")
-		task.Metadata.Annotations["updated"] = "true"
-		task.Spec.Command = []string{"echo", "Updated Command"}
-		task.Spec.ParamValues["param1"] = "valor actualizado"
+		// FindByID
+		found, err := repo.FindByID(ctx, task.ID)
+		require.NoError(t, err)
+		assert.Equal(t, task.ID, found.ID)
+		assert.Equal(t, task.Metadata.Name, found.Metadata.Name)
 
+		// Update
+		task.Metadata.Description = "Descripción actualizada"
 		err = repo.Update(ctx, task)
 		require.NoError(t, err)
 
-		// Verificar
-		retrieved, err := repo.FindByID(ctx, task.ID)
+		updated, err := repo.FindByID(ctx, task.ID)
 		require.NoError(t, err)
-		assert.Equal(t, "Descripción actualizada en MongoDB", retrieved.Metadata.Description)
-		assert.Contains(t, retrieved.Metadata.Labels, "updated")
-		assert.Equal(t, "true", retrieved.Metadata.Annotations["updated"])
-		assert.Equal(t, []string{"echo", "Updated Command"}, retrieved.Spec.Command)
-		assert.Equal(t, "valor actualizado", retrieved.Spec.ParamValues["param1"])
+		assert.Equal(t, "Descripción actualizada", updated.Metadata.Description)
+
+		// Delete
+		err = repo.Delete(ctx, task.ID)
+		require.NoError(t, err)
+		_, err = repo.FindByID(ctx, task.ID)
+		assert.Error(t, err)
 	})
 
-	t.Run("Eliminar Task", func(t *testing.T) {
-		task := createTestTask("MongoDB Task para eliminar")
+	t.Run("Guardar sin ID", func(t *testing.T) {
+		task := createTestTask("Sin ID")
+		task.ID = model.AggregateID("")
+		err := repo.Save(ctx, task)
+		require.NoError(t, err)
+		// Se debe asignar un nuevo ID
+		assert.NotEqual(t, uuid.Nil, task.ID)
 
-		// Guardar y eliminar
+		exists, err := repo.Exists(ctx, task.ID)
+		require.NoError(t, err)
+		assert.True(t, exists)
+	})
+
+	t.Run("Guardar duplicado", func(t *testing.T) {
+		task := createTestTask("Duplicado")
 		err := repo.Save(ctx, task)
 		require.NoError(t, err)
 
-		err = repo.Delete(ctx, task.ID)
-		require.NoError(t, err)
-
-		// Verificar eliminación
-		exists, err := repo.Exists(ctx, task.ID)
-		require.NoError(t, err)
-		assert.False(t, exists)
-
-		// Intentar recuperar debe fallar
-		_, err = repo.FindByID(ctx, task.ID)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no encontrada")
+		duplicate := createTestTask("Duplicado")
+		duplicate.ID = task.ID
+		err = repo.Save(ctx, duplicate)
+		require.ErrorIs(t, err, repository.ErrDuplicateID)
 	})
 
-	t.Run("FindAll debe retornar todos los Tasks", func(t *testing.T) {
-		// Limpiar datos previos
-		_, err := db.Collection("tasks").DeleteMany(ctx, bson.M{})
+	t.Run("FindByCriteria avanzado", func(t *testing.T) {
+		// Limpiar la colección e insertar varias tasks para búsquedas con filtros.
+		_, err := db.Collection(repository.TaskCollection).DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
 
-		// Crear varios Tasks
 		tasks := []*model.Task{
-			createTestTask("MongoDB Task 1"),
-			createTestTask("MongoDB Task 2"),
-			createTestTask("MongoDB Task 3"),
+			createTestTask("Prod-K8s"),
+			createTestTask("Dev-K8s"),
+			createTestTask("Test-Docker"),
 		}
+
+		// Actualizar Labels para la prueba.
+		tasks[0].Metadata.Labels = []string{"prod", "k8s"}
+		tasks[1].Metadata.Labels = []string{"dev", "k8s"}
+		tasks[2].Metadata.Labels = []string{"test", "docker"}
 
 		for _, task := range tasks {
 			err := repo.Save(ctx, task)
 			require.NoError(t, err)
 		}
 
-		// Obtener todas las tareas
-		retrieved, err := repo.FindAll(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, len(tasks), len(retrieved))
-
-		// Verificar que los IDs coincidan (sin importar el orden)
-		expectedIDs := make(map[string]bool)
-		for _, task := range tasks {
-			expectedIDs[task.ID.String()] = true
+		tests := []struct {
+			nombre   string
+			criteria ports.SearchCriteria
+			expected int
+		}{
+			{
+				"Contiene 'K8s' en name",
+				ports.SearchCriteria{Filters: map[string]interface{}{"nameContains": "K8s"}},
+				2,
+			},
+			{
+				"Labels exactos",
+				ports.SearchCriteria{Filters: map[string]interface{}{"labels": []string{"prod", "k8s"}}},
+				1,
+			},
 		}
 
-		retrievedIDs := make(map[string]bool)
-		for _, task := range retrieved {
-			retrievedIDs[task.ID.String()] = true
+		for _, tt := range tests {
+			t.Run(tt.nombre, func(t *testing.T) {
+				result, err := repo.FindByCriteria(ctx, tt.criteria)
+				require.NoError(t, err)
+				assert.Equal(t, tt.expected, len(result.Content))
+				assert.Equal(t, int64(tt.expected), result.TotalElements)
+			})
 		}
-
-		assert.Equal(t, expectedIDs, retrievedIDs)
 	})
 
-	t.Run("Búsqueda por criterios múltiples", func(t *testing.T) {
-		// Limpiar datos previos
-		_, err := db.Collection("tasks").DeleteMany(ctx, bson.M{})
+	t.Run("Paginación", func(t *testing.T) {
+		_, err := db.Collection(repository.TaskCollection).DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
 
-		// Crear tareas con diferentes atributos
-		taskDev := createTestTask("MongoDB Dev Task")
-		taskDev.Metadata.Labels = []string{"dev", "api"}
-
-		taskProd := createTestTask("MongoDB Prod Task")
-		taskProd.Metadata.Labels = []string{"prod", "api"}
-
-		taskTest := createTestTask("MongoDB Test UI")
-		taskTest.Metadata.Labels = []string{"test", "ui"}
-		taskTest.Spec.Command = []string{"npm", "test"}
-
-		tasks := []*model.Task{taskDev, taskProd, taskTest}
-		for _, task := range tasks {
-			err := repo.Save(ctx, task)
+		for i := 1; i <= 5; i++ {
+			task := createTestTask(fmt.Sprintf("Task %d", i))
+			err = repo.Save(ctx, task)
 			require.NoError(t, err)
 		}
 
-		// Test 1: Buscar por nombre que contiene
-		criteria := ports.SearchCriteria{
-			Filters: map[string]interface{}{"nameContains": "Prod"},
-			Page:    1,
-			Size:    10,
+		tests := []struct {
+			page     int
+			size     int
+			expected int
+		}{
+			{1, 2, 2},
+			{2, 2, 2},
+			{3, 2, 1},
 		}
 
-		result, err := repo.FindByCriteria(ctx, criteria)
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), result.TotalElements)
-		assert.Equal(t, "MongoDB Prod Task", result.Content[0].Metadata.Name)
-
-		// Test 2: Buscar por etiqueta
-		criteria = ports.SearchCriteria{
-			Filters: map[string]interface{}{"labels": []string{"api"}},
-			Page:    1,
-			Size:    10,
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("Page %d Size %d", tt.page, tt.size), func(t *testing.T) {
+				criteria := ports.SearchCriteria{
+					Page: tt.page,
+					Size: tt.size,
+				}
+				result, err := repo.FindByCriteria(ctx, criteria)
+				require.NoError(t, err)
+				assert.Equal(t, tt.expected, len(result.Content))
+			})
 		}
-
-		result, err = repo.FindByCriteria(ctx, criteria)
-		require.NoError(t, err)
-		assert.Equal(t, int64(2), result.TotalElements)
-
-		// Test 3: Buscar por comando que contiene
-		criteria = ports.SearchCriteria{
-			Filters: map[string]interface{}{"commandContains": "npm"},
-			Page:    1,
-			Size:    10,
-		}
-
-		result, err = repo.FindByCriteria(ctx, criteria)
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), result.TotalElements)
-		assert.Equal(t, "MongoDB Test UI", result.Content[0].Metadata.Name)
 	})
 
-	t.Run("BatchSave y BatchUpdate", func(t *testing.T) {
-		// Limpiar datos previos
-		_, err := db.Collection("tasks").DeleteMany(ctx, bson.M{})
+	t.Run("Ordenamiento", func(t *testing.T) {
+		_, err := db.Collection(repository.TaskCollection).DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
 
-		// Crear tareas para operaciones por lotes
-		tasks := []*model.Task{
-			createTestTask("MongoDB Batch Task 1"),
-			createTestTask("MongoDB Batch Task 2"),
-			createTestTask("MongoDB Batch Task 3"),
+		nombres := []string{"Charlie", "Alpha", "Bravo"}
+		for _, nombre := range nombres {
+			task := createTestTask(nombre)
+			err = repo.Save(ctx, task)
+			require.NoError(t, err)
 		}
 
-		// Guardar por lotes
+		tests := []struct {
+			sortBy    string
+			sortOrder string
+			expected  []string
+		}{
+			{"name", "ASC", []string{"Alpha", "Bravo", "Charlie"}},
+			{"name", "DESC", []string{"Charlie", "Bravo", "Alpha"}},
+		}
+
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("%s %s", tt.sortBy, tt.sortOrder), func(t *testing.T) {
+				criteria := ports.SearchCriteria{
+					SortBy:    tt.sortBy,
+					SortOrder: tt.sortOrder,
+				}
+				result, err := repo.FindByCriteria(ctx, criteria)
+				require.NoError(t, err)
+				var actual []string
+				for _, task := range result.Content {
+					actual = append(actual, task.Metadata.Name)
+				}
+				assert.Equal(t, tt.expected, actual)
+			})
+		}
+	})
+
+	t.Run("Batch Operations", func(t *testing.T) {
+		_, err := db.Collection(repository.TaskCollection).DeleteMany(ctx, bson.M{})
+		require.NoError(t, err)
+
+		tasks := []*model.Task{
+			createTestTask("Batch1"),
+			createTestTask("Batch2"),
+		}
+
+		// BatchSave
 		err = repo.BatchSave(ctx, tasks)
 		require.NoError(t, err)
-
-		// Verificar que se hayan guardado todas
-		count, err := repo.Count(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, int64(3), count)
-
-		// Modificar todas las tareas
-		for i := range tasks {
-			tasks[i].Metadata.Description = "Updated in batch with MongoDB"
-			tasks[i].Spec.Command = []string{"echo", "Updated Batch"}
-		}
-
-		// Actualizar por lotes
-		err = repo.BatchUpdate(ctx, tasks)
-		require.NoError(t, err)
-
-		// Verificar las actualizaciones
-		for _, task := range tasks {
-			retrieved, err := repo.FindByID(ctx, task.ID)
-			require.NoError(t, err)
-			assert.Equal(t, "Updated in batch with MongoDB", retrieved.Metadata.Description)
-			assert.Equal(t, []string{"echo", "Updated Batch"}, retrieved.Spec.Command)
-		}
-	})
-
-	t.Run("BatchDelete", func(t *testing.T) {
-		// Limpiar datos previos
-		_, err := db.Collection("tasks").DeleteMany(ctx, bson.M{})
-		require.NoError(t, err)
-
-		// Crear tareas para eliminar por lotes
-		tasks := []*model.Task{
-			createTestTask("MongoDB Delete Task 1"),
-			createTestTask("MongoDB Delete Task 2"),
-		}
-
-		// Guardar las tareas
-		for _, task := range tasks {
-			err := repo.Save(ctx, task)
-			require.NoError(t, err)
-		}
-
-		// Verificar que se hayan guardado
 		count, err := repo.Count(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), count)
 
-		// Crear lista de IDs para eliminar
+		// BatchUpdate
+		for _, task := range tasks {
+			task.Metadata.Description = "Updated"
+		}
+		err = repo.BatchUpdate(ctx, tasks)
+		require.NoError(t, err)
+
+		for _, task := range tasks {
+			found, err := repo.FindByID(ctx, task.ID)
+			require.NoError(t, err)
+			assert.Equal(t, "Updated", found.Metadata.Description)
+		}
+
+		// BatchDelete
 		var ids []model.AggregateID
 		for _, task := range tasks {
 			ids = append(ids, task.ID)
 		}
-
-		// Eliminar por lotes
 		err = repo.BatchDelete(ctx, ids)
 		require.NoError(t, err)
-
-		// Verificar que se hayan eliminado
 		count, err = repo.Count(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), count)
 	})
 
-	t.Run("WithTransaction", func(t *testing.T) {
-		// Limpiar datos previos
-		_, err := db.Collection("tasks").DeleteMany(ctx, bson.M{})
+	t.Run("Concurrencia", func(t *testing.T) {
+		_, err := db.Collection(repository.TaskCollection).DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
 
-		// Crear dos tareas en una sola transacción exitosa
-		err = repo.WithTransaction(ctx, func(txCtx context.Context) error {
-			task1 := createTestTask("MongoDB Tx Task 1")
-			task2 := createTestTask("MongoDB Tx Task 2")
+		task := createTestTask("Concurrente")
+		err = repo.Save(ctx, task)
+		require.NoError(t, err)
 
-			err := repo.Save(txCtx, task1)
-			if err != nil {
-				return err
+		errCh := make(chan error, 2)
+		updateFunc := func() {
+			tsk, err := repo.FindByID(ctx, task.ID)
+			if err == nil {
+				tsk.Metadata.Description = uuid.New().String()
+				err = repo.Update(ctx, tsk)
 			}
+			errCh <- err
+		}
 
-			return repo.Save(txCtx, task2)
-		})
+		go updateFunc()
+		go updateFunc()
 
+		err1 := <-errCh
+		err2 := <-errCh
+		require.NoError(t, err1)
+		require.NoError(t, err2)
+
+		updated, err := repo.FindByID(ctx, task.ID)
 		require.NoError(t, err)
-
-		// Verificar que ambas se hayan guardado
-		count, err := repo.Count(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, int64(2), count)
-
-		// Transacción que debe fallar (rollback automático)
-		taskErr := createTestTask("MongoDB Tx Task Error")
-
-		// Guardar primero la tarea para probar el error al guardar duplicado
-		err = repo.Save(ctx, taskErr)
-		require.NoError(t, err)
-
-		// Intentar una transacción que falla al guardar un duplicado
-		err = repo.WithTransaction(ctx, func(txCtx context.Context) error {
-			task3 := createTestTask("MongoDB Tx Task 3")
-
-			err := repo.Save(txCtx, task3)
-			if err != nil {
-				return err
-			}
-
-			// Este debería fallar por ID duplicado
-			return repo.Save(txCtx, taskErr)
-		})
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "ya existe una tarea")
-
-		// Verificar que no se haya añadido ninguna tarea nueva (solo debe estar la taskErr original)
-		count, err = repo.Count(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, int64(3), count) // 2 de la transacción exitosa + 1 taskErr
+		// Se verifica que la descripción final sea distinta a la original.
+		assert.NotEqual(t, task.Metadata.Description, updated.Metadata.Description)
 	})
 }

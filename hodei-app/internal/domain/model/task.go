@@ -28,7 +28,6 @@ func NewTask(name, description string, command []string, params []ParamDefinitio
 	}
 
 	return &Task{
-		ID: NewAggregateID(),
 		Metadata: NewMetadata(
 			name,
 			description,

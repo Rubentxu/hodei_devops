@@ -1,4 +1,4 @@
-package repository
+package rp_repository
 
 import (
 	"context"
@@ -10,18 +10,18 @@ import (
 
 // ResourcePoolMongoDBRepository implementa la interfaz Repository completa para ResourcePoolDef en MongoDB
 type ResourcePoolMongoDBRepository struct {
-	readRepo  ports.ReadOnlyRepository[*model.ResourcePoolDef, model.AggregateID]
-	writeRepo ports.WriteOnlyRepository[*model.ResourcePoolDef, model.AggregateID]
+	readRepo  ports.ReadOnlyRepository[*model.ResourcePoolDef]
+	writeRepo ports.WriteOnlyRepository[*model.ResourcePoolDef]
 }
 
 // Aseguramos que se implementa la interfaz Repository completa
 var _ ports.Repository[*model.ResourcePoolDef, model.AggregateID] = (*ResourcePoolMongoDBRepository)(nil)
 
 // NewResourcePoolMongoDBRepository crea una nueva instancia del repositorio combinado (lectura+escritura)
-func NewResourcePoolMongoDBRepository(db *mongo.Database, client *mongo.Client) ports.Repository[*model.ResourcePoolDef, model.AggregateID] {
+func NewResourcePoolMongoDBRepository(db *mongo.Database, client *mongo.Client, generator ports.IDGenerator) ports.Repository[*model.ResourcePoolDef, model.AggregateID] {
 	return &ResourcePoolMongoDBRepository{
 		readRepo:  NewResourcePoolMongoDBReadRepository(db),
-		writeRepo: NewResourcePoolMongoDBWriteRepository(db, client),
+		writeRepo: NewResourcePoolMongoDBWriteRepository(db, client, generator),
 	}
 }
 
@@ -55,7 +55,7 @@ func (r *ResourcePoolMongoDBRepository) FindByCriteria(ctx context.Context, crit
 // Métodos de escritura (WriteOnlyRepository)
 
 // Save guarda un nuevo ResourcePoolDef en la base de datos
-func (r *ResourcePoolMongoDBRepository) Save(ctx context.Context, entity *model.ResourcePoolDef) error {
+func (r *ResourcePoolMongoDBRepository) Save(ctx context.Context, entity *model.ResourcePoolDef) (*model.ResourcePoolDef, error) {
 	return r.writeRepo.Save(ctx, entity)
 }
 
@@ -70,7 +70,7 @@ func (r *ResourcePoolMongoDBRepository) Delete(ctx context.Context, id model.Agg
 }
 
 // BatchSave guarda múltiples ResourcePoolDef en la base de datos
-func (r *ResourcePoolMongoDBRepository) BatchSave(ctx context.Context, entities []*model.ResourcePoolDef) error {
+func (r *ResourcePoolMongoDBRepository) BatchSave(ctx context.Context, entities []*model.ResourcePoolDef) ([]*model.ResourcePoolDef, error) {
 	return r.writeRepo.BatchSave(ctx, entities)
 }
 

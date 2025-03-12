@@ -2,7 +2,6 @@ package model
 
 import (
 	"errors"
-	"github.com/google/uuid"
 )
 
 // ResourcePoolReadRepository implementa la interfaz ReadOnlyRepository para ResourcePoolDef
@@ -10,7 +9,7 @@ var _ AggregateRoot = (*ResourcePoolDef)(nil)
 
 // ResourcePoolDef model
 type ResourcePoolDef struct {
-	ID       AggregateID
+	ID       AggregateID        `db:"_id" json:"id"`
 	Metadata Metadata           `db:"metadata" json:"metadata"`
 	Spec     ResourcePoolSpec   `db:"spec" json:"spec"`
 	Status   ResourcePoolStatus `db:"status" json:"status"`
@@ -18,10 +17,6 @@ type ResourcePoolDef struct {
 
 func (r *ResourcePoolDef) GetID() AggregateID {
 	return r.ID
-}
-
-func (id AggregateID) String() string {
-	return uuid.UUID(id).String()
 }
 
 type ResourcePoolSpec struct {

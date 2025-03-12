@@ -1,30 +1,24 @@
-package repository
+package task_repository
 
 import (
 	"context"
-
 	"fmt"
 	"time"
 
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
-	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/writeconcern"
 )
 
-// TaskMongoDBWriteRepository implementa la interfaz WriteOnlyRepository para Task
+// TaskMongoDBWriteRepository implementa operaciones de escritura en MongoDB
 var _ ports.WriteOnlyRepository[*model.Task, model.AggregateID] = (*TaskMongoDBWriteRepository)(nil)
 
-// TaskMongoDBWriteRepository implementa operaciones de escritura en MongoDB
 type TaskMongoDBWriteRepository struct {
 	collection *mongo.Collection
 	client     *mongo.Client
 }
 
-// NewTaskMongoDBWriteRepository crea una instancia del repositorio de escritura
 func NewTaskMongoDBWriteRepository(db *mongo.Database, client *mongo.Client) ports.WriteOnlyRepository[*model.Task, model.AggregateID] {
 	return &TaskMongoDBWriteRepository{
 		collection: db.Collection("tasks"),
@@ -32,19 +26,19 @@ func NewTaskMongoDBWriteRepository(db *mongo.Database, client *mongo.Client) por
 	}
 }
 
-// modelToDocument convierte un modelo de dominio a un documento MongoDB
+// modelToDocument convierte un modelo de dominio a un documento MongoDB.
+// Se asegura que se utilicen los campos de creación y actualización.
 func (r *TaskMongoDBWriteRepository) modelToDocument(entity *model.Task, ctx context.Context) TaskDocument {
 	owner := r.getOwnerFromContext(ctx)
 	tenantID := r.getTenantIDFromContext(ctx)
 	now := time.Now().UTC()
 
-	// Garantizar que las fechas de creación/actualización existan
 	if entity.Metadata.CreatedAt.IsZero() {
 		entity.Metadata.CreatedAt = now
 	}
 	entity.Metadata.UpdatedAt = now
 
-	// Convertir parámetros del modelo a documento
+	// Se construyen los parámetros del documento
 	params := make([]ParamDefinitionDB, len(entity.Spec.Params))
 	for i, param := range entity.Spec.Params {
 		options := make([]ParamOptionDB, len(param.Options))
@@ -103,7 +97,7 @@ func (r *TaskMongoDBWriteRepository) modelToDocument(entity *model.Task, ctx con
 			UpdatedAt:   entity.Metadata.UpdatedAt,
 		},
 		Spec: TaskSpecDB{
-			WorkerID:    entity.Spec.WorkerDefinitionID.String(),
+			WorkerID:    string(entity.Spec.WorkerDefinitionID),
 			Command:     entity.Spec.Command,
 			Params:      params,
 			ParamValues: entity.Spec.ParamValues,
@@ -115,49 +109,40 @@ func (r *TaskMongoDBWriteRepository) modelToDocument(entity *model.Task, ctx con
 	}
 }
 
-// Save guarda una nueva Task en la base de datos
-func (r *TaskMongoDBWriteRepository) Save(ctx context.Context, entity *model.Task) error {
-	// Si no tiene ID, generar uno nuevo
-	if entity.ID == model.AggregateID(uuid.Nil) {
-		entity.ID = model.NewAggregateID()
-	}
-
-	// Validar que la tarea no existe ya
+// Save guarda una nueva Task en la base de datos y devuelve la entidad con el ID asignado.
+// Se asigna un ID si la entidad no lo posee.
+func (r *TaskMongoDBWriteRepository) Save(ctx context.Context, entity *model.Task) (*model.Task, error) {
+	// Verificar que la tarea no exista usando el campo _id
 	exists, err := r.exists(ctx, entity.ID)
 	if err != nil {
-		return fmt.Errorf("error al verificar existencia: %w", err)
+		return nil, fmt.Errorf("error al verificar existencia: %w", err)
 	}
 	if exists {
-		return fmt.Errorf("ya existe una tarea con el ID %s", entity.ID.String())
+		return nil, fmt.Errorf("ya existe una tarea con el ID %s", entity.ID.String())
 	}
 
-	// Convertir modelo a documento
 	doc := r.modelToDocument(entity, ctx)
 
-	// Insertar en la base de datos
 	_, err = r.collection.InsertOne(ctx, doc)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
-			return fmt.Errorf("ya existe una tarea con el ID %s", entity.ID.String())
+			return nil, fmt.Errorf("ya existe una tarea con el ID %s", entity.ID.String())
 		}
-		return fmt.Errorf("error al guardar tarea: %w", err)
+		return nil, fmt.Errorf("error al guardar tarea: %w", err)
 	}
 
-	return nil
+	return entity, nil
 }
 
-// Update actualiza una Task existente en la base de datos
+// Update actualiza una Task existente en la base de datos.
 func (r *TaskMongoDBWriteRepository) Update(ctx context.Context, entity *model.Task) error {
-	// Validar que existe un ID
-	if entity.ID == model.AggregateID(uuid.Nil) {
+	if entity.ID == model.AggregateID("") {
 		return fmt.Errorf("no se puede actualizar una entidad sin ID")
 	}
 
-	// Convertir modelo a documento
 	doc := r.modelToDocument(entity, ctx)
 
-	// Actualizar en la base de datos
-	result, err := r.collection.ReplaceOne(ctx, bson.M{"id": entity.ID.String()}, doc)
+	result, err := r.collection.ReplaceOne(ctx, bson.M{"_id": entity.ID.String()}, doc)
 	if err != nil {
 		return fmt.Errorf("error al actualizar tarea: %w", err)
 	}
@@ -169,9 +154,9 @@ func (r *TaskMongoDBWriteRepository) Update(ctx context.Context, entity *model.T
 	return nil
 }
 
-// Delete elimina una Task por su ID
+// Delete elimina una Task por su ID.
 func (r *TaskMongoDBWriteRepository) Delete(ctx context.Context, id model.AggregateID) error {
-	result, err := r.collection.DeleteOne(ctx, bson.M{"id": id.String()})
+	result, err := r.collection.DeleteOne(ctx, bson.M{"_id": id.String()})
 	if err != nil {
 		return fmt.Errorf("error al eliminar tarea: %w", err)
 	}
@@ -183,111 +168,93 @@ func (r *TaskMongoDBWriteRepository) Delete(ctx context.Context, id model.Aggreg
 	return nil
 }
 
-// BatchSave guarda múltiples Tasks en la base de datos
-func (r *TaskMongoDBWriteRepository) BatchSave(ctx context.Context, entities []*model.Task) error {
+// BatchSave guarda múltiples Tasks en la base de datos y devuelve las entidades con sus IDs asignados.
+func (r *TaskMongoDBWriteRepository) BatchSave(ctx context.Context, entities []*model.Task) ([]*model.Task, error) {
 	if len(entities) == 0 {
-		return nil // No hay entidades para guardar
+		return nil, nil
 	}
 
-	return r.WithTransaction(ctx, func(txCtx context.Context) error {
-		for _, entity := range entities {
-			if err := r.Save(txCtx, entity); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	docs := make([]interface{}, len(entities))
+	for i, entity := range entities {
+		docs[i] = r.modelToDocument(entity, ctx)
+	}
+
+	_, err := r.collection.InsertMany(ctx, docs)
+	if err != nil {
+		return nil, fmt.Errorf("batch insert error: %w", err)
+	}
+
+	return entities, nil
 }
 
-// BatchUpdate actualiza múltiples Tasks en la base de datos
+// BatchUpdate actualiza múltiples Tasks en la base de datos.
 func (r *TaskMongoDBWriteRepository) BatchUpdate(ctx context.Context, entities []*model.Task) error {
 	if len(entities) == 0 {
-		return nil // No hay entidades para actualizar
-	}
-
-	return r.WithTransaction(ctx, func(txCtx context.Context) error {
-		for _, entity := range entities {
-			if err := r.Update(txCtx, entity); err != nil {
-				return err
-			}
-		}
 		return nil
-	})
-}
-
-// BatchDelete elimina múltiples Tasks por sus IDs
-func (r *TaskMongoDBWriteRepository) BatchDelete(ctx context.Context, ids []model.AggregateID) error {
-	if len(ids) == 0 {
-		return nil // No hay IDs para eliminar
 	}
 
-	return r.WithTransaction(ctx, func(txCtx context.Context) error {
-		for _, id := range ids {
-			// Verificamos si existe antes de eliminar para no devolver error si no existe
-			exists, err := r.exists(txCtx, id)
-			if err != nil {
-				return fmt.Errorf("error al verificar existencia del ID %s: %w", id.String(), err)
-			}
-
-			if exists {
-				if err := r.Delete(txCtx, id); err != nil {
-					return err
-				}
-			} else {
-				// Log warning pero continuamos con la eliminación de otros IDs
-				fmt.Printf("Warning: tarea con ID %s no encontrada, continuando con otros IDs\n", id.String())
-			}
+	var models []mongo.WriteModel
+	for _, entity := range entities {
+		if entity.ID == model.AggregateID("") {
+			return fmt.Errorf("update requiere un ID válido")
 		}
-		return nil
-	})
-}
-
-// WithTransaction ejecuta una función dentro de una transacción
-func (r *TaskMongoDBWriteRepository) WithTransaction(ctx context.Context, fn func(txCtx context.Context) error) error {
-	// Configurar opciones de transacción
-	wc := writeconcern.New(writeconcern.WMajority())
-	txnOptions := options.Transaction().SetWriteConcern(wc)
-
-	// Iniciar la sesión
-	session, err := r.client.StartSession()
-	if err != nil {
-		return fmt.Errorf("error al iniciar sesión de transacción: %w", err)
+		doc := r.modelToDocument(entity, ctx)
+		updateModel := mongo.NewUpdateOneModel().
+			SetFilter(bson.M{"_id": entity.ID.String()}).
+			SetUpdate(bson.M{"$set": doc})
+		models = append(models, updateModel)
 	}
-	defer session.EndSession(ctx)
 
-	// Ejecutar la transacción
-	_, err = session.WithTransaction(ctx, func(sessCtx mongo.SessionContext) (interface{}, error) {
-		return nil, fn(sessCtx)
-	}, txnOptions)
-
+	_, err := r.collection.BulkWrite(ctx, models)
 	if err != nil {
-		return fmt.Errorf("error en la transacción: %w", err)
+		return fmt.Errorf("bulk update error: %w", err)
 	}
 
 	return nil
 }
 
-// exists verifica si una Task existe por su ID
+// BatchDelete elimina múltiples Tasks por sus IDs.
+func (r *TaskMongoDBWriteRepository) BatchDelete(ctx context.Context, ids []model.AggregateID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	idStrings := make([]string, len(ids))
+	for i, id := range ids {
+		idStrings[i] = id.String()
+	}
+
+	result, err := r.collection.DeleteMany(ctx, bson.M{"_id": bson.M{"$in": idStrings}})
+	if err != nil {
+		return fmt.Errorf("batch delete error: %w", err)
+	}
+
+	if result.DeletedCount != int64(len(ids)) {
+		return fmt.Errorf("algunas tareas no fueron encontradas")
+	}
+
+	return nil
+}
+
+// exists verifica si una Task existe por su ID.
 func (r *TaskMongoDBWriteRepository) exists(ctx context.Context, id model.AggregateID) (bool, error) {
-	count, err := r.collection.CountDocuments(ctx, bson.M{"id": id.String()})
+	count, err := r.collection.CountDocuments(ctx, bson.M{"_id": id.String()})
 	if err != nil {
 		return false, fmt.Errorf("error al verificar existencia: %w", err)
 	}
 	return count > 0, nil
 }
 
-// getOwnerFromContext obtiene el propietario del recurso del contexto, o usa valor por defecto
 func (r *TaskMongoDBWriteRepository) getOwnerFromContext(ctx context.Context) string {
 	if owner, ok := ctx.Value("owner").(string); ok && owner != "" {
 		return owner
 	}
-	return "system" // Valor por defecto
+	return "system"
 }
 
-// getTenantIDFromContext obtiene el ID de inquilino del contexto, o usa valor por defecto
 func (r *TaskMongoDBWriteRepository) getTenantIDFromContext(ctx context.Context) string {
 	if tenantID, ok := ctx.Value("tenantID").(string); ok && tenantID != "" {
 		return tenantID
 	}
-	return "default" // Valor por defecto
+	return "default"
 }

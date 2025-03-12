@@ -1,4 +1,4 @@
-package repository
+package task_repository
 
 import (
 	"context"
@@ -82,9 +82,4 @@ func (r *TaskMongoDBRepository) BatchUpdate(ctx context.Context, entities []*mod
 // BatchDelete elimina múltiples Tasks por sus IDs
 func (r *TaskMongoDBRepository) BatchDelete(ctx context.Context, ids []model.AggregateID) error {
 	return r.writer.BatchDelete(ctx, ids)
-}
-
-// WithTransaction ejecuta una función dentro de una transacción
-func (r *TaskMongoDBRepository) WithTransaction(ctx context.Context, fn func(txCtx context.Context) error) error {
-	return r.writer.WithTransaction(ctx, fn)
 }

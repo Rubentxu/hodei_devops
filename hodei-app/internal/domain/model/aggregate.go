@@ -1,18 +1,17 @@
 package model
 
 import (
-	"github.com/google/uuid"
 	"time"
 )
 
-type AggregateID uuid.UUID
-
-func NewAggregateID() AggregateID {
-	return AggregateID(uuid.New())
-}
+type AggregateID string
 
 type AggregateRoot interface {
 	GetID() AggregateID
+}
+
+func (a AggregateID) String() string {
+	return string(a)
 }
 
 type Metadata struct {

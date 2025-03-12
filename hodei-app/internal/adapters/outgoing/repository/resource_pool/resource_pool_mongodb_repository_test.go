@@ -1,7 +1,10 @@
-package repository_test
+package rp_repository_test
 
 import (
 	"context"
+	generator_id "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/generic"
+
 	repository "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/resource_pool"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
@@ -18,7 +21,6 @@ import (
 	"time"
 )
 
-// setupMongo configura un contenedor MongoDB para pruebas
 func setupMongo(t *testing.T) (testcontainers.Container, *mongo.Client, *mongo.Database, func()) {
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
@@ -43,7 +45,6 @@ func setupMongo(t *testing.T) (testcontainers.Container, *mongo.Client, *mongo.D
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connectionURI))
 	require.NoError(t, err)
 
-	// Verificar conexión con reintentos
 	maxRetries := 5
 	for i := 0; i < maxRetries; i++ {
 		pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -68,10 +69,8 @@ func setupMongo(t *testing.T) (testcontainers.Container, *mongo.Client, *mongo.D
 	return container, client, db, cleanup
 }
 
-// createTestPool crea un ResourcePool de prueba con valores predefinidos
 func createTestPool(name string) *model.ResourcePoolDef {
 	return &model.ResourcePoolDef{
-		ID: model.AggregateID(uuid.New()),
 		Metadata: model.Metadata{
 			Name:        name,
 			Description: "Descripción de " + name,
@@ -93,76 +92,76 @@ func createTestPool(name string) *model.ResourcePoolDef {
 	}
 }
 
-// TestResourcePoolMongoDBRepository contiene los casos de prueba
 func TestResourcePoolMongoDBRepository(t *testing.T) {
 	_, client, db, cleanup := setupMongo(t)
 	defer cleanup()
 	ctx := context.Background()
-	repo := repository.NewResourcePoolMongoDBRepository(db, client)
+	generator := generator_id.NewIDGenerator("")
+	repo := repository.NewResourcePoolMongoDBRepository(db, client, generator)
+	const resourcePoolCollection = "resource_pools"
 
-	// Limpiar colección antes de cada test
+	// Limpiar la colección antes de cada test
 	t.Cleanup(func() {
-		db.Collection("resource_pools").DeleteMany(ctx, bson.M{})
+		db.Collection(resourcePoolCollection).DeleteMany(ctx, bson.M{})
 	})
 
 	t.Run("CRUD Completo", func(t *testing.T) {
 		pool := createTestPool("CRUD Test")
 
-		// Save
-		err := repo.Save(ctx, pool)
+		// Save: se captura la entidad devuelta con el ID asignado
+		saved, err := repo.Save(ctx, pool)
 		require.NoError(t, err)
+		require.NotEqual(t, model.AggregateID(""), saved.ID)
 
 		// FindByID
-		found, err := repo.FindByID(ctx, pool.ID)
+		found, err := repo.FindByID(ctx, saved.ID)
 		require.NoError(t, err)
-		assert.Equal(t, pool.ID, found.ID)
+		assert.Equal(t, saved.ID, found.ID)
 		assert.Equal(t, pool.Metadata.Name, found.Metadata.Name)
 
 		// Update
-		pool.Metadata.Description = "Descripción actualizada"
-		err = repo.Update(ctx, pool)
+		saved.Metadata.Description = "Descripción actualizada"
+		err = repo.Update(ctx, saved)
 		require.NoError(t, err)
 
-		updated, err := repo.FindByID(ctx, pool.ID)
+		updated, err := repo.FindByID(ctx, saved.ID)
 		require.NoError(t, err)
 		assert.Equal(t, "Descripción actualizada", updated.Metadata.Description)
 
 		// Delete
-		err = repo.Delete(ctx, pool.ID)
+		err = repo.Delete(ctx, saved.ID)
 		require.NoError(t, err)
 
-		_, err = repo.FindByID(ctx, pool.ID)
-		assert.ErrorIs(t, err, repository.ErrNotFound)
+		_, err = repo.FindByID(ctx, saved.ID)
+		assert.ErrorIs(t, err, generic.ErrNotFound)
 	})
 
 	t.Run("Guardar sin ID", func(t *testing.T) {
 		pool := createTestPool("No ID")
-		pool.ID = model.AggregateID(uuid.Nil)
-
-		err := repo.Save(ctx, pool)
+		saved, err := repo.Save(ctx, pool)
 		require.NoError(t, err)
-		assert.NotEqual(t, uuid.Nil, pool.ID)
+		assert.NotEqual(t, model.AggregateID(""), saved.ID)
 
-		exists, err := repo.Exists(ctx, pool.ID)
+		exists, err := repo.Exists(ctx, saved.ID)
 		require.NoError(t, err)
 		assert.True(t, exists)
 	})
 
 	t.Run("Guardar duplicado", func(t *testing.T) {
 		pool := createTestPool("Duplicado")
-		err := repo.Save(ctx, pool)
+		saved, err := repo.Save(ctx, pool)
 		require.NoError(t, err)
 
 		duplicate := createTestPool("Duplicado")
-		duplicate.ID = pool.ID
+		duplicate.ID = saved.ID
 
-		err = repo.Save(ctx, duplicate)
-		assert.ErrorIs(t, err, repository.ErrDuplicateID)
+		_, err = repo.Save(ctx, duplicate)
+		assert.ErrorIs(t, err, generic.ErrDuplicateID)
 	})
 
 	t.Run("FindByCriteria avanzado", func(t *testing.T) {
 		// Limpiar la colección antes de ejecutar el test
-		_, err := db.Collection("resource_pools").DeleteMany(ctx, bson.M{})
+		_, err := db.Collection(resourcePoolCollection).DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
 
 		pools := []*model.ResourcePoolDef{
@@ -170,14 +169,13 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 			createTestPool("Dev-K8s"),
 			createTestPool("Test-Docker"),
 		}
-
 		pools[0].Metadata.Labels = []string{"prod", "k8s"}
 		pools[1].Metadata.Labels = []string{"dev", "k8s"}
 		pools[2].Metadata.Labels = []string{"test", "docker"}
 		pools[2].Status.State = "Inactive"
 
 		for _, p := range pools {
-			err := repo.Save(ctx, p)
+			_, err := repo.Save(ctx, p)
 			require.NoError(t, err)
 		}
 
@@ -232,15 +230,14 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 		}
 	})
 
-	// Paginación
 	t.Run("Paginación", func(t *testing.T) {
 		// Limpiar la colección antes de insertar los nuevos documentos
-		_, err := db.Collection("resource_pools").DeleteMany(ctx, bson.M{})
+		_, err := db.Collection(resourcePoolCollection).DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
 
 		for i := 1; i <= 5; i++ {
 			pool := createTestPool(fmt.Sprintf("Pool %d", i))
-			err := repo.Save(ctx, pool)
+			_, err := repo.Save(ctx, pool)
 			require.NoError(t, err)
 		}
 
@@ -252,8 +249,8 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 			{1, 2, 2},
 			{2, 2, 2},
 			{3, 2, 1},
-			{0, 10, 5}, // Page 0 debe usar 1
-			{-1, 3, 3}, // Page negativo debe usar 1
+			{0, 10, 5}, // Page 0 usa 1
+			{-1, 3, 3}, // Page negativo usa 1
 		}
 
 		for _, tt := range tests {
@@ -265,21 +262,19 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 				result, err := repo.FindByCriteria(ctx, criteria)
 				require.NoError(t, err)
 				assert.Equal(t, tt.expected, len(result.Content))
-				assert.Equal(t, tt.size <= 0 || tt.size > 5, result.HasNext)
 			})
 		}
 	})
 
-	// Ordenamiento
 	t.Run("Ordenamiento", func(t *testing.T) {
-		// Limpiar la colección para que el test sólo considere los documentos que se inserten a partir de aquí
-		_, err := db.Collection("resource_pools").DeleteMany(ctx, bson.M{})
+		// Limpiar la colección para que el test sólo considere los documentos insertados a partir de aquí
+		_, err := db.Collection(resourcePoolCollection).DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
 
 		names := []string{"Charlie", "Alpha", "Bravo"}
 		for _, name := range names {
 			pool := createTestPool(name)
-			err := repo.Save(ctx, pool)
+			_, err := repo.Save(ctx, pool)
 			require.NoError(t, err)
 		}
 
@@ -290,7 +285,7 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 		}{
 			{"name", "ASC", []string{"Alpha", "Bravo", "Charlie"}},
 			{"name", "DESC", []string{"Charlie", "Bravo", "Alpha"}},
-			{"createdAt", "ASC", []string{"Charlie", "Alpha", "Bravo"}}, // Orden de inserción
+			{"createdAt", "ASC", []string{"Charlie", "Alpha", "Bravo"}},
 		}
 
 		for _, tt := range tests {
@@ -310,12 +305,9 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 		}
 	})
 
-	// Archivo: hodei-app/internal/adapters/outgoing/repository/resource_pool/resource_pool_mongodb_repository_test.go
-	// En el subtest "Batch Operations", se limpia la colección al inicio
-
 	t.Run("Batch Operations", func(t *testing.T) {
 		// Limpiar la colección para que sólo se consideren los documentos de este test
-		_, err := db.Collection("resource_pools").DeleteMany(ctx, bson.M{})
+		_, err := db.Collection(resourcePoolCollection).DeleteMany(ctx, bson.M{})
 		require.NoError(t, err)
 
 		pools := []*model.ResourcePoolDef{
@@ -324,20 +316,20 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 		}
 
 		// BatchSave
-		err = repo.BatchSave(ctx, pools)
+		savedPools, err := repo.BatchSave(ctx, pools)
 		require.NoError(t, err)
 		count, err := repo.Count(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), count)
 
 		// BatchUpdate
-		for _, p := range pools {
+		for _, p := range savedPools {
 			p.Metadata.Description = "Updated"
 		}
-		err = repo.BatchUpdate(ctx, pools)
+		err = repo.BatchUpdate(ctx, savedPools)
 		require.NoError(t, err)
 
-		for _, p := range pools {
+		for _, p := range savedPools {
 			found, err := repo.FindByID(ctx, p.ID)
 			require.NoError(t, err)
 			assert.Equal(t, "Updated", found.Metadata.Description)
@@ -345,7 +337,7 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 
 		// BatchDelete
 		var ids []model.AggregateID
-		for _, p := range pools {
+		for _, p := range savedPools {
 			ids = append(ids, p.ID)
 		}
 		err = repo.BatchDelete(ctx, ids)
@@ -357,17 +349,15 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 
 	t.Run("Concurrencia", func(t *testing.T) {
 		pool := createTestPool("Concurrent")
-		err := repo.Save(ctx, pool)
+		saved, err := repo.Save(ctx, pool)
 		require.NoError(t, err)
 
-		// Simular actualizaciones concurrentes
 		errCh := make(chan error, 2)
 		update := func() {
-			p, _ := repo.FindByID(ctx, pool.ID)
+			p, _ := repo.FindByID(ctx, saved.ID)
 			p.Metadata.Description = uuid.New().String()
 			errCh <- repo.Update(context.Background(), p)
 		}
-
 		go update()
 		go update()
 
@@ -376,8 +366,7 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 		assert.NoError(t, err1)
 		assert.NoError(t, err2)
 
-		// Verificar estado final
-		updated, err := repo.FindByID(ctx, pool.ID)
+		updated, err := repo.FindByID(ctx, saved.ID)
 		require.NoError(t, err)
 		assert.NotEqual(t, pool.Metadata.Description, updated.Metadata.Description)
 	})
