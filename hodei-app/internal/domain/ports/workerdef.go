@@ -41,3 +41,22 @@ type TaskContext struct {
 	Ctx        context.Context
 	Client     ResourceIntanceClient
 }
+
+type WorkerDefinitionService interface {
+	// Operaciones CRUD básicas
+	CreateWorkerDefinition(ctx context.Context, workerDef *model.WorkerDefinition) (*model.WorkerDefinition, error)
+	GetWorkerDefinition(ctx context.Context, id model.AggregateID) (*model.WorkerDefinition, error)
+	UpdateWorkerDefinition(ctx context.Context, updates *model.WorkerDefinition) error
+	DeleteWorkerDefinition(ctx context.Context, id model.AggregateID) error
+
+	// Búsqueda y listado
+	FindWorkerDefinitions(ctx context.Context, criterio SearchCriteria) (SearchResult[*model.WorkerDefinition], error)
+	FindWorkerDefinitionByName(ctx context.Context, name string) (*model.WorkerDefinition, error)
+	// Operaciones específicas del dominio
+	UpdateWorkerStatus(ctx context.Context, id model.AggregateID, estado model.HealthStatus) error
+	AssignTemplate(ctx context.Context, workerID model.AggregateID, templateID string) error
+
+	// Operaciones por lotes
+	CreateWorkersBatch(ctx context.Context, workerDefs []*model.WorkerDefinition) ([]*model.WorkerDefinition, error)
+	DeleteWorkersBatch(ctx context.Context, ids []model.AggregateID) error
+}

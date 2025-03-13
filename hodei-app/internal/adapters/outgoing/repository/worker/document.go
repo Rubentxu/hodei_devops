@@ -225,14 +225,22 @@ func (c *WorkerDocumentConverter) ToDocument(entity *model.WorkerDefinition, ctx
 
 func healthStatusToString(status model.HealthStatus) string {
 	switch status {
+	case model.UNKNOWN:
+		return "unknown"
+	case model.RUNNING:
+		return "running"
 	case model.HEALTHY:
 		return "healthy"
-	case model.PENDING:
-		return "pending"
-	case model.STOPPED:
-		return "stopped"
 	case model.ERROR:
 		return "error"
+	case model.STOPPED:
+		return "stopped"
+	case model.FINISHED:
+		return "finished"
+	case model.PENDING:
+		return "pending"
+	case model.DONE:
+		return "done"
 	default:
 		return "unknown"
 	}
@@ -240,14 +248,22 @@ func healthStatusToString(status model.HealthStatus) string {
 
 func parseHealthStatus(status string) model.HealthStatus {
 	switch status {
+	case "unknown":
+		return model.UNKNOWN
+	case "running":
+		return model.RUNNING
 	case "healthy":
 		return model.HEALTHY
-	case "pending":
-		return model.PENDING
-	case "stopped":
-		return model.STOPPED
 	case "error":
 		return model.ERROR
+	case "stopped":
+		return model.STOPPED
+	case "finished":
+		return model.FINISHED
+	case "pending":
+		return model.PENDING
+	case "done":
+		return model.DONE
 	default:
 		return model.UNKNOWN
 	}

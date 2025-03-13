@@ -43,7 +43,7 @@ func (c *TaskExecutionDocumentConverter) ToModel(doc TaskExecutionDocument) (*mo
 		Task:      doc.Task,
 		Status:    doc.Status,
 		InputArgs: doc.InputArgs,
-		WorkerDef: model.WorkerDefinition{
+		WorkerDef: &model.WorkerDefinition{
 			ID: model.AggregateID(doc.WorkerDef),
 		},
 	}, nil

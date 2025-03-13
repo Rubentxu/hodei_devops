@@ -6,12 +6,12 @@ import (
 )
 
 type TaskExecution struct {
-	ID        AggregateID      `json:"id"`
-	Metadata  Metadata         `json:"metadata"` // Metadatos de la ejecución
-	Task      Task             `json:"task"`
-	Status    ExecutionStatus  `json:"status"`     // Estado de ejecución
-	InputArgs []string         `json:"input_args"` // Argumentos de entrada
-	WorkerDef WorkerDefinition `json:"worker_def"` // Worker definition
+	ID        AggregateID       `json:"id"`
+	Metadata  Metadata          `json:"metadata"` // Metadatos de la ejecución
+	Task      Task              `json:"task"`
+	Status    ExecutionStatus   `json:"status"`     // Estado de ejecución
+	InputArgs []string          `json:"input_args"` // Argumentos de entrada
+	WorkerDef *WorkerDefinition `json:"worker_def"` // Worker definition
 }
 
 func (t TaskExecution) GetID() AggregateID {

@@ -38,10 +38,10 @@ type TaskMeta struct {
 
 // TaskSpecDB es la estructura de la especificación en MongoDB
 type TaskSpecDB struct {
-	WorkerID    string                 `bson:"worker_id"`
-	Command     []string               `bson:"command"`
-	Params      []ParamDefinitionDB    `bson:"params"`
-	ParamValues map[string]interface{} `bson:"param_values,omitempty"`
+	WorkerDefName string                 `bson:"worker_id"`
+	Command       []string               `bson:"command"`
+	Params        []ParamDefinitionDB    `bson:"params"`
+	ParamValues   map[string]interface{} `bson:"param_values,omitempty"`
 }
 
 // ParamDefinitionDB es la estructura de la definición de parámetros en MongoDB
@@ -170,10 +170,10 @@ func (c *TaskDocumentConverter) ToModel(doc TaskDocument) (*model.Task, error) {
 		ID:       model.AggregateID(id),
 		Metadata: metadata,
 		Spec: model.TaskSpec{
-			WorkerDefinitionID: model.AggregateID(doc.Spec.WorkerID),
-			Command:            doc.Spec.Command,
-			Params:             params,
-			ParamValues:        doc.Spec.ParamValues,
+			WorkerDefinitionName: doc.Spec.WorkerDefName,
+			Command:              doc.Spec.Command,
+			Params:               params,
+			ParamValues:          doc.Spec.ParamValues,
 		},
 	}
 
@@ -196,10 +196,10 @@ func (c *TaskDocumentConverter) ToDocument(entity *model.Task, ctx context.Conte
 			UpdatedAt:   entity.Metadata.UpdatedAt,
 		},
 		Spec: TaskSpecDB{
-			WorkerID:    entity.Spec.WorkerDefinitionID.String(),
-			Command:     entity.Spec.Command,
-			Params:      convertParamsToDocuments(entity.Spec.Params),
-			ParamValues: entity.Spec.ParamValues,
+			WorkerDefName: entity.Spec.WorkerDefinitionName,
+			Command:       entity.Spec.Command,
+			Params:        convertParamsToDocuments(entity.Spec.Params),
+			ParamValues:   entity.Spec.ParamValues,
 		},
 		CreatedAt: entity.Metadata.CreatedAt,
 		UpdatedAt: entity.Metadata.UpdatedAt,

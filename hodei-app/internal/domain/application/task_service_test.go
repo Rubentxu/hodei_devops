@@ -62,8 +62,8 @@ func createTestTask() *model.Task {
 			Annotations: map[string]string{"env": "test"},
 		},
 		Spec: model.TaskSpec{
-			WorkerDefinitionID: "worker-1",
-			Command:            []string{"echo", "hello"},
+			WorkerDefinitionName: "worker-1",
+			Command:              []string{"echo", "hello"},
 			Params: []model.ParamDefinition{
 				{
 					Key:         "param1",

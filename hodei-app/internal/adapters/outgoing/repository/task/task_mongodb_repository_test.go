@@ -99,11 +99,11 @@ func createTestTask(name string) *model.Task {
 			UpdatedAt:   time.Now().UTC(),
 		},
 		Spec: model.TaskSpec{
-			// Se asigna un WorkerDefinitionID ficticio y se provee el comando y parámetros mínimos.
-			WorkerDefinitionID: model.AggregateID(""),
-			Command:            []string{"echo", name},
-			Params:             []model.ParamDefinition{},
-			ParamValues:        make(map[string]interface{}),
+			// Se asigna un WorkerDefinitionName ficticio y se provee el comando y parámetros mínimos.
+			WorkerDefinitionName: "defaultWorkerDefinition",
+			Command:              []string{"echo", name},
+			Params:               []model.ParamDefinition{},
+			ParamValues:          make(map[string]interface{}),
 		},
 	}
 }

@@ -15,7 +15,7 @@ func (a AggregateID) String() string {
 }
 
 type Metadata struct {
-	Name        string            `json:"name"`
+	Name        string            `json:"name" validate:"required"`
 	Description string            `json:"description,omitempty"`
 	Labels      []string          `json:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`

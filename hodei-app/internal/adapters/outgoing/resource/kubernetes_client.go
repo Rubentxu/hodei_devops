@@ -20,7 +20,7 @@ type KubernetesResoucesPoolConfig struct {
 	Namespace   string            `json:"namespace"`
 	KubeConfig  string            `json:"kubeConfig"`  // Ruta a kubeconfig si estás fuera del cluster
 	InCluster   bool              `json:"inCluster"`   // Indica si ejecuta dentro del cluster
-	Labels      []string          `json:"labels"`      // Labels por defecto en Pods
+	Labels      map[string]string `json:"labels"`      // Labels por defecto en Pods
 	Annotations map[string]string `json:"annotations"` // Anotaciones disponibles
 
 }

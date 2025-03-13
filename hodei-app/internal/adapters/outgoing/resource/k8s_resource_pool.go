@@ -52,7 +52,7 @@ func (k *KubernetesResourcePool) monitorTask(ctx context.Context, taskExecution 
 	podsClient := k8sClient.CoreV1().Pods(namespace) // Usar el namespace
 
 	watcher, err := podsClient.Watch(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=%s", taskExecution.Task.Spec.WorkerDefinitionID), //Usar el workerID que es el nombre
+		LabelSelector: fmt.Sprintf("app=%s", taskExecution.Task.Spec.WorkerDefinitionName), //Usar el workerID que es el nombre
 	})
 	if err != nil {
 		fmt.Printf("error watching task: %v\n", err)

@@ -5,13 +5,9 @@ import (
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/worker"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
-	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/service/resource"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/service/scheduler"
-	"github.com/pocketbase/pocketbase/core"
-
 	"fmt"
 	"log"
 	"sync"
@@ -25,14 +21,24 @@ import (
 type Manager struct {
 	mu               sync.Mutex
 	pendingTasksChan chan ports.TaskContext
-	taskDb           ports.Store[model.Task]
 	scheduler        ports.Scheduler
 	worker           *worker.WorkerInstanceManager
-	poolManager      *resource.ResourcePoolManager
+	poolService      *ports.ResourcePoolService
+	taskService      *ports.TaskService
+	workerDefService *ports.WorkerDefinitionService
+	generator        ports.IDGenerator
 }
 
 // New creates a new Manager instance.
-func New(schedulerType string, dbType string, worker *worker.WorkerInstanceManager, sizePendingsTask int, app core.App, poolManager *resource.ResourcePoolManager) (*Manager, error) {
+func New(
+	schedulerType string,
+	worker *worker.WorkerInstanceManager,
+	poolService *ports.ResourcePoolService,
+	taskService *ports.TaskService,
+	workDefService *ports.WorkerDefinitionService,
+	sizePendingsTask int,
+	generator ports.IDGenerator,
+) (*Manager, error) {
 	// Crear Scheduler
 	var currentSheduler ports.Scheduler
 	switch schedulerType {
@@ -44,41 +50,17 @@ func New(schedulerType string, dbType string, worker *worker.WorkerInstanceManag
 		currentSheduler = scheduler.NewEpvm() // Asegúrate de que NewEpvm exista
 	}
 
-	// Crear Stores
-	var taskDb ports.Store[model.Task]
-	var err error // Declarar err aquí para que esté disponible en todo el bloque
-
-	switch dbType {
-	case "memory":
-		taskDb = repository.NewCacheStore[model.Task]()
-
-	case "persistent":
-		taskDb, err = repository.NewPocketBaseStore[model.Task](app, "tasks")
-		if err != nil {
-			return nil, fmt.Errorf("unable to create task store: %w", err)
-		}
-
-	default:
-		return nil, fmt.Errorf("invalid dbType: %currentSheduler", dbType)
-	}
-
 	m := Manager{
 		pendingTasksChan: make(chan ports.TaskContext, sizePendingsTask), // Buffer para 1000 tareas
-		taskDb:           taskDb,
 		scheduler:        currentSheduler,
 		worker:           worker, // Guardar la instancia del WorkerInstanceManager
-		poolManager:      poolManager,
+		poolService:      poolService,
+		taskService:      taskService,
+		workerDefService: workDefService,
+		generator:        generator,
 	}
 
 	return &m, nil
-}
-
-// GetResourcePool obtiene un ResourcePool por su ID utilizando el ResourcePoolManager
-func (m *Manager) GetResourcePool(id string) *ports.ResourcePool {
-	if pool, exists := m.poolManager.GetActivePool(id); exists {
-		return pool
-	}
-	return nil
 }
 
 // AddTask añade una nueva Execution a la cola de pendientes.
@@ -90,10 +72,13 @@ func (m *Manager) AddTask(taskDef model.Task, ctx context.Context) (ports.TaskCo
 	stateChan := make(chan model.TaskState, 10) // Canal para el estado
 	errChan := make(chan error, 1)
 
-	// TODO: Recuperar WorkerDefinition de la base de datos a partir de taskDef.WorkerDefinitionID
+	workerDef, err := (*m.workerDefService).FindWorkerDefinitionByName(ctx, taskDef.Spec.WorkerDefinitionName)
+	if err != nil {
+		return ports.TaskContext{}, fmt.Errorf("definición de worker no encontrada: %w", err)
+	}
 
 	execution := model.TaskExecution{
-		ID: model.NewAggregateID(),
+		ID: m.generator.NewID(),
 		Metadata: model.NewMetadata(
 			taskDef.Metadata.Name+randString(5),
 			taskDef.Metadata.Description,
@@ -102,7 +87,7 @@ func (m *Manager) AddTask(taskDef model.Task, ctx context.Context) (ports.TaskCo
 			StartTime: time.Now(),
 			State:     model.Pending,
 		},
-		// TODO: Guardar la definición de WorkerDefinition en la TaskExecution
+		WorkerDef: workerDef,
 	}
 
 	taskContext := ports.TaskContext{
@@ -114,11 +99,6 @@ func (m *Manager) AddTask(taskDef model.Task, ctx context.Context) (ports.TaskCo
 	}
 
 	log.Printf("Tarea %s añadida al registro de tareas operables", taskDef.ID)
-
-	err := m.taskDb.Put(taskDef.ID.String(), taskDef)
-	if err != nil {
-		return ports.TaskContext{}, fmt.Errorf("error al guardar la tarea: %w", err)
-	}
 
 	select {
 	case m.pendingTasksChan <- taskContext: // Enviar ID al channel
@@ -151,11 +131,10 @@ func randString(n int) string {
 	return string(b)
 }
 
-// SelectWorker elige un ResourcePool para una tarea.
-func (m *Manager) SelectWorker(definition model.WorkerDefinition) (*ports.ResourcePool, error) {
+func (m *Manager) SelectWorker(definition *model.WorkerDefinition) (*ports.ResourcePool, error) {
 
 	// Obtener la lista de pools activos del ResourcePoolManager
-	activePools := m.poolManager.ListActivePools()
+	activePools := (*m.poolService).ListActivePools()
 	if len(activePools) == 0 {
 		return nil, fmt.Errorf("no hay ResourcePools disponibles")
 	}
@@ -230,16 +209,6 @@ func (m *Manager) processTask(taskContext ports.TaskContext) {
 
 	log.Printf("Tarea %s procesada", taskDefID)
 }
-
-// GetTasks devuelve todas las Tasks (para la UI, por ejemplo).
-func (m *Manager) GetTasks() ([]model.Task, error) {
-	return m.taskDb.List()
-
-}
-
-// --- Métodos relacionados con la salud de las tareas (Health Checks) ---
-// (Estos métodos probablemente no cambian mucho, pero los incluyo para tener
-//  el código completo).
 
 // DoHealthChecks realiza las verificaciones de salud para todas las tareas.
 func (m *Manager) DoHealthChecks() {
