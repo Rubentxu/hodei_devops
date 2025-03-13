@@ -73,9 +73,9 @@ func (c *ResourcePoolDocumentConverter) ToModel(doc ResourcePoolDocument) (*mode
 			UpdatedAt:   doc.Metadata.UpdatedAt,
 		},
 		Spec: model.ResourcePoolSpec{
-			PoolID:       doc.Spec.PoolID,
-			Type:         doc.Spec.Type,
-			ExtendedSpec: doc.Spec.Config,
+			PoolID:     doc.Spec.PoolID,
+			Type:       doc.Spec.Type,
+			PoolConfig: doc.Spec.Config,
 		},
 		Status: model.ResourcePoolStatus{
 			State: doc.Status.State,
@@ -101,7 +101,7 @@ func (c *ResourcePoolDocumentConverter) ToDocument(entity *model.ResourcePoolDef
 		Spec: ResourcePoolSpec{
 			PoolID: entity.Spec.PoolID,
 			Type:   entity.Spec.Type,
-			Config: entity.Spec.ExtendedSpec,
+			Config: entity.Spec.PoolConfig,
 		},
 		Status: ResourcePoolStatus{
 			State: entity.Status.State,

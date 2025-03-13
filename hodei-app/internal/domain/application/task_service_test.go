@@ -5,7 +5,6 @@ import (
 	usecases "dev.rubentxu.hodei-devops/hodei-app/internal/domain/application"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -151,6 +150,8 @@ func TestTaskService(t *testing.T) {
 
 	t.Run("ListTasks", func(t *testing.T) {
 		t.Run("Success", func(t *testing.T) {
+			mockRepo.ExpectedCalls = nil // Limpiar mocks anteriores
+
 			criteria := ports.SearchCriteria{
 				Page:      1,
 				Size:      10,
@@ -171,6 +172,7 @@ func TestTaskService(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, expectedResult.TotalElements, result.TotalElements)
 			assert.Equal(t, len(expectedResult.Content), len(result.Content))
+			mockRepo.AssertExpectations(t)
 		})
 
 		t.Run("Invalid Criteria", func(t *testing.T) {
@@ -190,8 +192,10 @@ func TestTaskService(t *testing.T) {
 				{
 					name: "Tamaño negativo",
 					criteria: ports.SearchCriteria{
-						Page: 1,
-						Size: -1,
+						Page:      1,
+						Size:      -1,
+						SortBy:    "name",
+						SortOrder: "ASC",
 					},
 				},
 				{
@@ -199,6 +203,7 @@ func TestTaskService(t *testing.T) {
 					criteria: ports.SearchCriteria{
 						Page:      1,
 						Size:      10,
+						SortBy:    "name",
 						SortOrder: "INVALID",
 					},
 				},
@@ -206,9 +211,13 @@ func TestTaskService(t *testing.T) {
 
 			for _, tc := range invalidCriteria {
 				t.Run(tc.name, func(t *testing.T) {
-					_, err := service.ListTasks(ctx, tc.criteria)
+					mockRepo.ExpectedCalls = nil // Limpiar mocks para cada subtest
+
+					// No configuramos expectativas del mock porque esperamos que falle en la validación
+					result, err := service.ListTasks(ctx, tc.criteria)
 					require.Error(t, err)
-					assert.Contains(t, err.Error(), "validation failed")
+					assert.Empty(t, result.Content)
+					assert.Contains(t, err.Error(), "invalid criteria")
 				})
 			}
 		})

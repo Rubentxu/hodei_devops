@@ -18,9 +18,9 @@ func (r *ResourcePoolDef) GetID() AggregateID {
 }
 
 type ResourcePoolSpec struct {
-	PoolID       string                 `json:"poolID" validate:"required"`
-	Type         string                 `json:"type" validate:"required,oneof=Kubernetes Docker VM"`
-	ExtendedSpec map[string]interface{} `json:"config,omitempty" validate:"required"`
+	PoolID     string         `json:"poolID" validate:"required"`
+	Type       string         `json:"type" validate:"required,oneof=Kubernetes Docker VM"`
+	PoolConfig ResourceConfig `json:"config,omitempty" validate:"required"`
 }
 
 type ResourcePoolStatus struct {

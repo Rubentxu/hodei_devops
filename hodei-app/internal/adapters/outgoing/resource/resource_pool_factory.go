@@ -1,7 +1,9 @@
 package resource
 
 import (
+	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"fmt"
+	"k8s.io/apimachinery/pkg/util/rand"
 	"log"
 	"time"
 
@@ -18,49 +20,45 @@ func NewDefaultResourcePoolFactory() ports.ResourcePoolFactory {
 }
 
 // CreateResourcePool crea una instancia de ResourcePool a partir de una configuración
-func (f *DefaultResourcePoolFactory) CreateResourcePool(config map[string]interface{}, templateStore ports.Store[ports.WorkerTemplate]) (ports.ResourcePool, error) {
+func (f *DefaultResourcePoolFactory) CreateResourcePool(definition *model.ResourcePoolDef) (ports.ResourcePool, error) {
 	// Verificar que existe un tipo en la configuración
-	poolType, ok := config["type"].(string)
-	if !ok {
-		return nil, fmt.Errorf("missing or invalid 'type' in resource pool config")
-	}
+	poolType := definition.Spec.Type
 
 	// Verificar que existe un nombre en la configuración
-	name, ok := config["name"].(string)
-	if !ok {
-		return nil, fmt.Errorf("missing or invalid 'name' in resource pool config")
+	name := definition.Metadata.Name
+	if name == "" {
+		return nil, fmt.Errorf("falta o es inválido el campo 'name' en la definición del resource pool")
 	}
 
 	// Crear el ResourcePool según el tipo
 	switch poolType {
 	case "docker":
-		return f.createDockerResourcePool(name, config, templateStore)
+		return f.createDockerResourcePool(name, definition)
 	case "kubernetes":
-		return f.createKubernetesResourcePool(name, config, templateStore)
+		return f.createKubernetesResourcePool(name, definition)
 	default:
 		return nil, fmt.Errorf("unsupported resource pool type: %s", poolType)
 	}
 }
 
 // createDockerResourcePool crea un DockerResourcePool a partir de la configuración
-func (f *DefaultResourcePoolFactory) createDockerResourcePool(id string, config map[string]interface{}, templateStore ports.Store[ports.WorkerTemplate]) (ports.ResourcePool, error) {
-	// Convertir el mapa genérico a la configuración específica
+func (f *DefaultResourcePoolFactory) createDockerResourcePool(id string, poolDef *model.ResourcePoolDef) (ports.ResourcePool, error) {
+
 	dockerConfig := DockerResourcesPoolConfig{
 		Type:        "docker",
 		Name:        id,
-		Description: getStringOrDefault(config, "description", ""),
-		Host:        getStringOrDefault(config, "host", "unix:///var/run/docker.sock"),
+		Description: poolDef.Metadata.Description,
+		Host:        poolDef.Spec.PoolConfig.GetString("host", "unix:///var/run/docker.sock"),
 	}
 
-	log.Printf("Creating Docker resource pool with config: %+v", dockerConfig)
-
-	// Crear el DockerResourcePool con el cliente y la configuración
-	return NewDockerResourcePool(id, templateStore, dockerConfig)
+	log.Printf("Creating Docker resource pool with poolDef: %+v", dockerConfig)
+	return NewDockerResourcePool(id, dockerConfig)
 }
 
-func (f *DefaultResourcePoolFactory) CreateDefaultResourcePool() (ports.ResourcePoolConfig, error) {
-	// Convertir el mapa genérico a la configuración específica
-	defaultConfig := &DockerResourcesPoolConfig{
+func (f *DefaultResourcePoolFactory) CreateDefaultResourcePool() (ports.ResourcePool, error) {
+
+	id := "defaultDockerPool"
+	defaultConfig := DockerResourcesPoolConfig{
 		Type:        "docker",
 		Name:        "defaultDockerPool",
 		Description: "Pool de recursos Docker por defecto",
@@ -70,27 +68,25 @@ func (f *DefaultResourcePoolFactory) CreateDefaultResourcePool() (ports.Resource
 		TLSVerify:   false,
 	}
 
-	return defaultConfig, nil
+	return NewDockerResourcePool(id, defaultConfig)
 }
 
 // createKubernetesResourcePool crea un KubernetesResourcePool a partir de la configuración
-func (f *DefaultResourcePoolFactory) createKubernetesResourcePool(id string, config map[string]interface{}, templateStore ports.Store[ports.WorkerTemplate]) (ports.ResourcePool, error) {
-	// Convertir el mapa genérico a la configuración específica
+func (f *DefaultResourcePoolFactory) createKubernetesResourcePool(id string, poolDef *model.ResourcePoolDef) (ports.ResourcePool, error) {
+
 	k8sConfig := KubernetesResoucesPoolConfig{
 		Type:        "kubernetes",
 		Name:        id,
-		Description: getStringOrDefault(config, "description", ""),
-		Namespace:   getStringOrDefault(config, "namespace", "default"),
-		KubeConfig:  getStringOrDefault(config, "kubeConfig", ""),
-		InCluster:   getBoolOrDefault(config, "inCluster", false),
-		Labels:      getMapOrDefault(config, "labels"),
-		Annotations: getMapOrDefault(config, "annotations"),
+		Description: poolDef.Metadata.Description,
+		Namespace:   poolDef.Spec.PoolConfig.GetString("namespace", "default"),
+		KubeConfig:  poolDef.Spec.PoolConfig.GetString("kubeConfig", ""),
+		InCluster:   poolDef.Spec.PoolConfig.GetBool("inCluster", true),
+		Labels:      poolDef.Metadata.Labels,
+		Annotations: poolDef.Metadata.Annotations,
 	}
 
 	log.Printf("Creating Kubernetes resource pool with config: %+v", k8sConfig)
-
-	// Crear el KubernetesResourcePool con la configuración
-	return NewKubernetesResourcePool(id, k8sConfig, templateStore)
+	return NewKubernetesResourcePool(id, k8sConfig)
 }
 
 // getStringOrDefault obtiene un valor string del mapa o devuelve un valor por defecto
@@ -161,4 +157,13 @@ func GetDurationOrDefault(config map[string]interface{}, key string, defaultValu
 		return time.Duration(value) * time.Second
 	}
 	return defaultValue
+}
+
+func generateURLSafeHash(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[rand.Intn(len(charset))]
+	}
+	return string(b)
 }

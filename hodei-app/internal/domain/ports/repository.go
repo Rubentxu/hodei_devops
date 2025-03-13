@@ -33,11 +33,11 @@ type WriteOnlyRepository[T model.AggregateRoot] interface {
 
 // SearchCriteria encapsula los criterios de búsqueda comunes
 type SearchCriteria struct {
-	Page      int
-	Size      int
-	SortBy    string
-	SortOrder string
-	Filters   map[string]interface{}
+	Page      int                    `validate:"min=1"`
+	Size      int                    `validate:"min=1,max=100"`
+	SortBy    string                 `validate:"omitempty"`
+	SortOrder string                 `validate:"omitempty,oneof=ASC DESC"`
+	Filters   map[string]interface{} `validate:"omitempty"`
 }
 
 // SearchResult encapsula el resultado de una búsqueda paginada

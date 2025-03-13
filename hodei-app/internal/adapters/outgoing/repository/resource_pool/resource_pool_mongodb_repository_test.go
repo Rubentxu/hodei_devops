@@ -82,7 +82,7 @@ func createTestPool(name string) *model.ResourcePoolDef {
 		Spec: model.ResourcePoolSpec{
 			PoolID: "pool-" + name,
 			Type:   "test-type",
-			ExtendedSpec: map[string]interface{}{
+			PoolConfig: map[string]interface{}{
 				"config": "value",
 			},
 		},

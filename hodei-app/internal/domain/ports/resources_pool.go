@@ -5,20 +5,11 @@ import (
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 )
 
-// ResourcePoolConfig es la interfaz común para todas las configuraciones de ResourcePool
-type ResourcePoolConfig interface {
-	GetType() string        // Devuelve el tipo de ResourcePool (docker, kubernetes, etc)
-	GetName() string        // Devuelve un nombre único para esta configuración
-	GetDescription() string // Devuelve una descripción de esta configuración
-}
-
 type ResourcePool interface {
 	GetID() string
 	GetStats() (*model.Stats, error)
 	Matches(definition model.WorkerDefinition) bool
 	GetResourceInstanceClient() ResourceIntanceClient
-	GetWorkerTemplate(id string) (WorkerTemplate, error)
-	AddWorkerTemplate(template WorkerTemplate) error
 }
 
 // TemplateStoreAccessor proporciona acceso directo al store de templates
@@ -38,15 +29,23 @@ type WorkerTemplate struct {
 // a partir de una configuración
 type ResourcePoolFactory interface {
 	// CreateResourcePool crea una instancia de ResourcePool a partir de una configuración
-	CreateResourcePool(config map[string]interface{}, templateStore Store[WorkerTemplate]) (ResourcePool, error)
-	CreateDefaultResourcePool() (ResourcePoolConfig, error)
+	CreateResourcePool(resourcesDef *model.ResourcePoolDef) (ResourcePool, error)
+	CreateDefaultResourcePool() (ResourcePool, error)
 }
 
 type ResourcePoolService interface {
+	// Métodos existentes de gestión de definiciones
 	CreateResourcePool(ctx context.Context, resourceDef *model.ResourcePoolDef) (*model.ResourcePoolDef, error)
 	UpdateResourcePool(ctx context.Context, id model.AggregateID, updates *model.ResourcePoolDef) error
 	DeleteResourcePool(ctx context.Context, id model.AggregateID) error
 	GetResourcePool(ctx context.Context, id model.AggregateID) (*model.ResourcePoolDef, error)
 	ListResourcePools(ctx context.Context, criteria SearchCriteria) (SearchResult[*model.ResourcePoolDef], error)
-	CreateResourcePoolInstance(ctx context.Context, id model.AggregateID) (ResourcePool, error)
+
+	// Métodos de gestión de instancias
+	CreateResourcePoolInstance(ctx context.Context, id model.AggregateID) (*ResourcePool, error)
+	CreateAllResourcePools(ctx context.Context) error
+
+	// Nuevos métodos para gestión de pools activos
+	GetActivePool(id string) (*ResourcePool, bool)
+	ListActivePools() []*ResourcePool
 }

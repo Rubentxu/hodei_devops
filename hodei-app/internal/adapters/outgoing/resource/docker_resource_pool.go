@@ -16,16 +16,18 @@ import (
 	"github.com/docker/docker/client"
 )
 
+var _ ports.ResourcePool = (*DockerResourcePool)(nil)
+
 type DockerResourcePool struct {
-	id            string
-	client        ports.ResourceIntanceClient
-	lastCPUStats  map[string]*container.CPUStats
-	hostInfo      *system.Info                      // Cache the Docker host info
-	hostInfoErr   error                             // Cache the error for fetching host info
-	templateStore ports.Store[ports.WorkerTemplate] // Store para persistir templates
+	id           string
+	client       ports.ResourceIntanceClient
+	lastCPUStats map[string]*container.CPUStats
+	hostInfo     *system.Info // Cache the Docker host info
+	hostInfoErr  error        // Cache the error for fetching host info
+
 }
 
-func NewDockerResourcePool(id string, templateStore ports.Store[ports.WorkerTemplate], config DockerResourcesPoolConfig) (ports.ResourcePool, error) {
+func NewDockerResourcePool(id string, config DockerResourcesPoolConfig) (ports.ResourcePool, error) {
 	nativeClient, err := NewDockerClientAdapter(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Docker client: %w", err)
@@ -39,52 +41,13 @@ func NewDockerResourcePool(id string, templateStore ports.Store[ports.WorkerTemp
 		log.Printf("Error getting Docker host info: %v", err)
 	}
 
-	// Verificamos si se proporcionó un store de templates
-	if templateStore == nil {
-		return nil, fmt.Errorf("template store is required for Docker resource pool")
-	}
-
 	return &DockerResourcePool{
-		id:            id,
-		client:        nativeClient,
-		lastCPUStats:  make(map[string]*container.CPUStats),
-		hostInfo:      &hostInfo,
-		hostInfoErr:   err,
-		templateStore: templateStore,
+		id:           id,
+		client:       nativeClient,
+		lastCPUStats: make(map[string]*container.CPUStats),
+		hostInfo:     &hostInfo,
+		hostInfoErr:  err,
 	}, nil
-}
-
-func (d *DockerResourcePool) GetWorkerTemplate(id string) (ports.WorkerTemplate, error) {
-	// Obtenemos el template directamente de la base de datos
-	template, err := d.templateStore.Get(id)
-	if err != nil {
-		return ports.WorkerTemplate{}, fmt.Errorf("worker template with id %s not found: %w", id, err)
-	}
-
-	return template, nil
-}
-
-func (d *DockerResourcePool) AddWorkerTemplate(template ports.WorkerTemplate) error {
-	if template.ID == "" {
-		return fmt.Errorf("template ID cannot be empty")
-	}
-
-	if template.WorkerSpec.Type != model.DockerInstance {
-		return fmt.Errorf("invalid instance type for Docker resource pool: %s", template.WorkerSpec.Type)
-	}
-
-	// Validar que la template sea válida para Docker
-	if template.WorkerSpec.Image == "" {
-		return fmt.Errorf("docker image is required in worker template")
-	}
-
-	// Guardar en la base de datos
-	if err := d.templateStore.Put(template.ID, template); err != nil {
-		return fmt.Errorf("failed to save template to database: %w", err)
-	}
-
-	log.Printf("Added worker template: %s for image %s", template.ID, template.WorkerSpec.Image)
-	return nil
 }
 
 func (d *DockerResourcePool) GetID() string {
@@ -289,10 +252,4 @@ func (d *DockerResourcePool) Matches(definition model.WorkerDefinition) bool {
 		return false
 	}
 	return true
-}
-
-// GetTemplateStore implementa la interfaz TemplateStoreAccessor
-// Proporciona acceso directo al store de templates para operaciones adicionales
-func (d *DockerResourcePool) GetTemplateStore() ports.Store[ports.WorkerTemplate] {
-	return d.templateStore
 }

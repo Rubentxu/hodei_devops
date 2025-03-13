@@ -4,7 +4,6 @@ import (
 	"context"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"fmt"
-	"log"
 	"time"
 
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
@@ -17,58 +16,26 @@ import (
 	"k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
+var _ ports.ResourcePool = (*KubernetesResourcePool)(nil)
+
 // Config específica de Kubernetes ajustada para implementar ResourcePoolConfig
 
 type KubernetesResourcePool struct {
-	id            string
-	client        *KubernetesClientAdapter
-	namespace     string
-	templateStore ports.Store[ports.WorkerTemplate] // Store para persistir templates
+	id        string
+	client    *KubernetesClientAdapter
+	namespace string
 }
 
-func NewKubernetesResourcePool(id string, config KubernetesResoucesPoolConfig, templateStore ports.Store[ports.WorkerTemplate]) (ports.ResourcePool, error) {
+func NewKubernetesResourcePool(id string, config KubernetesResoucesPoolConfig) (ports.ResourcePool, error) {
 	nativeClient, err := NewKubernetesClientAdapter(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 	return &KubernetesResourcePool{
-		client:        nativeClient.(*KubernetesClientAdapter),
-		id:            id,
-		namespace:     config.Namespace, // Asigna el namespace desde la configuración
-		templateStore: templateStore,
+		client:    nativeClient.(*KubernetesClientAdapter),
+		id:        id,
+		namespace: config.Namespace, // Asigna el namespace desde la configuración
 	}, nil
-}
-
-func (d *KubernetesResourcePool) GetWorkerTemplate(id string) (ports.WorkerTemplate, error) {
-	template, err := d.templateStore.Get(id)
-	if err != nil {
-		return ports.WorkerTemplate{}, fmt.Errorf("worker template with id %s not found: %w", id, err)
-	}
-
-	return template, nil
-}
-
-func (d *KubernetesResourcePool) AddWorkerTemplate(template ports.WorkerTemplate) error {
-	if template.ID == "" {
-		return fmt.Errorf("template ID cannot be empty")
-	}
-
-	if template.WorkerSpec.Type != model.DockerInstance {
-		return fmt.Errorf("invalid instance type for Docker resource pool: %s", template.WorkerSpec.Type)
-	}
-
-	// Validar que la template sea válida para Docker
-	if template.WorkerSpec.Image == "" {
-		return fmt.Errorf("docker image is required in worker template")
-	}
-
-	// Guardar en la base de datos
-	if err := d.templateStore.Put(template.ID, template); err != nil {
-		return fmt.Errorf("failed to save template to database: %w", err)
-	}
-
-	log.Printf("Added worker template: %s for image %s", template.ID, template.WorkerSpec.Image)
-	return nil
 }
 
 func (d *KubernetesResourcePool) GetID() string {

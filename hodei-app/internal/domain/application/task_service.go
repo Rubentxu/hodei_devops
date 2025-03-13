@@ -94,20 +94,6 @@ func (s *TaskServiceImpl) ListTasks(ctx context.Context, criteria ports.SearchCr
 		return ports.SearchResult[*model.Task]{}, fmt.Errorf("invalid criteria: %w", err)
 	}
 
-	if criteria.Page < 1 {
-		criteria.Page = 1
-	}
-	if criteria.Size < 1 {
-		criteria.Size = 10
-	}
-	if criteria.Size > 100 {
-		criteria.Size = 100
-	}
-
-	if criteria.SortBy == "" {
-		criteria.SortBy = "metadata.name"
-	}
-
 	return s.repo.FindByCriteria(ctx, criteria)
 }
 

@@ -6,13 +6,20 @@ import (
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
 	"fmt"
 	"github.com/go-playground/validator"
+	"log"
+	"strings"
+	"sync"
 	"time"
 )
+
+var _ ports.ResourcePoolService = (*ResourcePoolServiceImpl)(nil)
 
 type ResourcePoolServiceImpl struct {
 	repo                ports.Repository[*model.ResourcePoolDef, model.AggregateID]
 	validator           *validator.Validate
 	resourcePoolFactory ports.ResourcePoolFactory
+	activePools         map[string]*ports.ResourcePool
+	mu                  sync.RWMutex
 }
 
 func NewResourcePoolService(
@@ -25,9 +32,55 @@ func NewResourcePoolService(
 	if factory == nil {
 		panic("resource pool factory cannot be nil")
 	}
+
 	validate := validator.New()
 	validate.RegisterValidation("pooltype", model.ValidatePoolType)
-	return &ResourcePoolServiceImpl{repo: repo, resourcePoolFactory: factory}
+
+	return &ResourcePoolServiceImpl{
+		repo:                repo,
+		resourcePoolFactory: factory,
+		validator:           validate,
+		activePools:         make(map[string]*ports.ResourcePool),
+	}
+}
+
+// RegisterActivePool registra un ResourcePool como activo
+func (s *ResourcePoolServiceImpl) RegisterActivePool(pool ports.ResourcePool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.activePools[pool.GetID()] = &pool
+	log.Printf("ResourcePool %s registrado como activo", pool.GetID())
+}
+
+// UnregisterActivePool elimina un ResourcePool de la lista de activos
+func (s *ResourcePoolServiceImpl) UnregisterActivePool(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.activePools[id]; !exists {
+		return fmt.Errorf("pool de recursos %s no encontrado", id)
+	}
+	delete(s.activePools, id)
+	log.Printf("ResourcePool %s eliminado del registro", id)
+	return nil
+}
+
+// GetActivePool obtiene un pool activo por su ID
+func (s *ResourcePoolServiceImpl) GetActivePool(id string) (*ports.ResourcePool, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	pool, exists := s.activePools[id]
+	return pool, exists
+}
+
+// ListActivePools lista todos los pools activos
+func (s *ResourcePoolServiceImpl) ListActivePools() []*ports.ResourcePool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	pools := make([]*ports.ResourcePool, 0, len(s.activePools))
+	for _, pool := range s.activePools {
+		pools = append(pools, pool)
+	}
+	return pools
 }
 
 func (s *ResourcePoolServiceImpl) CreateResourcePool(ctx context.Context, resourceDef *model.ResourcePoolDef) (*model.ResourcePoolDef, error) {
@@ -47,10 +100,71 @@ func (s *ResourcePoolServiceImpl) CreateResourcePool(ctx context.Context, resour
 	return s.repo.Save(ctx, resourceDef)
 }
 
+func (s *ResourcePoolServiceImpl) CreateAllResourcePools(ctx context.Context) error {
+	// Buscar todas las definiciones de pools en estado ACTIVE
+	criteria := ports.SearchCriteria{
+		Page:      1,
+		Size:      100, // Ajustar según necesidades
+		SortBy:    "metadata.name",
+		SortOrder: "ASC",
+	}
+
+	result, err := s.repo.FindByCriteria(ctx, criteria)
+	if err != nil {
+		return fmt.Errorf("error al buscar definiciones de pools: %w", err)
+	}
+
+	var errors []string
+	successCount := 0
+
+	// Intentar crear una instancia para cada definición activa
+	for _, poolDef := range result.Content {
+		if poolDef.Status.State != "ACTIVE" {
+			continue
+		}
+
+		if _, exists := s.GetActivePool(string(poolDef.ID)); exists {
+			successCount++
+			continue
+		}
+
+		pool, err := s.resourcePoolFactory.CreateResourcePool(poolDef)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("error al crear pool %s: %v", poolDef.ID, err))
+			// Actualizar estado a ERROR
+			poolDef.Status.State = "ERROR"
+			poolDef.Metadata.UpdatedAt = time.Now().UTC()
+			if updateErr := s.repo.Update(ctx, poolDef); updateErr != nil {
+				errors = append(errors, fmt.Sprintf("error al actualizar estado del pool %s: %v", poolDef.ID, updateErr))
+			}
+			continue
+		}
+
+		// Verificar que el ID coincide
+		if pool.GetID() != poolDef.Spec.PoolID {
+			errors = append(errors, fmt.Sprintf("ID del pool no coincide para %s: esperado %s, obtenido %s",
+				poolDef.ID, poolDef.Spec.PoolID, pool.GetID()))
+			continue
+		}
+
+		s.RegisterActivePool(pool)
+		successCount++
+	}
+
+	// Si hubo errores, retornar un error consolidado
+	if len(errors) > 0 {
+		return fmt.Errorf("se crearon %d pools con éxito, pero ocurrieron %d errores:\n%s",
+			successCount, len(errors), strings.Join(errors, "\n"))
+	}
+
+	return nil
+}
+
 // CreateResourcePoolInstance crea una instancia de ResourcePool a partir de su definición
-func (s *ResourcePoolServiceImpl) CreateResourcePoolInstance(ctx context.Context, id model.AggregateID) (ports.ResourcePool, error) {
-	if id == "" {
-		return nil, fmt.Errorf("id cannot be empty")
+func (s *ResourcePoolServiceImpl) CreateResourcePoolInstance(ctx context.Context, id model.AggregateID) (*ports.ResourcePool, error) {
+	// Primero verifica si ya existe un pool activo
+	if pool, exists := s.GetActivePool(string(id)); exists {
+		return pool, nil
 	}
 
 	// Recuperar la definición del pool
@@ -69,16 +183,16 @@ func (s *ResourcePoolServiceImpl) CreateResourcePoolInstance(ctx context.Context
 		return nil, fmt.Errorf("invalid pool definition: %w", err)
 	}
 
-	// Crear la instancia del pool usando el factory
-	pool, err := s.resourcePoolFactory.CreateResourcePool(poolDef.Spec.ExtendedSpec, nil)
+	pool, err := s.resourcePoolFactory.CreateResourcePool(poolDef)
 	if err != nil {
-		// Actualizar el estado a ERROR si falla la creación
 		poolDef.Status.State = "ERROR"
 		if updateErr := s.repo.Update(ctx, poolDef); updateErr != nil {
-			return nil, fmt.Errorf("failed to create pool instance: %v and failed to update status: %v", err, updateErr)
+			return nil, fmt.Errorf("error al crear instancia: %v y al actualizar estado: %v", err, updateErr)
 		}
-		return nil, fmt.Errorf("failed to create pool instance: %w", err)
+		return nil, fmt.Errorf("error al crear instancia del pool: %w", err)
 	}
+
+	s.RegisterActivePool(pool)
 
 	// Verificar que el tipo de pool creado coincide con la definición
 	if pool.GetID() != poolDef.Spec.PoolID {
@@ -90,10 +204,11 @@ func (s *ResourcePoolServiceImpl) CreateResourcePoolInstance(ctx context.Context
 	poolDef.Metadata.UpdatedAt = time.Now().UTC()
 
 	if err := s.repo.Update(ctx, poolDef); err != nil {
+		s.UnregisterActivePool(pool.GetID())
 		return nil, fmt.Errorf("pool instance created but failed to update status: %w", err)
 	}
 
-	return pool, nil
+	return &pool, nil
 }
 
 func (s *ResourcePoolServiceImpl) UpdateResourcePool(ctx context.Context, id model.AggregateID, updates *model.ResourcePoolDef) error {
