@@ -14,7 +14,7 @@ import (
 )
 
 // setupTemplateRoutes configura los endpoints para gestionar templates de workers
-func SetupTemplateRoutes(e *core.ServeEvent, manager *manager.Manager) {
+func SetupTemplateRoutes(e *core.ServeEvent, manager *manager.HodeiApp) {
 	// Obtener el resource pool por defecto una única vez
 	getDefaultPool := func() (*ports.ResourcePool, error) {
 		resourcePool := manager.GetResourcePool("defaultDockerPool")

@@ -73,9 +73,6 @@ func createTestTask() *model.Task {
 					Required:    true,
 				},
 			},
-			ParamValues: map[string]interface{}{
-				"param1": "value1",
-			},
 		},
 	}
 }

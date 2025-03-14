@@ -15,10 +15,9 @@ func (t Task) GetID() AggregateID {
 }
 
 type TaskSpec struct {
-	WorkerDefinitionName string                 `json:"workerdef_name" validate:"required"`
-	Command              []string               `json:"command" validate:"required,min=1"`
-	Params               []ParamDefinition      `json:"params" validate:"dive"`
-	ParamValues          map[string]interface{} `json:"param_values"`
+	WorkerDefinitionName string            `json:"workerdef_name" validate:"required"`
+	Command              []string          `json:"command" validate:"required,min=1"`
+	Params               []ParamDefinition `json:"params" validate:"dive"`
 }
 
 // NewTask crea una nueva tarea con valores predeterminados
@@ -33,9 +32,8 @@ func NewTask(name, description string, command []string, params []ParamDefinitio
 			description,
 		),
 		Spec: TaskSpec{
-			Command:     command,
-			Params:      params,
-			ParamValues: make(map[string]interface{}),
+			Command: command,
+			Params:  params,
 		},
 	}, nil
 }

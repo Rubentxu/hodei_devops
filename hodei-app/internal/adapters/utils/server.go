@@ -16,7 +16,7 @@ import (
 func Start(
 	app *pocketbase.PocketBase,
 	//wsHandler *websockets.WSHandler,
-	manager *manager.Manager,
+	manager *manager.HodeiApp,
 	resourcePoolManager *resource.ResourcePoolManager,
 ) {
 	// Determinar la dirección de escucha - usar 0.0.0.0 para permitir conexiones externas

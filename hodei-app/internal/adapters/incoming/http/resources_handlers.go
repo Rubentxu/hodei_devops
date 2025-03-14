@@ -17,7 +17,7 @@ import (
 func SetupResourcePoolRoutes(
 	e *core.ServeEvent,
 	resourcePoolManager *resource.ResourcePoolManager,
-	manager *manager.Manager,
+	manager *manager.HodeiApp,
 ) {
 	// Listar todas las configuraciones de ResourcePool
 	e.Router.GET("/api/resource-pools", func(c *core.RequestEvent) error {
