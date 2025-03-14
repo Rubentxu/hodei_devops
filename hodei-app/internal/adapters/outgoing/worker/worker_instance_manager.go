@@ -25,7 +25,7 @@ const (
 	TypeError  = "ERROR"
 )
 
-var _ ports.WorkerInstanceManager = (*WorkerInstanceManager)(nil)
+var _ ports.WorkerInstanceManager = (*WorkerInstanceManagerImpl)(nil)
 
 type workerOperation struct {
 	op     string
@@ -34,7 +34,7 @@ type workerOperation struct {
 	result chan error
 }
 
-type WorkerInstanceManager struct {
+type WorkerInstanceManagerImpl struct {
 	name            string
 	taskExecService *ports.TaskExecutionService
 	workerFactory   ports.WorkerFactory
@@ -59,7 +59,7 @@ type WorkerInstanceManager struct {
 }
 
 func NewWorker(name string, initialMaxConcurrent int, workerFactory ports.WorkerFactory, taskExecService *ports.TaskExecutionService) ports.WorkerInstanceManager {
-	workerInstanceManager := &WorkerInstanceManager{
+	workerInstanceManager := &WorkerInstanceManagerImpl{
 		name:                 name,
 		workerFactory:        workerFactory,
 		taskQueue:            make(chan ports.TaskContext, 100),
@@ -85,13 +85,13 @@ func NewWorker(name string, initialMaxConcurrent int, workerFactory ports.Worker
 	return workerInstanceManager
 }
 
-func (w *WorkerInstanceManager) Stop() error {
+func (w *WorkerInstanceManagerImpl) Stop() error {
 	close(w.shutdown)
 	w.wg.Wait()
 	return nil
 }
 
-func (w *WorkerInstanceManager) taskDispatcher() {
+func (w *WorkerInstanceManagerImpl) taskDispatcher() {
 	defer w.wg.Done()
 	pendingTasks := make([]ports.TaskContext, 0)
 
@@ -137,7 +137,7 @@ func sendOutput(outputChan chan<- model.ProcessOutput, processID string, message
 
 }
 
-func (w *WorkerInstanceManager) processTask(op ports.TaskContext) {
+func (w *WorkerInstanceManagerImpl) processTask(op ports.TaskContext) {
 	taskID := op.Execution.ID.String()
 	doneChan := make(chan struct{})
 	defer close(doneChan)
@@ -171,7 +171,7 @@ func (w *WorkerInstanceManager) processTask(op ports.TaskContext) {
 
 	// Notificar que el worker se ha creado
 	sendOutput(op.OutputChan, taskID, TypeInfo,
-		"WorkerInstanceManager creado, iniciando configuración...", false, model.PENDING)
+		"WorkerInstanceManagerImpl creado, iniciando configuración...", false, model.PENDING)
 
 	// Defer para detener el worker al salir de processTask
 	defer func() {
@@ -182,9 +182,9 @@ func (w *WorkerInstanceManager) processTask(op ports.TaskContext) {
 			sendOutput(op.OutputChan, taskID, TypeWarn,
 				fmt.Sprintf("Error deteniendo worker: %v", err), true, model.ERROR)
 		} else if stopped {
-			log.Printf("[%s] WorkerInstanceManager detenido en defer: %s", taskID, msg)
+			log.Printf("[%s] WorkerInstanceManagerImpl detenido en defer: %s", taskID, msg)
 			sendOutput(op.OutputChan, taskID, TypeInfo,
-				"WorkerInstanceManager detenido correctamente", false, model.DONE)
+				"WorkerInstanceManagerImpl detenido correctamente", false, model.DONE)
 		}
 	}()
 
@@ -238,7 +238,7 @@ networks:
 
 	log.Printf("[%s] Tarea iniciada en %s", taskID, endpoint)
 	sendOutput(op.OutputChan, taskID, TypeInfo,
-		fmt.Sprintf("WorkerInstanceManager iniciado en %s", endpoint), false, model.RUNNING)
+		fmt.Sprintf("WorkerInstanceManagerImpl iniciado en %s", endpoint), false, model.RUNNING)
 
 	// Ejecutar la tarea en una goroutine separada
 	runErrChan := make(chan error, 1)
@@ -322,9 +322,9 @@ networks:
 	// Asegurarse de que el worker se elimine
 	select {
 	case <-doneChan:
-		log.Printf("[%s] WorkerInstanceManager eliminado correctamente", taskID)
+		log.Printf("[%s] WorkerInstanceManagerImpl eliminado correctamente", taskID)
 		sendOutput(op.OutputChan, taskID, TypeInfo,
-			"WorkerInstanceManager eliminado correctamente", false, model.DONE)
+			"WorkerInstanceManagerImpl eliminado correctamente", false, model.DONE)
 	case <-time.After(5 * time.Second):
 		log.Printf("[%s] Warning: No se pudo confirmar la eliminación del worker", taskID)
 		sendOutput(op.OutputChan, taskID, TypeWarn,
@@ -350,7 +350,7 @@ func convertHealthStatusToTaskState(status model.HealthStatus) model.TaskState {
 	}
 }
 
-func (w *WorkerInstanceManager) workerManager() {
+func (w *WorkerInstanceManagerImpl) workerManager() {
 	defer w.wg.Done()
 	for {
 		select {
@@ -376,14 +376,14 @@ func (w *WorkerInstanceManager) workerManager() {
 	}
 }
 
-func (w *WorkerInstanceManager) AddTask(taskContext ports.TaskContext) error {
+func (w *WorkerInstanceManagerImpl) AddTask(taskContext ports.TaskContext) error {
 	w.taskQueue <- taskContext
 
 	sendOutput(taskContext.OutputChan, taskContext.Execution.ID.String(), TypeInfo, "Execution queued successfully", false, model.PENDING)
 	return nil
 }
 
-func (w *WorkerInstanceManager) SetConcurrencyLimit(newLimit int) {
+func (w *WorkerInstanceManagerImpl) SetConcurrencyLimit(newLimit int) {
 	if newLimit < 1 {
 		newLimit = 1
 	}
@@ -393,7 +393,7 @@ func (w *WorkerInstanceManager) SetConcurrencyLimit(newLimit int) {
 	w.concurrencyLimitChan <- newLimit
 }
 
-//func (w *WorkerInstanceManager) GetStatus() model.WorkerConfig {
+//func (w *WorkerInstanceManagerImpl) GetStatus() model.WorkerConfig {
 //	return model.WorkerConfig{
 //		MaxConcurrentTasks: int(atomic.LoadInt32(&w.maxConcurrent)),
 //	}
@@ -403,7 +403,7 @@ func getCPUUsage() float64    { return 45.0 }
 func getMemoryUsage() float64 { return 60.0 }
 
 // StopTask localiza la tarea, cambia su estado y, de ser necesario, detiene el proceso subyacente.
-func (w *WorkerInstanceManager) StopTask(taskContext ports.TaskContext) error {
+func (w *WorkerInstanceManagerImpl) StopTask(taskContext ports.TaskContext) error {
 	// TODO: Implementar
 	return nil
 }

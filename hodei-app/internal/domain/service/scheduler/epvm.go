@@ -23,17 +23,17 @@ func NewEpvm() ports.Scheduler {
 	return &Epvm{Name: "epvm"}
 }
 
-func (e *Epvm) SelectCandidateNodes(definition model.WorkerDefinition, pools []*ports.ResourcePool) []*ports.ResourcePool {
-	candidates := []*ports.ResourcePool{}
+func (e *Epvm) SelectCandidateNodes(definition *model.WorkerDefinition, pools []ports.ResourcePool) []ports.ResourcePool {
+	candidates := []ports.ResourcePool{}
 	for _, pool := range pools {
-		if (*pool).Matches(definition) {
+		if pool.Matches(definition) {
 			candidates = append(candidates, pool)
 		}
 	}
 	return candidates
 }
 
-func (e *Epvm) Score(pools []*ports.ResourcePool) map[string]float64 {
+func (e *Epvm) Score(pools []ports.ResourcePool) map[string]float64 {
 	scores := make(map[string]float64)
 	// Aquí va la lógica de puntuación de EPVM.  Esto es lo más complejo
 	// y específico de tu implementación de EPVM.  Necesitarás:
@@ -44,30 +44,30 @@ func (e *Epvm) Score(pools []*ports.ResourcePool) map[string]float64 {
 
 	for _, pool := range pools {
 		// Ejemplo MUY básico (solo para ilustrar la estructura, no funciona)
-		_, err := (*pool).GetStats() //Necesitarias obtener datos historicos en vez de los actuales
+		_, err := pool.GetStats() //Necesitarias obtener datos historicos en vez de los actuales
 		if err != nil {
-			scores[fmt.Sprintf("%p", *pool)] = -1000.0 // Manejar errores
+			scores[fmt.Sprintf("%p", pool)] = -1000.0 // Manejar errores
 			continue
 		}
 		// score := ...  // Aquí iría tu lógica de predicción y puntuación.
-		scores[fmt.Sprintf("%p", *pool)] = 0.5 // Puntuación de ejemplo
+		scores[fmt.Sprintf("%p", pool)] = 0.5 // Puntuación de ejemplo
 	}
 
 	return scores
 }
 
-func (e *Epvm) Pick(scores map[string]float64, candidates []*ports.ResourcePool) *ports.ResourcePool {
+func (e *Epvm) Pick(scores map[string]float64, candidates []ports.ResourcePool) ports.ResourcePool {
 	// La lógica de Pick para EPVM podría ser similar a la de Greedy (elegir el mejor score),
 	// pero podrías considerar otros factores, como la confianza de la predicción.
 	if len(candidates) == 0 {
 		return nil
 	}
 
-	var bestPool *ports.ResourcePool
+	var bestPool ports.ResourcePool
 	maxScore := -10000000000000.0 // Inicializar con el valor más bajo posible
 
 	for _, pool := range candidates {
-		poolAddr := fmt.Sprintf("%p", *pool) // Usar la dirección como un string unico
+		poolAddr := fmt.Sprintf("%p", pool) // Usar la dirección como un string unico
 
 		if score, ok := scores[poolAddr]; ok {
 			if score > maxScore {

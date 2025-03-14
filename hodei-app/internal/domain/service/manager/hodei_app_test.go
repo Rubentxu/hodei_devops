@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
 	"testing"
 	"time"
 )
@@ -23,42 +24,45 @@ func (m *MockIDGenerator) NewID() model.AggregateID {
 	return args.Get(0).(model.AggregateID)
 }
 
-// Mock para Scheduler
+var _ ports.Scheduler = (*MockScheduler)(nil)
+
 type MockScheduler struct {
 	mock.Mock
 }
 
-func (m *MockScheduler) SelectCandidateNodes(definition *model.WorkerDefinition, pools []*ports.ResourcePool) []*ports.ResourcePool {
+func (m *MockScheduler) SelectCandidateNodes(definition *model.WorkerDefinition, pools []ports.ResourcePool) []ports.ResourcePool {
 	args := m.Called(definition, pools)
-	return args.Get(0).([]*ports.ResourcePool)
+	return args.Get(0).([]ports.ResourcePool)
 }
 
-func (m *MockScheduler) Score(pools []*ports.ResourcePool) map[string]float64 {
+func (m *MockScheduler) Score(pools []ports.ResourcePool) map[string]float64 {
 	args := m.Called(pools)
 	return args.Get(0).(map[string]float64)
 }
 
-func (m *MockScheduler) Pick(scores map[string]float64, candidates []*ports.ResourcePool) *ports.ResourcePool {
+func (m *MockScheduler) Pick(scores map[string]float64, candidates []ports.ResourcePool) ports.ResourcePool {
 	args := m.Called(scores, candidates)
 	if args.Get(0) == nil {
 		return nil
 	}
-	return args.Get(0).(*ports.ResourcePool)
+	return args.Get(0).(ports.ResourcePool)
 }
+
+var _ ports.ResourcePoolService = (*MockResourcePoolService)(nil)
 
 // Mock para ResourcePoolService
 type MockResourcePoolService struct {
 	mock.Mock
 }
 
-func (m *MockResourcePoolService) ListActivePools() []*ports.ResourcePool {
+func (m *MockResourcePoolService) ListActivePools() []ports.ResourcePool {
 	args := m.Called()
-	return args.Get(0).([]*ports.ResourcePool)
+	return args.Get(0).([]ports.ResourcePool)
 }
 
-func (m *MockResourcePoolService) GetActivePool(id string) (*ports.ResourcePool, bool) {
+func (m *MockResourcePoolService) GetActivePool(id string) (ports.ResourcePool, bool) {
 	args := m.Called(id)
-	return args.Get(0).(*ports.ResourcePool), args.Bool(1)
+	return args.Get(0).(ports.ResourcePool), args.Bool(1)
 }
 
 // Implementaciones para otros métodos que no usamos directamente
@@ -77,7 +81,7 @@ func (m *MockResourcePoolService) GetResourcePool(ctx context.Context, id model.
 func (m *MockResourcePoolService) ListResourcePools(ctx context.Context, criteria ports.SearchCriteria) (ports.SearchResult[*model.ResourcePoolDef], error) {
 	return ports.SearchResult[*model.ResourcePoolDef]{}, nil
 }
-func (m *MockResourcePoolService) CreateResourcePoolInstance(ctx context.Context, id model.AggregateID) (*ports.ResourcePool, error) {
+func (m *MockResourcePoolService) CreateResourcePoolInstance(ctx context.Context, id model.AggregateID) (ports.ResourcePool, error) {
 	return nil, nil
 }
 func (m *MockResourcePoolService) CreateAllResourcePools(ctx context.Context) error {
@@ -197,6 +201,8 @@ func (m *MockResourceIntanceClient) GetConfig() any {
 	return args.Get(0)
 }
 
+var _ ports.ResourcePool = (*MockResourcePool)(nil)
+
 // Mock para ResourcePool
 type MockResourcePool struct {
 	mock.Mock
@@ -212,7 +218,7 @@ func (m *MockResourcePool) GetStats() (*model.Stats, error) {
 	return args.Get(0).(*model.Stats), args.Error(1)
 }
 
-func (m *MockResourcePool) Matches(definition model.WorkerDefinition) bool {
+func (m *MockResourcePool) Matches(definition *model.WorkerDefinition) bool {
 	args := m.Called(definition)
 	return args.Bool(0)
 }
@@ -222,14 +228,16 @@ func (m *MockResourcePool) GetResourceInstanceClient() ports.ResourceIntanceClie
 	return args.Get(0).(ports.ResourceIntanceClient)
 }
 
+var _ ports.WorkerInstanceManager = (*MockWorkerInstanceManager)(nil)
+
 // Mock para WorkerInstanceManager
 type MockWorkerInstanceManager struct {
 	mock.Mock
 }
 
-func (m *MockWorkerInstanceManager) AddTask(request model.TaskExecutionRequest, ctx context.Context) (ports.TaskContext, error) {
-	args := m.Called(request)
-	return args.Get(0).(ports.TaskContext), args.Error(1)
+func (m *MockWorkerInstanceManager) AddTask(taskContext ports.TaskContext) error {
+	args := m.Called(taskContext)
+	return args.Error(0)
 }
 
 func (m *MockWorkerInstanceManager) StopTask(taskContext ports.TaskContext) error {
@@ -245,28 +253,24 @@ func TestNew(t *testing.T) {
 	mockWorkerDefService := &MockWorkerDefService{}
 	mockTaskExecService := &MockTaskExecService{}
 	mockGenerator := &MockIDGenerator{}
-
-	poolServicePtr := ports.ResourcePoolService(mockPoolService)
-	taskServicePtr := ports.TaskService(mockTaskService)
-	workerDefServicePtr := ports.WorkerDefinitionService(mockWorkerDefService)
-	taskExecServicePtr := ports.TaskExecutionService(mockTaskExecService)
+	mockScheduler := &MockScheduler{}
 
 	t.Run("Crear HodeiApp con scheduler greedy", func(t *testing.T) {
-		app, err := manager.NewHodeiApp("greedy", mockWorkerManager, &poolServicePtr, &taskServicePtr, &workerDefServicePtr, &taskExecServicePtr, 100, mockGenerator)
+		app, err := manager.NewHodeiApp(mockScheduler, mockWorkerManager, mockPoolService, mockTaskService, mockWorkerDefService, mockTaskExecService, 100, mockGenerator)
 		require.NoError(t, err)
 		require.NotNil(t, app)
 
 	})
 
 	t.Run("Crear HodeiApp con scheduler roundrobin", func(t *testing.T) {
-		app, err := manager.NewHodeiApp("roundrobin", mockWorkerManager, &poolServicePtr, &taskServicePtr, &workerDefServicePtr, &taskExecServicePtr, 100, mockGenerator)
+		app, err := manager.NewHodeiApp(mockScheduler, mockWorkerManager, mockPoolService, mockTaskService, mockWorkerDefService, mockTaskExecService, 100, mockGenerator)
 		require.NoError(t, err)
 		require.NotNil(t, app)
 
 	})
 
 	t.Run("Crear HodeiApp con scheduler por defecto", func(t *testing.T) {
-		app, err := manager.NewHodeiApp("unknown", mockWorkerManager, &poolServicePtr, &taskServicePtr, &workerDefServicePtr, &taskExecServicePtr, 100, mockGenerator)
+		app, err := manager.NewHodeiApp(mockScheduler, mockWorkerManager, mockPoolService, mockTaskService, mockWorkerDefService, mockTaskExecService, 100, mockGenerator)
 		require.NoError(t, err)
 		require.NotNil(t, app)
 
@@ -282,15 +286,11 @@ func TestAddTask(t *testing.T) {
 	mockWorkerDefService := &MockWorkerDefService{}
 	mockTaskExecService := &MockTaskExecService{}
 	mockGenerator := &MockIDGenerator{}
-
-	poolServicePtr := ports.ResourcePoolService(mockPoolService)
-	taskServicePtr := ports.TaskService(mockTaskService)
-	workerDefServicePtr := ports.WorkerDefinitionService(mockWorkerDefService)
-	taskExecServicePtr := ports.TaskExecutionService(mockTaskExecService)
+	mockScheduler := &MockScheduler{}
 
 	t.Run("Añadir tarea válida", func(t *testing.T) {
 		// Crear app con buffer pequeño para probar correctamente
-		app, _ := manager.NewHodeiApp("greedy", mockWorkerManager, &poolServicePtr, &taskServicePtr, &workerDefServicePtr, &taskExecServicePtr, 10, mockGenerator)
+		app, _ := manager.NewHodeiApp(mockScheduler, mockWorkerManager, mockPoolService, mockTaskService, mockWorkerDefService, mockTaskExecService, 10, mockGenerator)
 
 		taskID := model.AggregateID("task-123")
 		execID := model.AggregateID("exec-123")
@@ -303,14 +303,14 @@ func TestAddTask(t *testing.T) {
 				Description: "Test Description",
 			},
 			Spec: model.TaskSpec{
-				WorkerDefinitionName: "test-worker",
+				WorkerDefinitionName: "test-instanceManager",
 			},
 		}
 
 		workerDef := &model.WorkerDefinition{
-			ID: model.AggregateID("worker-123"),
+			ID: model.AggregateID("instanceManager-123"),
 			Metadata: model.Metadata{
-				Name:        "test-worker",
+				Name:        "test-instanceManager",
 				Description: "Test Worker",
 			},
 		}
@@ -321,13 +321,13 @@ func TestAddTask(t *testing.T) {
 
 		// Configurar mocks
 		mockTaskService.On("GetTask", ctx, taskID).Return(task, nil)
-		mockWorkerDefService.On("FindWorkerDefinitionByName", ctx, "test-worker").Return(workerDef, nil)
+		mockWorkerDefService.On("FindWorkerDefinitionByName", ctx, "test-instanceManager").Return(workerDef, nil)
 
 		execution := &model.TaskExecution{
 			ID:       execID,
 			Metadata: model.NewMetadata("Test Task"+mock.Anything, "Test Description"),
 			Status: model.ExecutionStatus{
-				StartTime: mock.Anything.(time.Time),
+				StartTime: time.Now(),
 				State:     model.Pending,
 			},
 			WorkerDef: workerDef,
@@ -341,16 +341,10 @@ func TestAddTask(t *testing.T) {
 		assert.Equal(t, execID, taskContext.Execution.ID)
 		assert.Equal(t, model.Pending, taskContext.Execution.Status.State)
 
-		// Limpiar el canal para siguientes pruebas
-		go func() {
-			for range app.pendingTasksChan {
-				// Vaciar el canal
-			}
-		}()
 	})
 
 	t.Run("Error cuando no se encuentra la tarea", func(t *testing.T) {
-		app, _ := manager.NewHodeiApp("greedy", mockWorkerManager, &poolServicePtr, &taskServicePtr, &workerDefServicePtr, &taskExecServicePtr, 10, mockGenerator)
+		app, _ := manager.NewHodeiApp(mockScheduler, mockWorkerManager, mockPoolService, mockTaskService, mockWorkerDefService, mockTaskExecService, 10, mockGenerator)
 
 		taskID := model.AggregateID("nonexistent-task")
 		request := model.TaskExecutionRequest{TaskID: taskID}
@@ -362,8 +356,8 @@ func TestAddTask(t *testing.T) {
 		assert.Contains(t, err.Error(), "tarea no encontrada")
 	})
 
-	t.Run("Error cuando no se encuentra la definición del worker", func(t *testing.T) {
-		app, _ := manager.NewHodeiApp("greedy", mockWorkerManager, &poolServicePtr, &taskServicePtr, &workerDefServicePtr, &taskExecServicePtr, 10, mockGenerator)
+	t.Run("Error cuando no se encuentra la definición del instanceManager", func(t *testing.T) {
+		app, _ := manager.NewHodeiApp(mockScheduler, mockWorkerManager, mockPoolService, mockTaskService, mockWorkerDefService, mockTaskExecService, 10, mockGenerator)
 
 		taskID := model.AggregateID("task-456")
 		task := &model.Task{
@@ -373,112 +367,17 @@ func TestAddTask(t *testing.T) {
 				Description: "Test Description",
 			},
 			Spec: model.TaskSpec{
-				WorkerDefinitionName: "nonexistent-worker",
+				WorkerDefinitionName: "nonexistent-instanceManager",
 			},
 		}
 
 		request := model.TaskExecutionRequest{TaskID: taskID}
 		mockTaskService.On("GetTask", ctx, taskID).Return(task, nil)
-		mockWorkerDefService.On("FindWorkerDefinitionByName", ctx, "nonexistent-worker").Return((*model.WorkerDefinition)(nil), errors.New("worker no encontrado"))
+		mockWorkerDefService.On("FindWorkerDefinitionByName", ctx, "nonexistent-instanceManager").Return((*model.WorkerDefinition)(nil), errors.New("instanceManager no encontrado"))
 
 		_, err := app.AddTask(request, ctx)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "definición de worker no encontrada")
-	})
-}
-
-func TestSelectWorker(t *testing.T) {
-	// Setup común
-	ctx := context.Background()
-	mockWorkerManager := &MockWorkerInstanceManager{}
-	mockPoolService := &MockResourcePoolService{}
-	mockTaskService := &MockTaskService{}
-	mockWorkerDefService := &MockWorkerDefService{}
-	mockTaskExecService := &MockTaskExecService{}
-	mockGenerator := &MockIDGenerator{}
-	mockScheduler := &MockScheduler{}
-
-	poolServicePtr := ports.ResourcePoolService(mockPoolService)
-	taskServicePtr := ports.TaskService(mockTaskService)
-	workerDefServicePtr := ports.WorkerDefinitionService(mockWorkerDefService)
-	taskExecServicePtr := ports.TaskExecutionService(mockTaskExecService)
-
-	app, _ := manager.NewHodeiApp("greedy", mockWorkerManager, &poolServicePtr, &taskServicePtr, &workerDefServicePtr, &taskExecServicePtr, 10, mockGenerator)
-	// Reemplazar el scheduler por nuestro mock
-	app.scheduler = mockScheduler
-
-	workerDef := &model.WorkerDefinition{
-		ID: model.AggregateID("worker-123"),
-		Metadata: model.Metadata{
-			Name: "test-worker",
-		},
-	}
-
-	t.Run("Seleccionar worker con pools disponibles", func(t *testing.T) {
-		// Crear mocks de pools
-		mockPool1 := &MockResourcePool{}
-		mockPool1.On("GetID").Return("pool-1")
-
-		mockPool2 := &MockResourcePool{}
-		mockPool2.On("GetID").Return("pool-2")
-
-		pools := []*ports.ResourcePool{
-			(*ports.ResourcePool)(mockPool1),
-			(*ports.ResourcePool)(mockPool2),
-		}
-
-		candidates := []*ports.ResourcePool{(*ports.ResourcePool)(mockPool1)}
-		scores := map[string]float64{"pool-1": 0.9}
-
-		// Configurar comportamiento del scheduler
-		mockPoolService.On("ListActivePools").Return(pools)
-		mockScheduler.On("SelectCandidateNodes", workerDef, pools).Return(candidates)
-		mockScheduler.On("Score", candidates).Return(scores)
-		mockScheduler.On("Pick", scores, candidates).Return((*ports.ResourcePool)(mockPool1))
-
-		selectedPool, err := app.SelectWorker(workerDef)
-
-		require.NoError(t, err)
-		assert.NotNil(t, selectedPool)
-		assert.Equal(t, "pool-1", (*selectedPool).GetID())
-
-		mockPoolService.AssertExpectations(t)
-		mockScheduler.AssertExpectations(t)
-	})
-
-	t.Run("Error cuando no hay pools disponibles", func(t *testing.T) {
-		emptyPools := []*ports.ResourcePool{}
-
-		mockPoolService.On("ListActivePools").Return(emptyPools)
-
-		selectedPool, err := app.SelectWorker(workerDef)
-
-		assert.Error(t, err)
-		assert.Nil(t, selectedPool)
-		assert.Contains(t, err.Error(), "no hay ResourcePools disponibles")
-	})
-
-	t.Run("Error cuando el scheduler no puede seleccionar un pool", func(t *testing.T) {
-		mockPool1 := &MockResourcePool{}
-		mockPool1.On("GetID").Return("pool-1")
-
-		pools := []*ports.ResourcePool{
-			(*ports.ResourcePool)(mockPool1),
-		}
-
-		candidates := []*ports.ResourcePool{(*ports.ResourcePool)(mockPool1)}
-		scores := map[string]float64{"pool-1": 0.9}
-
-		mockPoolService.On("ListActivePools").Return(pools)
-		mockScheduler.On("SelectCandidateNodes", workerDef, pools).Return(candidates)
-		mockScheduler.On("Score", candidates).Return(scores)
-		mockScheduler.On("Pick", scores, candidates).Return((*ports.ResourcePool)(nil))
-
-		selectedPool, err := app.SelectWorker(workerDef)
-
-		assert.Error(t, err)
-		assert.Nil(t, selectedPool)
-		assert.Contains(t, err.Error(), "no se pudo seleccionar un ResourcePool")
+		assert.Contains(t, err.Error(), "definición de instanceManager no encontrada")
 	})
 }
 
@@ -493,82 +392,90 @@ func TestProcessTasks(t *testing.T) {
 	mockGenerator := &MockIDGenerator{}
 	mockScheduler := &MockScheduler{}
 
-	poolServicePtr := ports.ResourcePoolService(mockPoolService)
-	taskServicePtr := ports.TaskService(mockTaskService)
-	workerDefServicePtr := ports.WorkerDefinitionService(mockWorkerDefService)
-	taskExecServicePtr := ports.TaskExecutionService(mockTaskExecService)
+	app, err := manager.NewHodeiApp(mockScheduler, mockWorkerManager, mockPoolService,
+		mockTaskService, mockWorkerDefService, mockTaskExecService, 10, mockGenerator)
+	require.NoError(t, err)
 
-	t.Run("Procesamiento exitoso de una tarea", func(t *testing.T) {
-		app, _ := manager.NewHodeiApp("greedy", mockWorkerManager, &poolServicePtr, &taskServicePtr, &workerDefServicePtr, &taskExecServicePtr, 10, mockGenerator)
-		app.scheduler = mockScheduler
+	// Crear workerDef para la tarea
+	workerDef := &model.WorkerDefinition{
+		ID: "instanceManager-123",
+		Metadata: model.Metadata{
+			Name: "test-instanceManager",
+		},
+	}
 
-		// Crear workerDef para la tarea
-		workerDef := &model.WorkerDefinition{
-			ID: model.AggregateID("worker-123"),
-			Metadata: model.Metadata{
-				Name: "test-worker",
-			},
-		}
+	// Configurar mocks para AddTask
+	taskID := model.AggregateID("task-123")
+	execID := model.AggregateID("exec-123")
+	mockGenerator.On("NewID").Return(execID)
 
-		// Crear una ejecución de tarea
-		execution := model.TaskExecution{
-			ID: model.AggregateID("exec-123"),
-			Metadata: model.Metadata{
-				Name:        "Test Execution",
-				Description: "Test Description",
-			},
-			Status: model.ExecutionStatus{
-				StartTime: time.Now(),
-				State:     model.Pending,
-			},
-			WorkerDef: workerDef,
-		}
+	task := &model.Task{
+		ID: taskID,
+		Metadata: model.Metadata{
+			Name:        "Test Task",
+			Description: "Test Description",
+		},
+		Spec: model.TaskSpec{
+			WorkerDefinitionName: "test-instanceManager",
+		},
+	}
 
-		// Crear un contexto de tarea
-		taskContext := ports.TaskContext{
-			Execution:  execution,
-			OutputChan: make(chan model.ProcessOutput, 10),
-			StateChan:  make(chan model.TaskState, 1),
-			ErrChan:    make(chan error, 1),
-			Ctx:        ctx,
-		}
+	// Configurar mocks
+	mockTaskService.On("GetTask", ctx, taskID).Return(task, nil)
+	mockWorkerDefService.On("FindWorkerDefinitionByName", ctx, "test-instanceManager").Return(workerDef, nil)
 
-		// Configurar mocks de pool
-		mockPool := &MockResourcePool{}
-		mockPool.On("GetID").Return("pool-1")
+	execution := &model.TaskExecution{
+		ID:       execID,
+		Metadata: model.NewMetadata("Test Task", "Test Description"),
+		Status: model.ExecutionStatus{
+			StartTime: time.Now(),
+			State:     model.Pending,
+		},
+		WorkerDef: workerDef,
+	}
 
-		mockClient := &MockResourceIntanceClient{}
-		mockPool.On("GetResourceInstanceClient").Return(mockClient)
+	mockTaskExecService.On("CreateTaskExecution", ctx, mock.AnythingOfType("*model.TaskExecution")).Return(execution, nil)
 
-		// Configurar comportamiento del scheduler
-		pools := []*ports.ResourcePool{(*ports.ResourcePool)(mockPool)}
-		candidates := []*ports.ResourcePool{(*ports.ResourcePool)(mockPool)}
-		scores := map[string]float64{"pool-1": 0.9}
+	// Configurar mocks del ResourcePool
+	mockPool := &MockResourcePool{}
+	mockPool.On("GetID").Return("pool-1")
+	mockClient := &MockResourceIntanceClient{}
+	mockPool.On("GetResourceInstanceClient").Return(mockClient)
 
-		mockPoolService.On("ListActivePools").Return(pools)
-		mockScheduler.On("SelectCandidateNodes", workerDef, pools).Return(candidates)
-		mockScheduler.On("Score", candidates).Return(scores)
-		mockScheduler.On("Pick", scores, candidates).Return((*ports.ResourcePool)(mockPool))
+	pools := []ports.ResourcePool{mockPool}
+	candidates := []ports.ResourcePool{mockPool}
+	scores := map[string]float64{"pool-1": 0.9}
 
-		// Configurar el WorkerManager para que ejecute la tarea con éxito
-		mockWorkerManager.On("AddTask", mock.AnythingOfType("ports.TaskContext")).Return(nil)
+	mockPoolService.On("ListActivePools").Return(pools)
+	mockScheduler.On("SelectCandidateNodes", workerDef, pools).Return(candidates)
+	mockScheduler.On("Score", candidates).Return(scores)
+	mockScheduler.On("Pick", scores, candidates).Return(mockPool)
 
-		// Configurar actualización de estado
-		mockTaskExecService.On("UpdateTaskExecutionStatus", ctx, model.AggregateID("exec-123"), mock.AnythingOfType("model.ExecutionStatus")).Return(nil)
+	// Configurar el WorkerManager para agregar la tarea con éxito
+	mockWorkerManager.
+		On("AddTask", mock.AnythingOfType("ports.TaskContext")).
+		Return(nil)
 
-		// Enviar la tarea al canal y procesar
-		app.pendingTasksChan <- taskContext
+	// Configurar actualización de estado en TaskExecutionService
+	mockTaskExecService.
+		On("UpdateTaskExecutionStatus", ctx, execID, mock.AnythingOfType("model.ExecutionStatus")).
+		Return(nil)
 
-		// Iniciar procesamiento en una goroutine
-		go app.ProcessTasks()
+	// Añadir la tarea usando la interfaz pública
+	request := model.TaskExecutionRequest{TaskID: taskID}
+	_, err = app.AddTask(request, ctx)
+	require.NoError(t, err)
 
-		// Dar tiempo para que se procese
-		time.Sleep(100 * time.Millisecond)
+	// Iniciar una goroutine para procesar la tarea
+	go app.ProcessTasks()
 
-		mockPoolService.AssertExpectations(t)
-		mockWorkerManager.AssertExpectations(t)
-		mockTaskExecService.AssertExpectations(t)
-	})
+	// Dar tiempo para que se procese la tarea
+	time.Sleep(200 * time.Millisecond)
+
+	// Verificar que los mocks fueron llamados correctamente
+	mockPoolService.AssertExpectations(t)
+	mockWorkerManager.AssertExpectations(t)
+	mockTaskExecService.AssertExpectations(t)
 }
 
 func TestStopTask(t *testing.T) {
@@ -579,13 +486,9 @@ func TestStopTask(t *testing.T) {
 	mockWorkerDefService := &MockWorkerDefService{}
 	mockTaskExecService := &MockTaskExecService{}
 	mockGenerator := &MockIDGenerator{}
+	mockScheduler := &MockScheduler{}
 
-	poolServicePtr := ports.ResourcePoolService(mockPoolService)
-	taskServicePtr := ports.TaskService(mockTaskService)
-	workerDefServicePtr := ports.WorkerDefinitionService(mockWorkerDefService)
-	taskExecServicePtr := ports.TaskExecutionService(mockTaskExecService)
-
-	app, _ := manager.NewHodeiApp("greedy", mockWorkerManager, &poolServicePtr, &taskServicePtr, &workerDefServicePtr, &taskExecServicePtr, 10, mockGenerator)
+	app, _ := manager.NewHodeiApp(mockScheduler, mockWorkerManager, mockPoolService, mockTaskService, mockWorkerDefService, mockTaskExecService, 10, mockGenerator)
 
 	t.Run("Detener tarea exitosamente", func(t *testing.T) {
 		// Crear un contexto de tarea
@@ -624,29 +527,5 @@ func TestStopTask(t *testing.T) {
 		assert.Error(t, err)
 		assert.Equal(t, expectedErr, err)
 		mockWorkerManager.AssertExpectations(t)
-	})
-}
-
-func TestDoHealthChecks(t *testing.T) {
-	// Setup
-	mockWorkerManager := &MockWorkerInstanceManager{}
-	mockPoolService := &MockResourcePoolService{}
-	mockTaskService := &MockTaskService{}
-	mockWorkerDefService := &MockWorkerDefService{}
-	mockTaskExecService := &MockTaskExecService{}
-	mockGenerator := &MockIDGenerator{}
-
-	poolServicePtr := ports.ResourcePoolService(mockPoolService)
-	taskServicePtr := ports.TaskService(mockTaskService)
-	workerDefServicePtr := ports.WorkerDefinitionService(mockWorkerDefService)
-	taskExecServicePtr := ports.TaskExecutionService(mockTaskExecService)
-
-	app, _ := manager.NewHodeiApp("greedy", mockWorkerManager, &poolServicePtr, &taskServicePtr, &workerDefServicePtr, &taskExecServicePtr, 10, mockGenerator)
-
-	t.Run("Verificación de salud - método incompleto", func(t *testing.T) {
-		// Como DoHealthChecks está incompleto, solo verificamos que no cause errores
-		assert.NotPanics(t, func() {
-			app.DoHealthChecks()
-		})
 	})
 }

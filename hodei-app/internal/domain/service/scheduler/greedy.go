@@ -16,27 +16,27 @@ func NewGreedy() ports.Scheduler {
 	return &Greedy{Name: "greedy"}
 }
 
-func (g *Greedy) SelectCandidateNodes(definition model.WorkerDefinition, pools []*ports.ResourcePool) []*ports.ResourcePool {
-	candidates := []*ports.ResourcePool{}
+func (g *Greedy) SelectCandidateNodes(definition *model.WorkerDefinition, pools []ports.ResourcePool) []ports.ResourcePool {
+	candidates := []ports.ResourcePool{}
 	for _, pool := range pools {
-		if (*pool).Matches(definition) {
+		if pool.Matches(definition) {
 			candidates = append(candidates, pool)
 		}
 	}
 	return candidates
 }
 
-func (g *Greedy) Score(pools []*ports.ResourcePool) map[string]float64 {
+func (g *Greedy) Score(pools []ports.ResourcePool) map[string]float64 {
 	log.Println("Running Greedy Score")
 	scores := make(map[string]float64)
 	for _, pool := range pools {
-		stats, err := (*pool).GetStats()
+		stats, err := pool.GetStats()
 		if err != nil {
 			// Manejar el error (por ejemplo, asignar un score muy bajo)
-			scores[fmt.Sprintf("%p", *pool)] = -1000.0
+			scores[fmt.Sprintf("%p", pool)] = -1000.0
 			continue
 		}
-		log.Printf("ResourcePool Stats : %s - %f %f\n", (*pool).GetID(), stats.MemAvailableKb(), stats.MemTotalKb())
+		log.Printf("ResourcePool Stats : %s - %f %f\n", pool.GetID(), stats.MemAvailableKb(), stats.MemTotalKb())
 
 		// Un ejemplo simple de puntuación:  más memoria libre = mejor score.
 		// ¡Ajusta esto a tu lógica de "greedy"!  Podrías considerar CPU, disco, etc.
@@ -47,22 +47,22 @@ func (g *Greedy) Score(pools []*ports.ResourcePool) map[string]float64 {
 		} else {
 			score = float64(stats.MemAvailableKb()) / float64(stats.MemTotalKb())
 		}
-		log.Printf("Greedy Score: %s - %f\n", (*pool).GetID(), score)
-		scores[fmt.Sprintf("%p", *pool)] = score
+		log.Printf("Greedy Score: %s - %f\n", pool.GetID(), score)
+		scores[fmt.Sprintf("%p", pool)] = score
 	}
 	return scores
 }
 
-func (g *Greedy) Pick(scores map[string]float64, candidates []*ports.ResourcePool) *ports.ResourcePool {
+func (g *Greedy) Pick(scores map[string]float64, candidates []ports.ResourcePool) ports.ResourcePool {
 	if len(candidates) == 0 {
 		return nil
 	}
 
-	var bestPool *ports.ResourcePool
+	var bestPool ports.ResourcePool
 	maxScore := -math.MaxFloat64 // Inicializar con el valor más bajo posible
 
 	for _, pool := range candidates {
-		poolAddr := fmt.Sprintf("%p", *pool)
+		poolAddr := fmt.Sprintf("%p", pool)
 		if score, ok := scores[poolAddr]; ok {
 			if score > maxScore {
 				maxScore = score

@@ -8,8 +8,9 @@ import (
 // HodeiAppManager define el comportamiento que la aplicación espera
 // de un "worker": arranque/parada de tareas, actualización, etc.
 type HodeiAppManager interface {
-	StopTask(taskContext TaskContext) error
 	AddTask(request model.TaskExecutionRequest, ctx context.Context) (TaskContext, error)
+	ProcessTasks()
+	StopTask(taskContext TaskContext) error
 }
 
 // WorkerFactory es una interfaz para crear instancias de workers

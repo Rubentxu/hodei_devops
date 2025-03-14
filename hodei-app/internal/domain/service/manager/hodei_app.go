@@ -5,9 +5,7 @@ import (
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/worker"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
-	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/service/scheduler"
 	"fmt"
 	"log"
 	"time"
@@ -17,40 +15,30 @@ import (
 type HodeiApp struct {
 	pendingTasksChan chan ports.TaskContext
 	scheduler        ports.Scheduler
-	worker           *worker.WorkerInstanceManager
-	poolService      *ports.ResourcePoolService
-	taskService      *ports.TaskService
-	workerDefService *ports.WorkerDefinitionService
-	taskExecService  *ports.TaskExecutionService
+	instanceManager  ports.WorkerInstanceManager
+	poolService      ports.ResourcePoolService
+	taskService      ports.TaskService
+	workerDefService ports.WorkerDefinitionService
+	taskExecService  ports.TaskExecutionService
 	generator        ports.IDGenerator
 }
 
 // NewHodeiApp creates a new HodeiApp instance.
 func NewHodeiApp(
-	schedulerType string,
-	worker *worker.WorkerInstanceManager,
-	poolService *ports.ResourcePoolService,
-	taskService *ports.TaskService,
-	workDefService *ports.WorkerDefinitionService,
-	taskExecService *ports.TaskExecutionService,
+	scheduler ports.Scheduler,
+	instanceManager ports.WorkerInstanceManager,
+	poolService ports.ResourcePoolService,
+	taskService ports.TaskService,
+	workDefService ports.WorkerDefinitionService,
+	taskExecService ports.TaskExecutionService,
 	sizePendingsTask int,
 	generator ports.IDGenerator,
 ) (ports.HodeiAppManager, error) {
-	// Crear Scheduler
-	var currentSheduler ports.Scheduler
-	switch schedulerType {
-	case "greedy":
-		currentSheduler = scheduler.NewGreedy()
-	case "roundrobin":
-		currentSheduler = scheduler.NewRoundRobin()
-	default:
-		currentSheduler = scheduler.NewEpvm() // Asegúrate de que NewEpvm exista
-	}
 
 	app := &HodeiApp{
 		pendingTasksChan: make(chan ports.TaskContext, sizePendingsTask), // Buffer para 1000 tareas
-		scheduler:        currentSheduler,
-		worker:           worker, // Guardar la instancia del WorkerInstanceManager
+		scheduler:        scheduler,
+		instanceManager:  instanceManager,
 		poolService:      poolService,
 		taskService:      taskService,
 		workerDefService: workDefService,
@@ -67,15 +55,15 @@ func (m *HodeiApp) AddTask(request model.TaskExecutionRequest, ctx context.Conte
 	outputChan := make(chan model.ProcessOutput, 100)
 	stateChan := make(chan model.TaskState, 10) // Canal para el estado
 	errChan := make(chan error, 1)
-	taskDef, err := (*m.taskService).GetTask(ctx, request.TaskID)
+	taskDef, err := m.taskService.GetTask(ctx, request.TaskID)
 	if err != nil {
 		return ports.TaskContext{}, fmt.Errorf("tarea no encontrada: %w", err)
 	}
 	log.Printf("Tarea %s recuperada para su ejecución", taskDef.Metadata.Name)
 
-	workerDef, err := (*m.workerDefService).FindWorkerDefinitionByName(ctx, taskDef.Spec.WorkerDefinitionName)
+	workerDef, err := m.workerDefService.FindWorkerDefinitionByName(ctx, taskDef.Spec.WorkerDefinitionName)
 	if err != nil {
-		return ports.TaskContext{}, fmt.Errorf("definición de worker no encontrada: %w", err)
+		return ports.TaskContext{}, fmt.Errorf("definición de instanceManager no encontrada: %w", err)
 	}
 
 	execution := model.TaskExecution{
@@ -90,7 +78,7 @@ func (m *HodeiApp) AddTask(request model.TaskExecutionRequest, ctx context.Conte
 		},
 		WorkerDef: workerDef,
 	}
-	(*m.taskExecService).CreateTaskExecution(ctx, &execution)
+	m.taskExecService.CreateTaskExecution(ctx, &execution)
 
 	taskContext := ports.TaskContext{
 		Execution:  execution,
@@ -133,15 +121,15 @@ func randString(n int) string {
 	return string(b)
 }
 
-func (m *HodeiApp) SelectWorker(definition *model.WorkerDefinition) (*ports.ResourcePool, error) {
+func (m *HodeiApp) selectWorker(definition *model.WorkerDefinition) (ports.ResourcePool, error) {
 
 	// Obtener la lista de pools activos del ResourcePoolManager
-	activePools := (*m.poolService).ListActivePools()
+	activePools := m.poolService.ListActivePools()
 	if len(activePools) == 0 {
 		return nil, fmt.Errorf("no hay ResourcePools disponibles")
 	}
 
-	log.Printf("Seleccionando un worker para el workerDefinition %s", definition.ID)
+	log.Printf("Seleccionando un instanceManager para el workerDefinition %s", definition.ID)
 
 	candidatePools := m.scheduler.SelectCandidateNodes(definition, activePools)
 	log.Printf("Candidate pools: %v", candidatePools)
@@ -154,32 +142,31 @@ func (m *HodeiApp) SelectWorker(definition *model.WorkerDefinition) (*ports.Reso
 		return nil, fmt.Errorf("no se pudo seleccionar un ResourcePool")
 	}
 
-	log.Printf("WorkerInstanceManager seleccionado: %s", (*selectedPool).GetID())
+	log.Printf("WorkerInstanceManagerImpl seleccionado: %s", selectedPool.GetID())
 	return selectedPool, nil
 }
 
 // ProcessTasks procesa las tareas pendientes.
 func (m *HodeiApp) ProcessTasks() {
 	for taskID := range m.pendingTasksChan { // Escuchar el channel
-		log.Printf("Procesando: %s", taskID)
 		go m.processTask(taskID)
 	}
 }
 
 // processTask maneja la lógica de una sola tarea:  selección, lanzamiento y actualización.
-// processTask ahora delega la ejecución al WorkerInstanceManager.
+// processTask ahora delega la ejecución al WorkerInstanceManagerImpl.
 func (m *HodeiApp) processTask(taskContext ports.TaskContext) {
 	taskDefID := taskContext.Execution.ID
 	log.Printf("Iniciando el procesamiento de la tarea %s", taskDefID)
 	workerDefinition := taskContext.Execution.WorkerDef
 
 	// 2. Seleccionar un ResourcePool usando el nuevo método que trabaja con el ResourcePoolManager
-	selectedPool, err := m.SelectWorker(workerDefinition)
+	selectedPool, err := m.selectWorker(workerDefinition)
 	if err != nil {
-		log.Printf("Error seleccionando un worker para la tarea %s: %v", taskDefID, err)
+		log.Printf("Error seleccionando un instanceManager para la tarea %s: %v", taskDefID, err)
 		return
 	}
-	log.Printf("WorkerInstanceManager seleccionado: %s", (*selectedPool).GetID())
+	log.Printf("WorkerInstanceManagerImpl seleccionado: %s", selectedPool.GetID())
 
 	// 3. Verificar que el pool seleccionado existe
 	if selectedPool == nil {
@@ -187,28 +174,27 @@ func (m *HodeiApp) processTask(taskContext ports.TaskContext) {
 		return
 	}
 
-	log.Printf("Tarea %s asignada al worker %s", taskDefID, (*selectedPool).GetID())
+	log.Printf("Tarea %s asignada al instanceManager %s", taskDefID, selectedPool.GetID())
 
-	resourceClient := (*selectedPool).GetResourceInstanceClient()
+	resourceClient := selectedPool.GetResourceInstanceClient()
 	taskContext.Client = resourceClient
 
-	// 5. Delegar la ejecución al WorkerInstanceManager
-	result := m.worker.AddTask(taskContext)
-	log.Printf("Tarea %s enviada al worker", taskDefID)
+	// 5. Delegar la ejecución al WorkerInstanceManagerImpl
+	result := m.instanceManager.AddTask(taskContext)
+	log.Printf("Tarea %s enviada al instanceManager", taskDefID)
 	log.Printf("Result: %v", result)
 
 	// 6. Actualizar el estado de la tarea
 	if result != nil {
-		log.Printf("Error al iniciar la tarea %s en el worker: %v", taskDefID, result.Error)
 		taskContext.Execution.Status.State = model.Failed
 		taskContext.Execution.Status.Message = result.Error()
 
 	} else {
-		log.Printf("Tarea %s completada con éxito en el worker", taskDefID)
+		log.Printf("Tarea %s completada con éxito en el instanceManager", taskDefID)
 		taskContext.Execution.Status.State = model.Completed
 		taskContext.Execution.Status.EndTime = time.Now().UTC()
 	}
-	(*m.taskExecService).UpdateTaskExecutionStatus(taskContext.Ctx, taskContext.Execution.ID, taskContext.Execution.Status)
+	m.taskExecService.UpdateTaskExecutionStatus(taskContext.Ctx, taskContext.Execution.ID, taskContext.Execution.Status)
 	log.Printf("Tarea %s procesada", taskDefID)
 }
 
@@ -238,5 +224,5 @@ func (m *HodeiApp) checkTaskHealth(exec *model.TaskExecution) error {
 
 func (m *HodeiApp) StopTask(taskContext ports.TaskContext) error {
 	log.Printf("Deteniendo la tarea %s", taskContext.Execution.ID)
-	return m.worker.StopTask(taskContext)
+	return m.instanceManager.StopTask(taskContext)
 }

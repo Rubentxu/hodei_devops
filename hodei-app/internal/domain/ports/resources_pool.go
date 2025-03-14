@@ -8,7 +8,7 @@ import (
 type ResourcePool interface {
 	GetID() string
 	GetStats() (*model.Stats, error)
-	Matches(definition model.WorkerDefinition) bool
+	Matches(definition *model.WorkerDefinition) bool
 	GetResourceInstanceClient() ResourceIntanceClient
 }
 
@@ -42,10 +42,10 @@ type ResourcePoolService interface {
 	ListResourcePools(ctx context.Context, criteria SearchCriteria) (SearchResult[*model.ResourcePoolDef], error)
 
 	// Métodos de gestión de instancias
-	CreateResourcePoolInstance(ctx context.Context, id model.AggregateID) (*ResourcePool, error)
+	CreateResourcePoolInstance(ctx context.Context, id model.AggregateID) (ResourcePool, error)
 	CreateAllResourcePools(ctx context.Context) error
 
 	// Nuevos métodos para gestión de pools activos
-	GetActivePool(id string) (*ResourcePool, bool)
-	ListActivePools() []*ResourcePool
+	GetActivePool(id string) (ResourcePool, bool)
+	ListActivePools() []ResourcePool
 }

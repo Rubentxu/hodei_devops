@@ -11,7 +11,7 @@ const (
 )
 
 type Scheduler interface {
-	SelectCandidateNodes(definition *model.WorkerDefinition, pools []*ResourcePool) []*ResourcePool
-	Score(pools []*ResourcePool) map[string]float64
-	Pick(scores map[string]float64, candidates []*ResourcePool) *ResourcePool
+	SelectCandidateNodes(definition *model.WorkerDefinition, pools []ResourcePool) []ResourcePool
+	Score(pools []ResourcePool) map[string]float64
+	Pick(scores map[string]float64, candidates []ResourcePool) ResourcePool
 }
