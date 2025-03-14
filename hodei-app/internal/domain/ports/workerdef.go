@@ -5,11 +5,11 @@ import (
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 )
 
-// WorkerManagerPort define el comportamiento que la aplicación espera
+// HodeiAppManager define el comportamiento que la aplicación espera
 // de un "worker": arranque/parada de tareas, actualización, etc.
-type WorkerManagerPort interface {
+type HodeiAppManager interface {
 	StopTask(taskContext TaskContext) error
-	AddTask(taskContext TaskContext) error
+	AddTask(request model.TaskExecutionRequest, ctx context.Context) (TaskContext, error)
 }
 
 // WorkerFactory es una interfaz para crear instancias de workers
@@ -17,10 +17,15 @@ type WorkerFactory interface {
 	Create(task model.TaskExecution, client ResourceIntanceClient) (WorkerInstance, error)
 }
 
+type WorkerInstanceManager interface {
+	AddTask(taskContext TaskContext) error
+	StopTask(taskContext TaskContext) error
+}
+
 type WorkerInstance interface {
-	GetID() model.AggregateID
-	GetName() string
-	GetType() string
+	//GetID() model.AggregateID
+	//GetName() string
+	//GetType() string
 	Start(ctx context.Context, templatePath string, outputChan chan<- model.ProcessOutput) (*model.WorkerEndpoint, error)
 	Run(ctx context.Context, t model.TaskExecution, outputChan chan<- model.ProcessOutput) error
 	Stop(ctx context.Context) (bool, string, error)

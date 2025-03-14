@@ -1,15 +1,13 @@
-// worker/worker.go
 package worker
 
 import (
 	"context"
-	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository"
 
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"fmt"
 	"log"
 	"sync"
-	"sync/atomic"
+
 	"time"
 
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
@@ -27,6 +25,8 @@ const (
 	TypeError  = "ERROR"
 )
 
+var _ ports.WorkerInstanceManager = (*WorkerInstanceManager)(nil)
+
 type workerOperation struct {
 	op     string
 	taskID string
@@ -35,9 +35,9 @@ type workerOperation struct {
 }
 
 type WorkerInstanceManager struct {
-	name          string
-	db            ports.Store[model.TaskExecution]
-	workerFactory ports.WorkerFactory
+	name            string
+	taskExecService *ports.TaskExecutionService
+	workerFactory   ports.WorkerFactory
 
 	// Channels for Execution management
 	taskQueue     chan ports.TaskContext
@@ -47,48 +47,48 @@ type WorkerInstanceManager struct {
 	// Concurrency control channels
 	concurrencyLimitChan chan int
 	workerSlots          chan struct{}
-	metrics              chan model.Metrics
+	//metrics              chan model.Metrics
 
 	// TaskState
-	maxConcurrent  int32 // Cambiado a int32 para uso atómico
-	scalingHistory []model.ScalingEvent
+	maxConcurrent int32 // Cambiado a int32 para uso atómico
+	//scalingHistory []model.ScalingEvent
 
 	// Control de shutdown
 	shutdown chan struct{}
 	wg       sync.WaitGroup
 }
 
-func NewWorker(name string, initialMaxConcurrent int, workerFactory ports.WorkerFactory) ports.WorkerManagerPort {
-	w := &WorkerInstanceManager{
+func NewWorker(name string, initialMaxConcurrent int, workerFactory ports.WorkerFactory, taskExecService *ports.TaskExecutionService) ports.WorkerInstanceManager {
+	workerInstanceManager := &WorkerInstanceManager{
 		name:                 name,
 		workerFactory:        workerFactory,
 		taskQueue:            make(chan ports.TaskContext, 100),
 		workerChan:           make(chan workerOperation, 10),
 		concurrencyLimitChan: make(chan int),
 		workerSlots:          make(chan struct{}, initialMaxConcurrent),
-		metrics:              make(chan model.Metrics, 1),
-		activeWorkers:        sync.Map{},
-		maxConcurrent:        int32(initialMaxConcurrent),
-		shutdown:             make(chan struct{}),
+		taskExecService:      taskExecService,
+		//metrics:              make(chan model.Metrics, 1),
+		activeWorkers: sync.Map{},
+		maxConcurrent: int32(initialMaxConcurrent),
+		shutdown:      make(chan struct{}),
 	}
 
 	// Initialize slots
 	for i := 0; i < initialMaxConcurrent; i++ {
-		w.workerSlots <- struct{}{}
+		workerInstanceManager.workerSlots <- struct{}{}
 	}
 
-	w.db = repository.NewCacheStore[model.TaskExecution]()
+	workerInstanceManager.wg.Add(2) // Para taskDispatcher y workerManager
+	go workerInstanceManager.taskDispatcher()
+	go workerInstanceManager.workerManager()
 
-	w.wg.Add(2) // Para taskDispatcher y workerManager
-	go w.taskDispatcher()
-	go w.workerManager()
-
-	return w
+	return workerInstanceManager
 }
 
-func (w *WorkerInstanceManager) Stop() {
+func (w *WorkerInstanceManager) Stop() error {
 	close(w.shutdown)
 	w.wg.Wait()
+	return nil
 }
 
 func (w *WorkerInstanceManager) taskDispatcher() {
@@ -275,7 +275,7 @@ networks:
 
 				// Actualizar estado en BD y enviar notificación
 				op.Execution.Status.State = convertHealthStatusToTaskState(output.Status)
-				w.db.Put(taskID, op.Execution)
+				(*w.taskExecService).UpdateTaskExecutionStatus(op.Ctx, op.Execution.ID, op.Execution.Status)
 
 				// Solo enviar notificación si el estado ha cambiado significativamente
 				if output.Status == model.FINISHED || output.Status == model.ERROR ||
@@ -393,32 +393,14 @@ func (w *WorkerInstanceManager) SetConcurrencyLimit(newLimit int) {
 	w.concurrencyLimitChan <- newLimit
 }
 
-func (w *WorkerInstanceManager) GetStatus() model.WorkerConfig {
-	return model.WorkerConfig{
-		MaxConcurrentTasks: int(atomic.LoadInt32(&w.maxConcurrent)),
-	}
-}
+//func (w *WorkerInstanceManager) GetStatus() model.WorkerConfig {
+//	return model.WorkerConfig{
+//		MaxConcurrentTasks: int(atomic.LoadInt32(&w.maxConcurrent)),
+//	}
+//}
 
 func getCPUUsage() float64    { return 45.0 }
 func getMemoryUsage() float64 { return 60.0 }
-
-// GetTasks retorna un slice con todas las tareas almacenadas.
-func (w *WorkerInstanceManager) GetTasks() ([]model.TaskExecution, error) {
-	taskList, err := w.db.List()
-	if err != nil {
-		return nil, fmt.Errorf("[WORKER CLIENT] error obteniendo lista de tareas: %w", err)
-	}
-	return taskList, nil
-}
-
-// GetTask retorna la tarea con el id dado.
-func (w *WorkerInstanceManager) GetTask(taskID string) (model.TaskExecution, error) {
-	t, err := w.db.Get(taskID)
-	if err != nil {
-		return model.TaskExecution{}, fmt.Errorf("[WORKER CLIENT] no se encontró la tarea con ID %s", taskID)
-	}
-	return t, nil
-}
 
 // StopTask localiza la tarea, cambia su estado y, de ser necesario, detiene el proceso subyacente.
 func (w *WorkerInstanceManager) StopTask(taskContext ports.TaskContext) error {

@@ -25,8 +25,8 @@ type HodeiApp struct {
 	generator        ports.IDGenerator
 }
 
-// New creates a new HodeiApp instance.
-func New(
+// NewHodeiApp creates a new HodeiApp instance.
+func NewHodeiApp(
 	schedulerType string,
 	worker *worker.WorkerInstanceManager,
 	poolService *ports.ResourcePoolService,
@@ -35,7 +35,7 @@ func New(
 	taskExecService *ports.TaskExecutionService,
 	sizePendingsTask int,
 	generator ports.IDGenerator,
-) (*HodeiApp, error) {
+) (ports.HodeiAppManager, error) {
 	// Crear Scheduler
 	var currentSheduler ports.Scheduler
 	switch schedulerType {
@@ -47,7 +47,7 @@ func New(
 		currentSheduler = scheduler.NewEpvm() // Asegúrate de que NewEpvm exista
 	}
 
-	m := HodeiApp{
+	app := &HodeiApp{
 		pendingTasksChan: make(chan ports.TaskContext, sizePendingsTask), // Buffer para 1000 tareas
 		scheduler:        currentSheduler,
 		worker:           worker, // Guardar la instancia del WorkerInstanceManager
@@ -58,7 +58,7 @@ func New(
 		generator:        generator,
 	}
 
-	return &m, nil
+	return app, nil
 }
 
 // AddTask añade una nueva Execution a la cola de pendientes.
