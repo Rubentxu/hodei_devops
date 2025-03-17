@@ -27,11 +27,11 @@ type WorkerInstance interface {
 	//GetID() model.AggregateID
 	//GetName() string
 	//GetType() string
-	Start(ctx context.Context, templatePath string, outputChan chan<- model.ProcessOutput) (*model.WorkerEndpoint, error)
+	Start(ctx context.Context, templatePath string, outputChan chan<- model.ProcessOutput) (*model.ConnectionInfo, error)
 	Run(ctx context.Context, t model.TaskExecution, outputChan chan<- model.ProcessOutput) error
 	Stop(ctx context.Context) (bool, string, error)
 	StartMonitoring(ctx context.Context, checkInterval int64, healthChan chan<- *model.ProcessHealthStatus) error
-	GetEndpoint() *model.WorkerEndpoint
+	GetEndpoint() *model.ConnectionInfo
 }
 
 type ResourceIntanceClient interface {
@@ -49,20 +49,19 @@ type TaskContext struct {
 }
 
 type WorkerDefinitionService interface {
-	// Operaciones CRUD básicas
+
 	CreateWorkerDefinition(ctx context.Context, workerDef *model.WorkerDefinition) (*model.WorkerDefinition, error)
 	GetWorkerDefinition(ctx context.Context, id model.AggregateID) (*model.WorkerDefinition, error)
 	UpdateWorkerDefinition(ctx context.Context, updates *model.WorkerDefinition) error
 	DeleteWorkerDefinition(ctx context.Context, id model.AggregateID) error
 
-	// Búsqueda y listado
-	FindWorkerDefinitions(ctx context.Context, criterio SearchCriteria) (SearchResult[*model.WorkerDefinition], error)
-	FindWorkerDefinitionByName(ctx context.Context, name string) (*model.WorkerDefinition, error)
-	// Operaciones específicas del dominio
-	UpdateWorkerStatus(ctx context.Context, id model.AggregateID, estado model.HealthStatus) error
-	AssignTemplate(ctx context.Context, workerID model.AggregateID, templateID string) error
 
-	// Operaciones por lotes
+	FindWorkerDefinitions(ctx context.Context, criteria SearchCriteria) (SearchResult[*model.WorkerDefinition], error)
+	FindWorkerDefinitionByName(ctx context.Context, name string) (*model.WorkerDefinition, error)
+
+	UpdateWorkerStatus(ctx context.Context, id model.AggregateID, state model.WorkerState) error
+
+
 	CreateWorkersBatch(ctx context.Context, workerDefs []*model.WorkerDefinition) ([]*model.WorkerDefinition, error)
 	DeleteWorkersBatch(ctx context.Context, ids []model.AggregateID) error
 }

@@ -83,8 +83,8 @@ func (m *HodeiApp) AddTask(request model.TaskExecutionRequest, ctx context.Conte
 	taskContext := ports.TaskContext{
 		Execution:  execution,
 		OutputChan: outputChan,
-		StateChan:  stateChan, // Asignar el canal de estado
-		ErrChan:    errChan,   // Asignar el canal de errores
+		StateChan:  stateChan,
+		ErrChan:    errChan,
 		Ctx:        ctx,
 	}
 

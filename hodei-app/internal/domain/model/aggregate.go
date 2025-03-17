@@ -17,7 +17,7 @@ func (a AggregateID) String() string {
 type Metadata struct {
 	Name        string            `json:"name" validate:"required"`
 	Description string            `json:"description,omitempty"`
-	Labels      []string          `json:"labels,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
 	CreatedAt   time.Time         `json:"createdAt"`
 	UpdatedAt   time.Time         `json:"updatedAt"`
@@ -30,7 +30,7 @@ func NewMetadata(name, description string) Metadata {
 		Description: description,
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		Labels:      []string{},
+		Labels:      map[string]string{},
 		Annotations: map[string]string{},
 	}
 }

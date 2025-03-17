@@ -18,7 +18,7 @@ type ResourcePoolServiceImpl struct {
 	repo                ports.Repository[*model.ResourcePoolDef, model.AggregateID]
 	validator           *validator.Validate
 	resourcePoolFactory ports.ResourcePoolFactory
-	activePools         map[string]*ports.ResourcePool
+	activePools         map[string]ports.ResourcePool
 	mu                  sync.RWMutex
 }
 
@@ -40,7 +40,7 @@ func NewResourcePoolService(
 		repo:                repo,
 		resourcePoolFactory: factory,
 		validator:           validate,
-		activePools:         make(map[string]*ports.ResourcePool),
+		activePools:         make(map[string]ports.ResourcePool),
 	}
 }
 
@@ -48,7 +48,7 @@ func NewResourcePoolService(
 func (s *ResourcePoolServiceImpl) RegisterActivePool(pool ports.ResourcePool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.activePools[pool.GetID()] = &pool
+	s.activePools[pool.GetID()] = pool
 	log.Printf("ResourcePool %s registrado como activo", pool.GetID())
 }
 
@@ -65,7 +65,7 @@ func (s *ResourcePoolServiceImpl) UnregisterActivePool(id string) error {
 }
 
 // GetActivePool obtiene un pool activo por su ID
-func (s *ResourcePoolServiceImpl) GetActivePool(id string) (*ports.ResourcePool, bool) {
+func (s *ResourcePoolServiceImpl) GetActivePool(id string) (ports.ResourcePool, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	pool, exists := s.activePools[id]
@@ -73,10 +73,10 @@ func (s *ResourcePoolServiceImpl) GetActivePool(id string) (*ports.ResourcePool,
 }
 
 // ListActivePools lista todos los pools activos
-func (s *ResourcePoolServiceImpl) ListActivePools() []*ports.ResourcePool {
+func (s *ResourcePoolServiceImpl) ListActivePools() []ports.ResourcePool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	pools := make([]*ports.ResourcePool, 0, len(s.activePools))
+	pools := make([]ports.ResourcePool, 0, len(s.activePools))
 	for _, pool := range s.activePools {
 		pools = append(pools, pool)
 	}
@@ -161,7 +161,7 @@ func (s *ResourcePoolServiceImpl) CreateAllResourcePools(ctx context.Context) er
 }
 
 // CreateResourcePoolInstance crea una instancia de ResourcePool a partir de su definición
-func (s *ResourcePoolServiceImpl) CreateResourcePoolInstance(ctx context.Context, id model.AggregateID) (*ports.ResourcePool, error) {
+func (s *ResourcePoolServiceImpl) CreateResourcePoolInstance(ctx context.Context, id model.AggregateID) (ports.ResourcePool, error) {
 	// Primero verifica si ya existe un pool activo
 	if pool, exists := s.GetActivePool(string(id)); exists {
 		return pool, nil
@@ -208,7 +208,7 @@ func (s *ResourcePoolServiceImpl) CreateResourcePoolInstance(ctx context.Context
 		return nil, fmt.Errorf("pool instance created but failed to update status: %w", err)
 	}
 
-	return &pool, nil
+	return pool, nil
 }
 
 func (s *ResourcePoolServiceImpl) UpdateResourcePool(ctx context.Context, id model.AggregateID, updates *model.ResourcePoolDef) error {

@@ -25,13 +25,13 @@ func (f *WorkerInstanceFactoryImpl) Create(task model.TaskExecution, client port
 	log.Printf("[factory] Creating WorkerInstance w/ type=%s", task.WorkerDef.Spec.Type)
 	switch task.WorkerDef.Spec.Type {
 	case "docker":
-		log.Printf("[factory] Creating DockerWorker w/ image=%s", task.WorkerDef.Spec.Image)
+		log.Printf("[factory] Creating DockerWorker w/ image=%s", task.WorkerDef.Spec.Containers[0].Image)
 
 		// Tomamos la config específica de Docker
 
 		return NewDockerWorker(task, f.grpcConfig, client)
 	case "k8s", "kubernetes":
-		log.Printf("[factory] Creating K8sWorker w/ image=%s", task.WorkerDef.Spec.Image)
+		log.Printf("[factory] Creating K8sWorker w/ image=%s", task.WorkerDef.Spec.Containers[0].Image)
 
 		return NewK8sWorker(task, f.grpcConfig, client)
 	default:

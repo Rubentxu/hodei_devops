@@ -216,14 +216,14 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 	}
 	d.sendLogsMessage(outputChan, fmt.Sprintf("Docker Config: %+v", d.dockerCfg))
 
-	// Guardamos el endpoint
-	d.endpoint = &model.WorkerEndpoint{
+	// Guardamos el connectionInfo
+	d.endpoint = &model.ConnectionInfo{
 		WorkerID: d.execution.Metadata.Name,
 		Address:  hostAddress,
 		Port:     hostPort,
 	}
 
-	log.Printf("Endpoint configurado: %+v", d.endpoint)
+	log.Printf("ConnectionInfo configurado: %+v", d.endpoint)
 	d.sendLogsMessage(outputChan, fmt.Sprintf("Contenedor accesible en %s:%s", hostAddress, hostPort))
 
 	return d.endpoint, nil
@@ -348,7 +348,7 @@ func (d *DockerWorker) StartMonitoring(ctx context.Context, checkInterval int64,
 
 func (d *DockerWorker) createGRPCClient() (*grpc.RPSClient, error) {
 	if d.endpoint == nil {
-		return nil, fmt.Errorf("endpoint no inicializado")
+		return nil, fmt.Errorf("connectionInfo no inicializado")
 	}
 
 	// Configuración que coincide con el servidor remote_worker

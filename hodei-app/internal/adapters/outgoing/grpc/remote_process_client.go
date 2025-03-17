@@ -90,7 +90,7 @@ func (c *RPSClient) StartProcess(
 	ctx context.Context,
 	processID string,
 	command []string,
-	env map[string]string,
+	env []model.EnvVar,
 	workingDir string,
 	outputChan chan<- model.ProcessOutput) error {
 
@@ -101,11 +101,15 @@ func (c *RPSClient) StartProcess(
 		return fmt.Errorf("error creating stream: %v", err)
 	}
 
+	envMap := make(map[string]string)
+	for _, e := range env {
+		envMap[e.Name] = e.Value
+	}
 	// Enviar la solicitud inicial
 	err = stream.Send(&remote_worker.ProcessStartRequest{
 		ProcessId:        processID,
 		Command:          command,
-		Environment:      env,
+		Environment:      envMap,
 		WorkingDirectory: workingDir,
 	})
 	if err != nil {

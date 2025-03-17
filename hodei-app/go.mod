@@ -9,8 +9,6 @@ require (
 	github.com/golang-jwt/jwt v3.2.2+incompatible
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/pocketbase/dbx v1.11.0
-	github.com/pocketbase/pocketbase v0.25.7
 	github.com/swaggo/http-swagger v1.3.4
 	github.com/swaggo/swag v1.16.4
 	google.golang.org/grpc v1.70.0

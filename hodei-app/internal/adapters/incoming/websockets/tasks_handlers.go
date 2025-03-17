@@ -48,7 +48,7 @@ package websockets
 //
 //// HandleConnection godoc
 //// @Summary Gestiona conexiones WebSocket para tareas
-//// @Description Endpoint WebSocket para gestionar tareas en tiempo real. Soporta las siguientes acciones:
+//// @Description ConnectionInfo WebSocket para gestionar tareas en tiempo real. Soporta las siguientes acciones:
 //// @Description - create_task: Crear una nueva tarea
 //// @Description - stop_task: Detener una tarea en ejecución
 //// @Description - list_tasks: Listar todas las tareas
@@ -332,7 +332,7 @@ package websockets
 //	})
 //}
 //
-//// @Summary Endpoint de health check
+//// @Summary ConnectionInfo de health check
 //// @Description Retorna el estado de salud del servicio
 //// @Tags health
 //// @Accept json

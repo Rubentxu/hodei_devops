@@ -130,12 +130,12 @@ func getBoolEnv(key string, defaultValue bool) bool {
 	return strValue == "true" || strValue == "1"
 }
 
-// Helper para parsear duraciones desde variables de entorno
-func getDurationEnv(key string, defaultVal time.Duration) time.Duration {
-	if val := os.Getenv(key); val != "" {
-		if d, err := time.ParseDuration(val); err == nil {
-			return d
+// getDurationFromEnv parses a duration from environment variables or returns the default value
+func getDurationFromEnv(key string, defaultValue time.Duration) time.Duration {
+	if durationStr, exists := os.LookupEnv(key); exists {
+		if duration, err := time.ParseDuration(durationStr); err == nil {
+			return duration
 		}
 	}
-	return defaultVal
+	return defaultValue
 }

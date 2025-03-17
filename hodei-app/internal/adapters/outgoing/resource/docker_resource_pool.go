@@ -247,7 +247,7 @@ func (d *DockerResourcePool) calculateCPUUsage(containerID string, currentStats 
 	return 0, 0, 0
 }
 
-func (d *DockerResourcePool) Matches(definition model.WorkerDefinition) bool {
+func (d *DockerResourcePool) Matches(definition *model.WorkerDefinition) bool {
 	if definition.Spec.Type != "docker" {
 		return false
 	}

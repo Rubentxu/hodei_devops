@@ -84,11 +84,11 @@ func (k *KubernetesResourcePool) monitorTask(ctx context.Context, taskExecution 
 				taskExecution.Status.State = model.Completed
 				if svc, err := k8sClient.CoreV1().Services(namespace).Get(ctx, taskExecution.WorkerDef.ID.String()+"-service", metav1.GetOptions{}); err == nil {
 					for _, port := range svc.Spec.Ports {
-						taskExecution.Status.Endpoint.Port = fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, port.Port)
+						taskExecution.Status.ConnectionInfo.Address = fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, port.Port)
 					}
-					taskExecution.Status.Endpoint = &model.WorkerEndpoint{
-						Address: svc.Spec.ClusterIP,                        // ClusterIP del servicio
-						Port:    fmt.Sprintf("%d", svc.Spec.Ports[0].Port), // Primer puerto (simplificación)
+					taskExecution.Status.ConnectionInfo = &model.ConnectionInfo{
+						Address:  fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, svc.Spec.Ports[0].Port), // Primer puerto (simplificación)
+						Protocol: "http",
 					}
 				}
 				return
@@ -101,12 +101,12 @@ func (k *KubernetesResourcePool) monitorTask(ctx context.Context, taskExecution 
 				taskExecution.Status.State = model.Running
 				for _, container := range pod.Spec.Containers {
 					for _, port := range container.Ports {
-						taskExecution.Status.Endpoint.Port = fmt.Sprintf("%s:%d", pod.Status.PodIP, port.ContainerPort)
+						taskExecution.Status.ConnectionInfo.Address = fmt.Sprintf("%s:%d", pod.Status.PodIP, port.ContainerPort)
 					}
 				}
-				taskExecution.Status.Endpoint = &model.WorkerEndpoint{
-					Address: pod.Status.PodIP,                                                 // IP del Pod
-					Port:    fmt.Sprintf("%d", pod.Spec.Containers[0].Ports[0].ContainerPort), // Primer puerto del primer contenedor (simplificación)
+				taskExecution.Status.ConnectionInfo = &model.ConnectionInfo{
+					Address:  fmt.Sprintf("%s:%d", pod.Status.PodIP, pod.Spec.Containers[0].Ports[0].ContainerPort), // Primer puerto (simplificación)
+					Protocol: "http",
 				}
 			}
 		}
@@ -199,7 +199,7 @@ func (k *KubernetesResourcePool) aggregateNodeStats(stats *model.Stats, nodes *v
 	}
 }
 
-func (k *KubernetesResourcePool) Matches(definition model.WorkerDefinition) bool {
+func (k *KubernetesResourcePool) Matches(definition *model.WorkerDefinition) bool {
 	// Implementación básica.  ¡Ajusta esto a tu WorkerSpec real!
 	// Por ejemplo, podrías verificar si hay recursos suficientes,
 	// o si el namespace existe.

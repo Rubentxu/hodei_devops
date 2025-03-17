@@ -89,11 +89,11 @@ func (m *MockIDGenerator) NewID() model.AggregateID {
 	return args.Get(0).(model.AggregateID)
 }
 
-func createTestWorkerDef(name string, status model.HealthStatus) *model.WorkerDefinition {
+func createTestWorkerDef(name string, state model.WorkerState) *model.WorkerDefinition {
 	now := time.Now().UTC()
 	return &model.WorkerDefinition{
 		Metadata: model.Metadata{
-			Name:        name, // Usar el nombre proporcionado
+			Name:        name,
 			Description: "Descripción de prueba",
 			Labels:      []string{"test", "worker"},
 			Annotations: map[string]string{"env": "test"},
@@ -101,18 +101,59 @@ func createTestWorkerDef(name string, status model.HealthStatus) *model.WorkerDe
 			UpdatedAt:   now,
 		},
 		Spec: model.WorkerSpec{
-			Type:       model.DockerInstance,
-			Image:      "test-image:latest",
-			Env:        map[string]string{"TEST": "value"},
-			WorkingDir: "/app",
-			Resources: model.ResourceRequirements{
-				CPU:    1.0,
-				Memory: "1Gi",
+			Containers: []model.Container{
+				{
+					Name:    "test-container",
+					Image:   "test-image:latest",
+					Command: []string{"/bin/sh"},
+					Args:    []string{"-c", "echo hello"},
+					Env: []model.EnvVar{
+						{
+							Name:  "TEST",
+							Value: "value",
+						},
+					},
+					Resources: model.ResourceRequirements{
+						CPU:    1.0,
+						Memory: "1Gi",
+					},
+					Ports: []model.PortMapping{
+						{
+							ContainerPort: 8080,
+							Protocol:      "TCP",
+						},
+					},
+					WorkingDir:      "/app",
+					ImagePullPolicy: model.ImagePullIfNotPresent,
+				},
 			},
-			Labels: map[string]string{"app": "test"},
+			RestartPolicy: model.RestartPolicyAlways,
+			NodeSelector: map[string]string{
+				"env": "test",
+			},
 		},
 		Status: model.WorkerStatus{
-			Status: status,
+			State:     state,
+			Message:   "Test status message",
+			HostIP:    "192.168.1.1",
+			WorkerIP:  "10.0.0.1",
+			QOSClass:  "Guaranteed",
+			StartTime: &now,
+			ContainerStatuses: []model.ContainerStatus{
+				{
+					Name:         "test-container",
+					Ready:        true,
+					RestartCount: 0,
+					State: model.ContainerState{
+						Running: &model.ContainerStateRunning{
+							StartedAt: now,
+						},
+					},
+					Image:       "test-image:latest",
+					ImageID:     "sha256:test123",
+					ContainerID: "docker://abc123",
+				},
+			},
 		},
 	}
 }
@@ -130,12 +171,12 @@ func TestWorkerDefinitionService_CrearWorkerDefinition(t *testing.T) {
 
 	t.Run("Crear worker válido", func(t *testing.T) {
 		// Preparar
-		workerDef := createTestWorkerDef("Worker1", model.UNKNOWN)
+		workerDef := createTestWorkerDef("Worker1", model.WorkerStateUnknown)
 		workerDef.ID = "" // Sin ID para que se genere uno nuevo
 
 		expectedWorker := *workerDef
 		expectedWorker.ID = "new-id"
-		expectedWorker.Status.Status = model.PENDING
+		expectedWorker.Status.State = model.WorkerStatePending
 
 		mockRepo.On("Save", ctx, mock.AnythingOfType("*model.WorkerDefinition")).
 			Return(&expectedWorker, nil).Once()
@@ -146,14 +187,14 @@ func TestWorkerDefinitionService_CrearWorkerDefinition(t *testing.T) {
 		// Verificar
 		require.NoError(t, err)
 		assert.Equal(t, model.AggregateID("new-id"), result.ID)
-		assert.Equal(t, model.PENDING, result.Status.Status)
+		assert.Equal(t, model.WorkerStatePending, result.Status.State)
 		mockRepo.AssertExpectations(t)
 	})
 
 	t.Run("Error al crear worker inválido", func(t *testing.T) {
 		// Preparar
 		ctx := context.Background()
-		invalidWorker := createTestWorkerDef("", model.PENDING)
+		invalidWorker := createTestWorkerDef("", model.WorkerStatePending)
 		invalidWorker.Metadata.Name = "" // Asegurarse de que el nombre esté vacío
 
 		// No configuramos Mock.On("Save") porque esperamos que falle en la validación
@@ -169,7 +210,7 @@ func TestWorkerDefinitionService_CrearWorkerDefinition(t *testing.T) {
 
 	t.Run("Error en repositorio", func(t *testing.T) {
 		// Preparar
-		workerDef := createTestWorkerDef("Worker3", model.PENDING)
+		workerDef := createTestWorkerDef("Worker3", model.WorkerStatePending)
 		repoError := errors.New("error de base de datos")
 
 		mockRepo.On("Save", ctx, mock.AnythingOfType("*model.WorkerDefinition")).
@@ -195,7 +236,7 @@ func TestWorkerDefinitionService_ObtenerWorkerDefinition(t *testing.T) {
 	t.Run("Obtener worker existente", func(t *testing.T) {
 		// Preparar
 		id := model.AggregateID("existing-id")
-		expectedWorker := createTestWorkerDef("Worker1", model.HEALTHY)
+		expectedWorker := createTestWorkerDef("Worker1", model.WorkerStateRunning)
 		expectedWorker.ID = id
 
 		mockRepo.On("FindByID", ctx, id).Return(expectedWorker, nil).Once()
@@ -235,10 +276,10 @@ func TestWorkerDefinitionService_ActualizarWorkerDefinition(t *testing.T) {
 	t.Run("Actualizar worker existente", func(t *testing.T) {
 		// Preparar
 		id := model.AggregateID("existing-id")
-		existingWorker := createTestWorkerDef("WorkerOriginal", model.HEALTHY)
+		existingWorker := createTestWorkerDef("WorkerOriginal", model.WorkerStateRunning)
 		existingWorker.ID = id
 
-		updates := createTestWorkerDef("WorkerActualizado", model.HEALTHY)
+		updates := createTestWorkerDef("WorkerActualizado", model.WorkerStateRunning)
 		updates.ID = id
 
 		mockRepo.On("FindByID", ctx, id).Return(existingWorker, nil).Once()
@@ -255,7 +296,7 @@ func TestWorkerDefinitionService_ActualizarWorkerDefinition(t *testing.T) {
 	t.Run("Worker no encontrado", func(t *testing.T) {
 		// Preparar
 		id := model.AggregateID("non-existing")
-		updates := createTestWorkerDef("Worker", model.HEALTHY)
+		updates := createTestWorkerDef("Worker", model.WorkerStateRunning)
 		updates.ID = id
 
 		mockRepo.On("FindByID", ctx, id).Return(nil, errors.New("no encontrado")).Once()
@@ -326,8 +367,8 @@ func TestWorkerDefinitionService_ListarWorkerDefinitions(t *testing.T) {
 		}
 
 		workers := []*model.WorkerDefinition{
-			createTestWorkerDef("Worker1", model.HEALTHY),
-			createTestWorkerDef("Worker2", model.PENDING),
+			createTestWorkerDef("Worker1", model.WorkerStateRunning),
+			createTestWorkerDef("Worker2", model.WorkerStatePending),
 		}
 
 		expectedResult := ports.SearchResult[*model.WorkerDefinition]{
@@ -361,16 +402,16 @@ func TestWorkerDefinitionService_ActualizarEstadoWorker(t *testing.T) {
 	t.Run("Actualizar estado correctamente", func(t *testing.T) {
 		// Preparar
 		id := model.AggregateID("worker-id")
-		existingWorker := createTestWorkerDef("Worker", model.PENDING)
+		existingWorker := createTestWorkerDef("Worker", model.WorkerStatePending)
 
 		mockRepo.On("FindByID", ctx, id).Return(existingWorker, nil).Once()
 		mockRepo.On("Update", ctx, mock.AnythingOfType("*model.WorkerDefinition")).Run(func(args mock.Arguments) {
 			updatedWorker := args.Get(1).(*model.WorkerDefinition)
-			assert.Equal(t, model.HEALTHY, updatedWorker.Status.Status)
+			assert.Equal(t, model.WorkerStateRunning, updatedWorker.Status.State)
 		}).Return(nil).Once()
 
 		// Ejecutar
-		err := service.UpdateWorkerStatus(ctx, id, model.HEALTHY)
+		err := service.UpdateWorkerStatus(ctx, id, model.WorkerStateRunning)
 
 		// Verificar
 		require.NoError(t, err)
@@ -384,40 +425,12 @@ func TestWorkerDefinitionService_ActualizarEstadoWorker(t *testing.T) {
 		mockRepo.On("FindByID", ctx, id).Return(nil, errors.New("no encontrado")).Once()
 
 		// Ejecutar
-		err := service.UpdateWorkerStatus(ctx, id, model.HEALTHY)
+		err := service.UpdateWorkerStatus(ctx, id, model.WorkerStateRunning)
 
 		// Verificar
 		require.Error(t, err)
 		assert.Equal(t, usecases.ErrWorkerNotFound, err)
 		mockRepo.AssertNotCalled(t, "Update")
-	})
-}
-
-func TestWorkerDefinitionService_AsociarTemplate(t *testing.T) {
-	// Preparar
-	mockRepo := new(MockRepository)
-	mockIDGen := new(MockIDGenerator)
-	service := usecases.NewWorkerDefinitionService(mockRepo, mockIDGen)
-	ctx := context.Background()
-
-	t.Run("Asociar template correctamente", func(t *testing.T) {
-		// Preparar
-		workerID := model.AggregateID("worker-id")
-		templateID := "template-123"
-		existingWorker := createTestWorkerDef("Worker", model.HEALTHY)
-
-		mockRepo.On("FindByID", ctx, workerID).Return(existingWorker, nil).Once()
-		mockRepo.On("Update", ctx, mock.AnythingOfType("*model.WorkerDefinition")).Run(func(args mock.Arguments) {
-			updatedWorker := args.Get(1).(*model.WorkerDefinition)
-			assert.Equal(t, templateID, updatedWorker.Spec.TemplateID)
-		}).Return(nil).Once()
-
-		// Ejecutar
-		err := service.AssignTemplate(ctx, workerID, templateID)
-
-		// Verificar
-		require.NoError(t, err)
-		mockRepo.AssertExpectations(t)
 	})
 }
 
@@ -434,15 +447,15 @@ func TestWorkerDefinitionService_CrearWorkerDefinitionsEnLote(t *testing.T) {
 	t.Run("Crear lote correctamente", func(t *testing.T) {
 		// Preparar
 		workers := []*model.WorkerDefinition{
-			createTestWorkerDef("Worker1", model.PENDING),
-			createTestWorkerDef("Worker2", model.PENDING),
+			createTestWorkerDef("Worker1", model.WorkerStatePending),
+			createTestWorkerDef("Worker2", model.WorkerStatePending),
 		}
 		workers[0].ID = "" // Sin ID para probar la generación
 		workers[1].ID = ""
 
 		expectedWorkers := []*model.WorkerDefinition{
-			createTestWorkerDef("Worker1", model.PENDING),
-			createTestWorkerDef("Worker2", model.PENDING),
+			createTestWorkerDef("Worker1", model.WorkerStatePending),
+			createTestWorkerDef("Worker2", model.WorkerStatePending),
 		}
 		expectedWorkers[0].ID = "batch-id-1"
 		expectedWorkers[1].ID = "batch-id-2"
@@ -463,8 +476,8 @@ func TestWorkerDefinitionService_CrearWorkerDefinitionsEnLote(t *testing.T) {
 	t.Run("Error de validación en lote", func(t *testing.T) {
 		// Preparar - worker inválido (sin nombre)
 		workers := []*model.WorkerDefinition{
-			createTestWorkerDef("Worker1", model.PENDING),
-			createTestWorkerDef("", model.PENDING), // Worker inválido
+			createTestWorkerDef("Worker1", model.WorkerStatePending),
+			createTestWorkerDef("", model.WorkerStatePending), // Worker inválido
 		}
 		workers[1].Metadata.Name = "" // Asegurar que el nombre está vacío
 
@@ -530,7 +543,7 @@ func TestWorkerDefinitionService_FindWorkerDefinitionByName(t *testing.T) {
 	t.Run("Encontrar worker por nombre existente", func(t *testing.T) {
 		// Preparar
 		workerName := "TestWorker"
-		expectedWorker := createTestWorkerDef(workerName, model.HEALTHY)
+		expectedWorker := createTestWorkerDef(workerName, model.WorkerStateRunning)
 		expectedResult := ports.SearchResult[*model.WorkerDefinition]{
 			Content:       []*model.WorkerDefinition{expectedWorker},
 			TotalElements: 1,

@@ -27,7 +27,7 @@ type ResourcePoolDocument struct {
 type ResourcePoolMeta struct {
 	Name        string            `bson:"name"`
 	Description string            `bson:"description"`
-	Labels      []string          `bson:"labels"`
+	Labels      map[string]string `bson:"labels"`
 	Annotations map[string]string `bson:"annotations"`
 	CreatedAt   time.Time         `bson:"created_at"`
 	UpdatedAt   time.Time         `bson:"updated_at"`

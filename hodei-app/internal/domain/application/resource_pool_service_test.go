@@ -266,13 +266,13 @@ func TestResourcePoolService(t *testing.T) {
 			pool, exists := service.GetActivePool("test-pool")
 			require.True(t, exists)
 			assert.NotNil(t, pool)
-			assert.Equal(t, "test-pool", (*pool).GetID())
+			assert.Equal(t, "test-pool", pool.GetID())
 		})
 
 		t.Run("List Active Pools", func(t *testing.T) {
 			pools := service.ListActivePools()
 			require.Len(t, pools, 1)
-			assert.Equal(t, "test-pool", (*pools[0]).GetID())
+			assert.Equal(t, "test-pool", pools[0].GetID())
 		})
 
 		t.Run("Unregister Active Pool", func(t *testing.T) {
@@ -302,7 +302,7 @@ func TestResourcePoolService(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.NotNil(t, instance)
-			assert.Equal(t, pool.Spec.PoolID, (*instance).GetID())
+			assert.Equal(t, pool.Spec.PoolID, instance.GetID())
 		})
 
 		t.Run("Return Existing Instance", func(t *testing.T) {
@@ -317,7 +317,7 @@ func TestResourcePoolService(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.NotNil(t, instance)
-			assert.Equal(t, pool.Spec.PoolID, (*instance).GetID())
+			assert.Equal(t, pool.Spec.PoolID, instance.GetID())
 			mockRepo.AssertNotCalled(t, "FindByID")
 			mockFactory.AssertNotCalled(t, "CreateResourcePool")
 		})
@@ -424,7 +424,7 @@ func TestResourcePoolService(t *testing.T) {
 
 			activePools := service.ListActivePools()
 			assert.Len(t, activePools, 1)
-			assert.Equal(t, pools[0].Spec.PoolID, (*activePools[0]).GetID())
+			assert.Equal(t, pools[0].Spec.PoolID, activePools[0].GetID())
 
 			mockRepo.AssertExpectations(t)
 			mockFactory.AssertExpectations(t)

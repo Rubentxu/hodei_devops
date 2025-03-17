@@ -25,11 +25,11 @@ func (t TaskExecution) GetID() AggregateID {
 }
 
 type ExecutionStatus struct {
-	Endpoint  *WorkerEndpoint
-	State     TaskState `json:"state"`
-	StartTime time.Time `json:"start_time,omitempty"`
-	EndTime   time.Time `json:"end_time,omitempty"`
-	Message   string    `json:"message"`
+	ConnectionInfo *ConnectionInfo
+	State          TaskState `json:"state"`
+	StartTime      time.Time `json:"start_time,omitempty"`
+	EndTime        time.Time `json:"end_time,omitempty"`
+	Message        string    `json:"message"`
 }
 
 type TaskEvent struct {

@@ -16,14 +16,10 @@ const (
 )
 
 type WorkerDocument struct {
-	ID        string         `bson:"_id"`
-	Metadata  WorkerMeta     `bson:"metadata"`
-	Spec      WorkerSpecDB   `bson:"spec"`
-	Status    WorkerStatusDB `bson:"status"`
-	Owner     string         `bson:"owner"`
-	TenantID  string         `bson:"tenant_id"`
-	CreatedAt time.Time      `bson:"created_at"`
-	UpdatedAt time.Time      `bson:"updated_at"`
+	ID       string         `bson:"_id"`
+	Metadata WorkerMeta     `bson:"metadata"`
+	Spec     WorkerSpecDB   `bson:"spec"`
+	Status   WorkerStatusDB `bson:"status"`
 }
 
 type WorkerMeta struct {
@@ -36,21 +32,30 @@ type WorkerMeta struct {
 }
 
 type WorkerSpecDB struct {
-	Type        string                 `bson:"instance_type"`
-	Image       string                 `bson:"image,omitempty"`
-	Env         map[string]string      `bson:"env,omitempty"`
-	WorkingDir  string                 `bson:"working_dir,omitempty"`
-	Resources   ResourceRequirementsDB `bson:"resources,omitempty"`
-	Volumes     []VolumeMountDB        `bson:"volumes,omitempty"`
-	Ports       []PortMappingDB        `bson:"ports,omitempty"`
-	Labels      map[string]string      `bson:"labels,omitempty"`
-	HealthCheck *HealthCheckConfigDB   `bson:"health_check,omitempty"`
-	TemplateID  string                 `bson:"template_id,omitempty"`
+	Containers    []ContainerDB     `bson:"containers"`
+	Volumes       []VolumeDB        `bson:"volumes,omitempty"`
+	RestartPolicy string            `bson:"restartPolicy,omitempty"`
+	NodeSelector  map[string]string `bson:"nodeSelector,omitempty"`
 }
 
-type WorkerStatusDB struct {
-	InstanceID string `bson:"instance_id,omitempty"`
-	Status     string `bson:"status,omitempty"`
+type ContainerDB struct {
+	Name            string                 `bson:"name"`
+	Image           string                 `bson:"image"`
+	Command         []string               `bson:"command,omitempty"`
+	Args            []string               `bson:"args,omitempty"`
+	Env             []EnvVarDB             `bson:"env,omitempty"`
+	Resources       ResourceRequirementsDB `bson:"resources"`
+	Ports           []PortMappingDB        `bson:"ports,omitempty"`
+	VolumeMounts    []VolumeMountDB        `bson:"volumeMounts,omitempty"`
+	LivenessProbe   *ProbeDB               `bson:"livenessProbe,omitempty"`
+	ReadinessProbe  *ProbeDB               `bson:"readinessProbe,omitempty"`
+	ImagePullPolicy string                 `bson:"imagePullPolicy,omitempty"`
+	WorkingDir      string                 `bson:"workingDir,omitempty"`
+}
+
+type EnvVarDB struct {
+	Name  string `bson:"name"`
+	Value string `bson:"value,omitempty"`
 }
 
 type ResourceRequirementsDB struct {
@@ -59,22 +64,112 @@ type ResourceRequirementsDB struct {
 }
 
 type VolumeMountDB struct {
-	HostPath      string `bson:"host_path"`
-	ContainerPath string `bson:"container_path"`
-	ReadOnly      bool   `bson:"read_only"`
+	Name      string `bson:"name"`
+	MountPath string `bson:"mountPath"`
+	ReadOnly  bool   `bson:"readOnly,omitempty"`
+}
+
+type VolumeDB struct {
+	Name     string            `bson:"name"`
+	EmptyDir *EmptyDirVolumeDB `bson:"emptyDir,omitempty"`
+	HostPath *HostPathVolumeDB `bson:"hostPath,omitempty"`
+}
+
+type EmptyDirVolumeDB struct {
+	Medium    string `bson:"medium,omitempty"`
+	SizeLimit string `bson:"sizeLimit,omitempty"`
+}
+
+type HostPathVolumeDB struct {
+	Path string `bson:"path"`
+	Type string `bson:"type,omitempty"`
 }
 
 type PortMappingDB struct {
-	HostPort      int    `bson:"host_port"`
-	ContainerPort int    `bson:"container_port"`
+	ContainerPort int    `bson:"containerPort"`
 	Protocol      string `bson:"protocol"`
+	HostPort      int    `bson:"hostPort,omitempty"`
+	HostIP        string `bson:"hostIP,omitempty"`
 }
 
-type HealthCheckConfigDB struct {
-	Type     string `bson:"type"`
-	Endpoint string `bson:"endpoint"`
-	Interval int64  `bson:"interval"`
-	Timeout  int64  `bson:"timeout"`
+type ProbeDB struct {
+	Exec                *ExecActionDB      `bson:"exec,omitempty"`
+	HTTPGet             *HTTPGetActionDB   `bson:"httpGet,omitempty"`
+	TCPSocket           *TCPSocketActionDB `bson:"tcpSocket,omitempty"`
+	InitialDelaySeconds int32              `bson:"initialDelaySeconds,omitempty"`
+	TimeoutSeconds      int32              `bson:"timeoutSeconds,omitempty"`
+	PeriodSeconds       int32              `bson:"periodSeconds,omitempty"`
+	SuccessThreshold    int32              `bson:"successThreshold,omitempty"`
+	FailureThreshold    int32              `bson:"failureThreshold,omitempty"`
+}
+
+type ExecActionDB struct {
+	Command []string `bson:"command,omitempty"`
+}
+
+type HTTPGetActionDB struct {
+	Path        string         `bson:"path,omitempty"`
+	Port        int            `bson:"port"`
+	Host        string         `bson:"host,omitempty"`
+	Scheme      string         `bson:"scheme,omitempty"`
+	HTTPHeaders []HTTPHeaderDB `bson:"httpHeaders,omitempty"`
+}
+
+type HTTPHeaderDB struct {
+	Name  string `bson:"name"`
+	Value string `bson:"value"`
+}
+
+type TCPSocketActionDB struct {
+	Port int    `bson:"port"`
+	Host string `bson:"host,omitempty"`
+}
+
+type WorkerStatusDB struct {
+	InstanceID        string              `bson:"instanceId,omitempty"`
+	State             string              `bson:"state,omitempty"`
+	Message           string              `bson:"message,omitempty"`
+	Reason            string              `bson:"reason,omitempty"`
+	HostIP            string              `bson:"hostIP,omitempty"`
+	WorkerIP          string              `bson:"workerIP,omitempty"`
+	StartTime         *time.Time          `bson:"startTime,omitempty"`
+	ContainerStatuses []ContainerStatusDB `bson:"containerStatuses,omitempty"`
+	QOSClass          string              `bson:"qosClass,omitempty"`
+}
+
+type ContainerStatusDB struct {
+	Name         string           `bson:"name"`
+	Ready        bool             `bson:"ready"`
+	RestartCount int32            `bson:"restartCount"`
+	State        ContainerStateDB `bson:"state,omitempty"`
+	Image        string           `bson:"image"`
+	ImageID      string           `bson:"imageID"`
+	ContainerID  string           `bson:"containerID,omitempty"`
+}
+
+type ContainerStateDB struct {
+	Waiting    *ContainerStateWaitingDB    `bson:"waiting,omitempty"`
+	Running    *ContainerStateRunningDB    `bson:"running,omitempty"`
+	Terminated *ContainerStateTerminatedDB `bson:"terminated,omitempty"`
+}
+
+type ContainerStateWaitingDB struct {
+	Reason  string `bson:"reason,omitempty"`
+	Message string `bson:"message,omitempty"`
+}
+
+type ContainerStateRunningDB struct {
+	StartedAt time.Time `bson:"startedAt,omitempty"`
+}
+
+type ContainerStateTerminatedDB struct {
+	ExitCode    int32     `bson:"exitCode"`
+	Signal      int32     `bson:"signal,omitempty"`
+	Reason      string    `bson:"reason,omitempty"`
+	Message     string    `bson:"message,omitempty"`
+	StartedAt   time.Time `bson:"startedAt,omitempty"`
+	FinishedAt  time.Time `bson:"finishedAt,omitempty"`
+	ContainerID string    `bson:"containerID,omitempty"`
 }
 
 // WorkerDocumentConverter implementa la interfaz DocumentConverter para WorkerDefinition
@@ -92,34 +187,94 @@ func (c *WorkerDocumentConverter) GenerateID() model.AggregateID {
 	return c.generator.NewID()
 }
 
-// ToModel convierte un documento de MongoDB a un modelo de dominio WorkerDefinition
 func (c *WorkerDocumentConverter) ToModel(doc WorkerDocument) (*model.WorkerDefinition, error) {
-	volumes := make([]model.VolumeMount, len(doc.Spec.Volumes))
+	// Convertir contenedores
+	containers := make([]model.Container, len(doc.Spec.Containers))
+	for i, c := range doc.Spec.Containers {
+		// Convertir environment variables
+		env := make([]model.EnvVar, len(c.Env))
+		for j, e := range c.Env {
+			env[j] = model.EnvVar{
+				Name:  e.Name,
+				Value: e.Value,
+			}
+		}
+
+		// Convertir volume mounts
+		volumeMounts := make([]model.VolumeMount, len(c.VolumeMounts))
+		for j, vm := range c.VolumeMounts {
+			volumeMounts[j] = model.VolumeMount{
+				Name:      vm.Name,
+				MountPath: vm.MountPath,
+				ReadOnly:  vm.ReadOnly,
+			}
+		}
+
+		// Convertir port mappings
+		ports := make([]model.PortMapping, len(c.Ports))
+		for j, p := range c.Ports {
+			ports[j] = model.PortMapping{
+				ContainerPort: p.ContainerPort,
+				Protocol:      p.Protocol,
+				HostPort:      p.HostPort,
+				HostIP:        p.HostIP,
+			}
+		}
+
+		// Convertir probes
+		var livenessProbe, readinessProbe *model.Probe
+		if c.LivenessProbe != nil {
+			livenessProbe = convertProbeDBToModel(c.LivenessProbe)
+		}
+		if c.ReadinessProbe != nil {
+			readinessProbe = convertProbeDBToModel(c.ReadinessProbe)
+		}
+
+		containers[i] = model.Container{
+			Name:    c.Name,
+			Image:   c.Image,
+			Command: c.Command,
+			Args:    c.Args,
+			Env:     env,
+			Resources: model.ResourceRequirements{
+				CPU:    c.Resources.CPU,
+				Memory: c.Resources.Memory,
+			},
+			Ports:           ports,
+			VolumeMounts:    volumeMounts,
+			LivenessProbe:   livenessProbe,
+			ReadinessProbe:  readinessProbe,
+			ImagePullPolicy: model.ImagePullPolicy(c.ImagePullPolicy),
+			WorkingDir:      c.WorkingDir,
+		}
+	}
+
+	// Convertir volumes
+	volumes := make([]model.Volume, len(doc.Spec.Volumes))
 	for i, v := range doc.Spec.Volumes {
-		volumes[i] = model.VolumeMount{
-			HostPath:      v.HostPath,
-			ContainerPath: v.ContainerPath,
-			ReadOnly:      v.ReadOnly,
+		var volumeSource model.VolumeSource
+		if v.EmptyDir != nil {
+			volumeSource.EmptyDir = &model.EmptyDirVolumeSource{
+				Medium:    v.EmptyDir.Medium,
+				SizeLimit: v.EmptyDir.SizeLimit,
+			}
+		}
+		if v.HostPath != nil {
+			volumeSource.HostPath = &model.HostPathVolumeSource{
+				Path: v.HostPath.Path,
+				Type: model.HostPathType(v.HostPath.Type),
+			}
+		}
+		volumes[i] = model.Volume{
+			Name:         v.Name,
+			VolumeSource: volumeSource,
 		}
 	}
 
-	ports := make([]model.PortMapping, len(doc.Spec.Ports))
-	for i, p := range doc.Spec.Ports {
-		ports[i] = model.PortMapping{
-			HostPort:      p.HostPort,
-			ContainerPort: p.ContainerPort,
-			Protocol:      p.Protocol,
-		}
-	}
-
-	var healthCheck *model.HealthCheckConfig
-	if doc.Spec.HealthCheck != nil {
-		healthCheck = &model.HealthCheckConfig{
-			Type:     doc.Spec.HealthCheck.Type,
-			Endpoint: doc.Spec.HealthCheck.Endpoint,
-			Interval: time.Duration(doc.Spec.HealthCheck.Interval) * time.Millisecond,
-			Timeout:  time.Duration(doc.Spec.HealthCheck.Timeout) * time.Millisecond,
-		}
+	// Convertir container statuses
+	containerStatuses := make([]model.ContainerStatus, len(doc.Status.ContainerStatuses))
+	for i, cs := range doc.Status.ContainerStatuses {
+		containerStatuses[i] = convertContainerStatusDBToModel(cs)
 	}
 
 	return &model.WorkerDefinition{
@@ -133,60 +288,203 @@ func (c *WorkerDocumentConverter) ToModel(doc WorkerDocument) (*model.WorkerDefi
 			UpdatedAt:   doc.Metadata.UpdatedAt,
 		},
 		Spec: model.WorkerSpec{
-			Type:       model.InstanceType(doc.Spec.Type),
-			Image:      doc.Spec.Image,
-			Env:        doc.Spec.Env,
-			WorkingDir: doc.Spec.WorkingDir,
-			Resources: model.ResourceRequirements{
-				CPU:    doc.Spec.Resources.CPU,
-				Memory: doc.Spec.Resources.Memory,
-			},
-			Volumes:     volumes,
-			Ports:       ports,
-			Labels:      doc.Spec.Labels,
-			HealthCheck: healthCheck,
-			TemplateID:  doc.Spec.TemplateID,
+			Containers:    containers,
+			Volumes:       volumes,
+			RestartPolicy: model.RestartPolicy(doc.Spec.RestartPolicy),
+			NodeSelector:  doc.Spec.NodeSelector,
 		},
 		Status: model.WorkerStatus{
-			InstanceID: doc.Status.InstanceID,
-			Status:     parseHealthStatus(doc.Status.Status),
+			InstanceID:        doc.Status.InstanceID,
+			State:             model.WorkerState(doc.Status.State),
+			Message:           doc.Status.Message,
+			Reason:            doc.Status.Reason,
+			HostIP:            doc.Status.HostIP,
+			WorkerIP:          doc.Status.WorkerIP,
+			StartTime:         doc.Status.StartTime,
+			ContainerStatuses: containerStatuses,
+			QOSClass:          doc.Status.QOSClass,
 		},
 	}, nil
 }
 
-// ToDocument convierte un modelo de dominio WorkerDefinition a un documento de MongoDB
+// Función auxiliar para convertir Probe
+func convertProbeDBToModel(probeDB *ProbeDB) *model.Probe {
+	if probeDB == nil {
+		return nil
+	}
+
+	probe := &model.Probe{
+		InitialDelaySeconds: probeDB.InitialDelaySeconds,
+		TimeoutSeconds:      probeDB.TimeoutSeconds,
+		PeriodSeconds:       probeDB.PeriodSeconds,
+		SuccessThreshold:    probeDB.SuccessThreshold,
+		FailureThreshold:    probeDB.FailureThreshold,
+	}
+
+	if probeDB.Exec != nil {
+		probe.Exec = &model.ExecAction{
+			Command: probeDB.Exec.Command,
+		}
+	}
+
+	if probeDB.HTTPGet != nil {
+		headers := make([]model.HTTPHeader, len(probeDB.HTTPGet.HTTPHeaders))
+		for i, h := range probeDB.HTTPGet.HTTPHeaders {
+			headers[i] = model.HTTPHeader{
+				Name:  h.Name,
+				Value: h.Value,
+			}
+		}
+		probe.HTTPGet = &model.HTTPGetAction{
+			Path:        probeDB.HTTPGet.Path,
+			Port:        probeDB.HTTPGet.Port,
+			Host:        probeDB.HTTPGet.Host,
+			Scheme:      probeDB.HTTPGet.Scheme,
+			HTTPHeaders: headers,
+		}
+	}
+
+	if probeDB.TCPSocket != nil {
+		probe.TCPSocket = &model.TCPSocketAction{
+			Port: probeDB.TCPSocket.Port,
+			Host: probeDB.TCPSocket.Host,
+		}
+	}
+
+	return probe
+}
+
+// Función auxiliar para convertir ContainerStatus
+func convertContainerStatusDBToModel(statusDB ContainerStatusDB) model.ContainerStatus {
+	var state model.ContainerState
+
+	if statusDB.State.Waiting != nil {
+		state.Waiting = &model.ContainerStateWaiting{
+			Reason:  statusDB.State.Waiting.Reason,
+			Message: statusDB.State.Waiting.Message,
+		}
+	}
+
+	if statusDB.State.Running != nil {
+		state.Running = &model.ContainerStateRunning{
+			StartedAt: statusDB.State.Running.StartedAt,
+		}
+	}
+
+	if statusDB.State.Terminated != nil {
+		state.Terminated = &model.ContainerStateTerminated{
+			ExitCode:    statusDB.State.Terminated.ExitCode,
+			Signal:      statusDB.State.Terminated.Signal,
+			Reason:      statusDB.State.Terminated.Reason,
+			Message:     statusDB.State.Terminated.Message,
+			StartedAt:   statusDB.State.Terminated.StartedAt,
+			FinishedAt:  statusDB.State.Terminated.FinishedAt,
+			ContainerID: statusDB.State.Terminated.ContainerID,
+		}
+	}
+
+	return model.ContainerStatus{
+		Name:         statusDB.Name,
+		Ready:        statusDB.Ready,
+		RestartCount: statusDB.RestartCount,
+		State:        state,
+		Image:        statusDB.Image,
+		ImageID:      statusDB.ImageID,
+		ContainerID:  statusDB.ContainerID,
+	}
+}
+
 func (c *WorkerDocumentConverter) ToDocument(entity *model.WorkerDefinition, ctx context.Context) WorkerDocument {
 	if entity.ID == "" {
 		entity.ID = c.GenerateID()
 	}
-	now := time.Now().UTC()
 
-	volumes := make([]VolumeMountDB, len(entity.Spec.Volumes))
+	// Convertir contenedores
+	containers := make([]ContainerDB, len(entity.Spec.Containers))
+	for i, c := range entity.Spec.Containers {
+		// Convertir variables de entorno
+		env := make([]EnvVarDB, len(c.Env))
+		for j, e := range c.Env {
+			env[j] = EnvVarDB{
+				Name:  e.Name,
+				Value: e.Value,
+			}
+		}
+
+		// Convertir montajes de volúmenes
+		volumeMounts := make([]VolumeMountDB, len(c.VolumeMounts))
+		for j, vm := range c.VolumeMounts {
+			volumeMounts[j] = VolumeMountDB{
+				Name:      vm.Name,
+				MountPath: vm.MountPath,
+				ReadOnly:  vm.ReadOnly,
+			}
+		}
+
+		// Convertir mapeos de puertos
+		ports := make([]PortMappingDB, len(c.Ports))
+		for j, p := range c.Ports {
+			ports[j] = PortMappingDB{
+				ContainerPort: p.ContainerPort,
+				Protocol:      p.Protocol,
+				HostPort:      p.HostPort,
+				HostIP:        p.HostIP,
+			}
+		}
+
+		// Convertir probes
+		var livenessProbe, readinessProbe *ProbeDB
+		if c.LivenessProbe != nil {
+			livenessProbe = convertProbeToDB(c.LivenessProbe)
+		}
+		if c.ReadinessProbe != nil {
+			readinessProbe = convertProbeToDB(c.ReadinessProbe)
+		}
+
+		containers[i] = ContainerDB{
+			Name:    c.Name,
+			Image:   c.Image,
+			Command: c.Command,
+			Args:    c.Args,
+			Env:     env,
+			Resources: ResourceRequirementsDB{
+				CPU:    c.Resources.CPU,
+				Memory: c.Resources.Memory,
+			},
+			Ports:           ports,
+			VolumeMounts:    volumeMounts,
+			LivenessProbe:   livenessProbe,
+			ReadinessProbe:  readinessProbe,
+			ImagePullPolicy: string(c.ImagePullPolicy),
+			WorkingDir:      c.WorkingDir,
+		}
+	}
+
+	// Convertir volúmenes
+	volumes := make([]VolumeDB, len(entity.Spec.Volumes))
 	for i, v := range entity.Spec.Volumes {
-		volumes[i] = VolumeMountDB{
-			HostPath:      v.HostPath,
-			ContainerPath: v.ContainerPath,
-			ReadOnly:      v.ReadOnly,
+		volume := VolumeDB{
+			Name: v.Name,
 		}
+		if v.VolumeSource.EmptyDir != nil {
+			volume.EmptyDir = &EmptyDirVolumeDB{
+				Medium:    v.VolumeSource.EmptyDir.Medium,
+				SizeLimit: v.VolumeSource.EmptyDir.SizeLimit,
+			}
+		}
+		if v.VolumeSource.HostPath != nil {
+			volume.HostPath = &HostPathVolumeDB{
+				Path: v.VolumeSource.HostPath.Path,
+				Type: string(v.VolumeSource.HostPath.Type),
+			}
+		}
+		volumes[i] = volume
 	}
 
-	ports := make([]PortMappingDB, len(entity.Spec.Ports))
-	for i, p := range entity.Spec.Ports {
-		ports[i] = PortMappingDB{
-			HostPort:      p.HostPort,
-			ContainerPort: p.ContainerPort,
-			Protocol:      p.Protocol,
-		}
-	}
-
-	var healthCheck *HealthCheckConfigDB
-	if entity.Spec.HealthCheck != nil {
-		healthCheck = &HealthCheckConfigDB{
-			Type:     entity.Spec.HealthCheck.Type,
-			Endpoint: entity.Spec.HealthCheck.Endpoint,
-			Interval: int64(entity.Spec.HealthCheck.Interval.Milliseconds()),
-			Timeout:  int64(entity.Spec.HealthCheck.Timeout.Milliseconds()),
-		}
+	// Convertir estados de contenedores
+	containerStatuses := make([]ContainerStatusDB, len(entity.Status.ContainerStatuses))
+	for i, cs := range entity.Status.ContainerStatuses {
+		containerStatuses[i] = convertContainerStatusToDB(cs)
 	}
 
 	return WorkerDocument{
@@ -197,75 +495,112 @@ func (c *WorkerDocumentConverter) ToDocument(entity *model.WorkerDefinition, ctx
 			Labels:      entity.Metadata.Labels,
 			Annotations: entity.Metadata.Annotations,
 			CreatedAt:   entity.Metadata.CreatedAt,
-			UpdatedAt:   now,
+			UpdatedAt:   entity.Metadata.UpdatedAt,
 		},
 		Spec: WorkerSpecDB{
-			Type:       string(entity.Spec.Type),
-			Image:      entity.Spec.Image,
-			Env:        entity.Spec.Env,
-			WorkingDir: entity.Spec.WorkingDir,
-			Resources: ResourceRequirementsDB{
-				CPU:    entity.Spec.Resources.CPU,
-				Memory: entity.Spec.Resources.Memory,
-			},
-			Volumes:     volumes,
-			Ports:       ports,
-			Labels:      entity.Spec.Labels,
-			HealthCheck: healthCheck,
-			TemplateID:  entity.Spec.TemplateID,
+			Containers:    containers,
+			Volumes:       volumes,
+			RestartPolicy: string(entity.Spec.RestartPolicy),
+			NodeSelector:  entity.Spec.NodeSelector,
 		},
 		Status: WorkerStatusDB{
-			InstanceID: entity.Status.InstanceID,
-			Status:     healthStatusToString(entity.Status.Status),
+			InstanceID:        entity.Status.InstanceID,
+			State:             string(entity.Status.State),
+			Message:           entity.Status.Message,
+			Reason:            entity.Status.Reason,
+			HostIP:            entity.Status.HostIP,
+			WorkerIP:          entity.Status.WorkerIP,
+			StartTime:         entity.Status.StartTime,
+			ContainerStatuses: containerStatuses,
+			QOSClass:          entity.Status.QOSClass,
 		},
-		CreatedAt: entity.Metadata.CreatedAt,
-		UpdatedAt: now,
 	}
 }
 
-func healthStatusToString(status model.HealthStatus) string {
-	switch status {
-	case model.UNKNOWN:
-		return "unknown"
-	case model.RUNNING:
-		return "running"
-	case model.HEALTHY:
-		return "healthy"
-	case model.ERROR:
-		return "error"
-	case model.STOPPED:
-		return "stopped"
-	case model.FINISHED:
-		return "finished"
-	case model.PENDING:
-		return "pending"
-	case model.DONE:
-		return "done"
-	default:
-		return "unknown"
+// Función auxiliar para convertir Probe a ProbeDB
+func convertProbeToDB(probe *model.Probe) *ProbeDB {
+	if probe == nil {
+		return nil
 	}
+
+	probeDB := &ProbeDB{
+		InitialDelaySeconds: probe.InitialDelaySeconds,
+		TimeoutSeconds:      probe.TimeoutSeconds,
+		PeriodSeconds:       probe.PeriodSeconds,
+		SuccessThreshold:    probe.SuccessThreshold,
+		FailureThreshold:    probe.FailureThreshold,
+	}
+
+	if probe.Exec != nil {
+		probeDB.Exec = &ExecActionDB{
+			Command: probe.Exec.Command,
+		}
+	}
+
+	if probe.HTTPGet != nil {
+		headers := make([]HTTPHeaderDB, len(probe.HTTPGet.HTTPHeaders))
+		for i, h := range probe.HTTPGet.HTTPHeaders {
+			headers[i] = HTTPHeaderDB{
+				Name:  h.Name,
+				Value: h.Value,
+			}
+		}
+		probeDB.HTTPGet = &HTTPGetActionDB{
+			Path:        probe.HTTPGet.Path,
+			Port:        probe.HTTPGet.Port,
+			Host:        probe.HTTPGet.Host,
+			Scheme:      probe.HTTPGet.Scheme,
+			HTTPHeaders: headers,
+		}
+	}
+
+	if probe.TCPSocket != nil {
+		probeDB.TCPSocket = &TCPSocketActionDB{
+			Port: probe.TCPSocket.Port,
+			Host: probe.TCPSocket.Host,
+		}
+	}
+
+	return probeDB
 }
 
-func parseHealthStatus(status string) model.HealthStatus {
-	switch status {
-	case "unknown":
-		return model.UNKNOWN
-	case "running":
-		return model.RUNNING
-	case "healthy":
-		return model.HEALTHY
-	case "error":
-		return model.ERROR
-	case "stopped":
-		return model.STOPPED
-	case "finished":
-		return model.FINISHED
-	case "pending":
-		return model.PENDING
-	case "done":
-		return model.DONE
-	default:
-		return model.UNKNOWN
+// Función auxiliar para convertir ContainerStatus a ContainerStatusDB
+func convertContainerStatusToDB(status model.ContainerStatus) ContainerStatusDB {
+	var state ContainerStateDB
+
+	if status.State.Waiting != nil {
+		state.Waiting = &ContainerStateWaitingDB{
+			Reason:  status.State.Waiting.Reason,
+			Message: status.State.Waiting.Message,
+		}
+	}
+
+	if status.State.Running != nil {
+		state.Running = &ContainerStateRunningDB{
+			StartedAt: status.State.Running.StartedAt,
+		}
+	}
+
+	if status.State.Terminated != nil {
+		state.Terminated = &ContainerStateTerminatedDB{
+			ExitCode:    status.State.Terminated.ExitCode,
+			Signal:      status.State.Terminated.Signal,
+			Reason:      status.State.Terminated.Reason,
+			Message:     status.State.Terminated.Message,
+			StartedAt:   status.State.Terminated.StartedAt,
+			FinishedAt:  status.State.Terminated.FinishedAt,
+			ContainerID: status.State.Terminated.ContainerID,
+		}
+	}
+
+	return ContainerStatusDB{
+		Name:         status.Name,
+		Ready:        status.Ready,
+		RestartCount: status.RestartCount,
+		State:        state,
+		Image:        status.Image,
+		ImageID:      status.ImageID,
+		ContainerID:  status.ContainerID,
 	}
 }
 
@@ -282,7 +617,7 @@ func (c *WorkerDocumentConverter) BuildFilter(filters map[string]interface{}) bs
 		case "name":
 			filter["metadata.name"] = value
 		case "type":
-			filter["spec.instance_type"] = value
+			filter["spec.type"] = value
 		case "image":
 			filter["spec.image"] = value
 		case "status":
@@ -323,7 +658,7 @@ func (c *WorkerDocumentConverter) MapSortField(field string) string {
 	case "name":
 		return "metadata.name"
 	case "type":
-		return "spec.instance_type"
+		return "spec.type"
 	case "status":
 		return "status.status"
 	case "createdAt":

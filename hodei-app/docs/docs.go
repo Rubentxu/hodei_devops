@@ -35,7 +35,7 @@ const docTemplate = `{
                 "tags": [
                     "health"
                 ],
-                "summary": "Endpoint de health check",
+                "summary": "ConnectionInfo de health check",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -48,7 +48,7 @@ const docTemplate = `{
         },
         "/ws": {
             "get": {
-                "description": "Endpoint WebSocket para gestionar tareas en tiempo real. Soporta las siguientes acciones:\n- create_task: Crear una nueva tarea\n- stop_task: Detener una tarea en ejecución\n- list_tasks: Listar todas las tareas",
+                "description": "ConnectionInfo WebSocket para gestionar tareas en tiempo real. Soporta las siguientes acciones:\n- create_task: Crear una nueva tarea\n- stop_task: Detener una tarea en ejecución\n- list_tasks: Listar todas las tareas",
                 "consumes": [
                     "application/json"
                 ],

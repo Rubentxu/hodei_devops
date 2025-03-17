@@ -25,11 +25,11 @@ import (
 
 // K8sWorker implementa WorkerInstance para ejecutar un Pod que contenga el servidor gRPC.
 type K8sWorker struct {
-	execution  model.TaskExecution
-	endpoint   *model.WorkerEndpoint
-	grpcConfig config.GrpcConnectionsConfig
-	k8sCfg     resource.KubernetesResoucesPoolConfig
-	clientset  *kubernetes.Clientset
+	execution      model.TaskExecution
+	connectionInfo *model.ConnectionInfo
+	grpcConfig     config.GrpcConnectionsConfig
+	k8sCfg         resource.KubernetesResoucesPoolConfig
+	clientset      *kubernetes.Clientset
 }
 
 // NewK8sWorker crea una instancia de K8sWorker con la misma firma que DockerWorker
@@ -77,8 +77,8 @@ func loadPodTemplateFromFile(templatePath string) (*apiv1.Pod, error) {
 	return podTemplate, nil
 }
 
-// Start crea el Pod en Kubernetes y espera a que esté en Running, luego setea k.endpoint
-func (k *K8sWorker) Start(ctx context.Context, templatePath string, outputChan chan<- model.ProcessOutput) (*model.WorkerEndpoint, error) {
+// Start crea el Pod en Kubernetes y espera a que esté en Running, luego setea k.connectionInfo
+func (k *K8sWorker) Start(ctx context.Context, templatePath string, outputChan chan<- model.ProcessOutput) (*model.ConnectionInfo, error) {
 	log.Printf("Iniciando K8sWorker con spec=%v y templatePath=%s", k.execution.WorkerDef.Spec, templatePath)
 
 	// Cargar el template del Pod desde el archivo YAML pasado como argumento
@@ -129,7 +129,7 @@ func (k *K8sWorker) Start(ctx context.Context, templatePath string, outputChan c
 	}
 
 	// 5. Imagen del contenedor (usar WorkerSpec.Image si se define, sino usar k.k8sCfg.DefaultImage, sino usar la del template)
-	workerImage := k.execution.WorkerDef.Spec.Image
+	workerImage := k.execution.WorkerDef.Spec.Containers[0].Image
 	if workerImage == "" {
 		k.sendErrorMessage(outputChan, "No se definió imagen para el Pod ")
 		return nil, fmt.Errorf("no se definió imagen para el Pod")
@@ -142,10 +142,10 @@ func (k *K8sWorker) Start(ctx context.Context, templatePath string, outputChan c
 	}
 
 	// 6. Variables de entorno (append WorkerSpec.Env a las env vars existentes en el template)
-	envVars := buildK8sEnvVars(k.execution.WorkerDef.Spec.Env)
+	envVars := buildK8sEnvVars(k.execution.WorkerDef.Spec.Containers[0].Env)
 	if len(podTemplate.Spec.Containers) > 0 {
 		podTemplate.Spec.Containers[0].Env = append(podTemplate.Spec.Containers[0].Env, envVars...) // Append para mergear
-		log.Printf("Añadiendo variables de entorno de WorkerSpec: %v", k.execution.WorkerDef.Spec.Env)
+		log.Printf("Añadiendo variables de entorno de WorkerSpec: %v", k.execution.WorkerDef.Spec.Containers[0].Env)
 	}
 
 	// **PodSpec ya está configurado desde el template y personalizado.**
@@ -180,15 +180,16 @@ func (k *K8sWorker) Start(ctx context.Context, templatePath string, outputChan c
 		return nil, fmt.Errorf("no se encontró la IP del Pod %s", podName)
 	}
 
-	// Configurar endpoint
-	k.endpoint = &model.WorkerEndpoint{
-		WorkerID: k.execution.ID.String(),
-		Address:  podIP,   // IP interna del Pod
-		Port:     "50051", // Puerto del contenedor gRPC (asumiendo que es fijo en el template o config)
+	// Configurar connectionInfo
+	k.connectionInfo = &model.ConnectionInfo{
+		WorkerName:    podName,
+		ContainerName: podName,
+		Address:       fmt.Sprintf("%s:%d", podIP, pod.Spec.Containers[0].Ports[0].ContainerPort), // Primer puerto (simplificación)
+		Protocol:      "http",
 	}
 
-	log.Printf("K8sWorkerEndpoint: IP=%s Puerto=%s", k.endpoint.Address, k.endpoint.Port)
-	return k.endpoint, nil
+	log.Printf("K8sWorker ConnectionInfo: Address=%s Protocol=%s", k.connectionInfo.Address, k.connectionInfo.Protocol)
+	return k.connectionInfo, nil
 }
 
 // sendErrorMessage reenvía un mensaje de error al outputChan si está disponible
@@ -215,13 +216,13 @@ func (k *K8sWorker) Run(ctx context.Context, t model.TaskExecution, outputChan c
 	if len(cmds) == 0 {
 		cmds = []string{"echo", "Hola desde K8sWorker"}
 	}
-	envMap := k.execution.WorkerDef.Spec.Env
+	envMap := k.execution.WorkerDef.Spec.Containers[0].Env
 	if envMap == nil {
-		envMap = map[string]string{}
+		envMap = []model.EnvVar{}
 	}
 
 	// Llamar al proceso remoto (StartProcess)
-	if err := grpcClient.StartProcess(ctx, t.ID.String(), cmds, envMap, k.execution.WorkerDef.Spec.WorkingDir, outputChan); err != nil {
+	if err := grpcClient.StartProcess(ctx, t.ID.String(), cmds, envMap, k.execution.WorkerDef.Spec.Containers[0].WorkingDir, outputChan); err != nil {
 		return fmt.Errorf("error en StartProcess: %v", err)
 	}
 
@@ -236,7 +237,7 @@ func (k *K8sWorker) Stop(ctx context.Context) (bool, string, error) {
 	}
 	defer grpcClient.Close()
 
-	success, msg, err := grpcClient.StopProcess(ctx, k.endpoint.WorkerID)
+	success, msg, err := grpcClient.StopProcess(ctx, k.connectionInfo.WorkerName)
 	if err != nil {
 		return false, msg, fmt.Errorf("error en StopProcess (K8s): %v", err)
 	}
@@ -256,7 +257,7 @@ func (k *K8sWorker) StartMonitoring(ctx context.Context, checkInterval int64, he
 		return fmt.Errorf("error creando gRPC client para StartMonitoring: %w", err)
 	}
 	// No cerramos grpcClient aquí si necesitamos monitorizar en segundo plano
-	err = grpcClient.MonitorHealth(ctx, k.endpoint.WorkerID, checkInterval, healthChan)
+	err = grpcClient.MonitorHealth(ctx, k.connectionInfo.WorkerName, checkInterval, healthChan)
 	if err != nil {
 		return fmt.Errorf("error en MonitorHealth de K8s: %v", err)
 	}
@@ -264,17 +265,17 @@ func (k *K8sWorker) StartMonitoring(ctx context.Context, checkInterval int64, he
 }
 
 // GetEndpoint retorna el WorkerEndpoint (Pod IP y puerto)
-func (k *K8sWorker) GetEndpoint() *model.WorkerEndpoint {
-	return k.endpoint
+func (k *K8sWorker) GetEndpoint() *model.ConnectionInfo {
+	return k.connectionInfo
 }
 
 // createGRPCClient construye el RPSClient con la configuración TLS o token, tal como docker_instance.go
 func (k *K8sWorker) createGRPCClient() (*grpc.RPSClient, error) {
-	if k.endpoint == nil {
-		return nil, fmt.Errorf("endpoint no inicializado en K8sWorker")
+	if k.connectionInfo == nil {
+		return nil, fmt.Errorf("connectionInfo no inicializado en K8sWorker")
 	}
 	rpcClientConfig := &grpc.RemoteProcessClientConfig{
-		Address:    fmt.Sprintf("%s:%s", k.endpoint.Address, k.endpoint.Port),
+		Address:    k.connectionInfo.Address,
 		ClientCert: k.grpcConfig.ClientCertPath,
 		ClientKey:  k.grpcConfig.ClientKeyPath,
 		CACert:     k.grpcConfig.CACertPath,
@@ -327,13 +328,16 @@ func waitForPodRunning(ctx context.Context, clientset *kubernetes.Clientset, pod
 }
 
 // buildK8sEnvVars convierte tu map[string]string en []apiv1.EnvVar
-func buildK8sEnvVars(env map[string]string) []apiv1.EnvVar {
+func buildK8sEnvVars(env []model.EnvVar) []apiv1.EnvVar {
 	if env == nil {
 		return nil
 	}
 	items := make([]apiv1.EnvVar, 0, len(env))
-	for k, v := range env {
-		items = append(items, apiv1.EnvVar{Name: k, Value: v})
+	for _, e := range env {
+		items = append(items, apiv1.EnvVar{
+			Name:  e.Name,
+			Value: e.Value,
+		})
 	}
 	return items
 }

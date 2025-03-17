@@ -74,7 +74,7 @@ func createTestPool(name string) *model.ResourcePoolDef {
 		Metadata: model.Metadata{
 			Name:        name,
 			Description: "Descripción de " + name,
-			Labels:      []string{"test", name},
+			Labels:      map[string]string{"test": name},
 			Annotations: map[string]string{"env": "test"},
 			CreatedAt:   time.Now().UTC(),
 			UpdatedAt:   time.Now().UTC(),
@@ -168,9 +168,9 @@ func TestResourcePoolMongoDBRepository(t *testing.T) {
 			createTestPool("Dev-K8s"),
 			createTestPool("Test-Docker"),
 		}
-		pools[0].Metadata.Labels = []string{"prod", "k8s"}
-		pools[1].Metadata.Labels = []string{"dev", "k8s"}
-		pools[2].Metadata.Labels = []string{"test", "docker"}
+		pools[0].Metadata.Labels = map[string]string{"prod": "true", "k8s": "true"}
+		pools[1].Metadata.Labels = map[string]string{"dev": "true", "k8s": "true"}
+		pools[2].Metadata.Labels = map[string]string{"test": "true", "docker": "true"}
 		pools[2].Status.State = "Inactive"
 
 		for _, p := range pools {

@@ -54,12 +54,11 @@ func NewWorkerDefinitionService(repo ports.Repository[*model.WorkerDefinition, m
 
 // CrearWorkerDefinition crea una nueva definición de worker
 func (s *WorkerDefinitionServiceImpl) CreateWorkerDefinition(ctx context.Context, workerDef *model.WorkerDefinition) (*model.WorkerDefinition, error) {
+	if err := workerDef.Validate(); err != nil {
+		return nil, err
+	}
 
 	workerDef.ID = s.idGenerator.NewID()
-
-	if err := s.validateWorkerDefinition(workerDef); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidWorker, err)
-	}
 
 	// Establecer timestamps
 	now := time.Now().UTC()
@@ -67,8 +66,8 @@ func (s *WorkerDefinitionServiceImpl) CreateWorkerDefinition(ctx context.Context
 	workerDef.Metadata.UpdatedAt = now
 
 	// Estado por defecto
-	if workerDef.Status.Status == model.UNKNOWN {
-		workerDef.Status.Status = model.PENDING
+	if workerDef.Status.State == model.WorkerStateUnknown {
+		workerDef.Status.State = model.WorkerStatePending
 	}
 
 	return s.repo.Save(ctx, workerDef)
@@ -85,7 +84,7 @@ func (s *WorkerDefinitionServiceImpl) GetWorkerDefinition(ctx context.Context, i
 
 // ActualizarWorkerDefinition actualiza una definición de worker existente
 func (s *WorkerDefinitionServiceImpl) UpdateWorkerDefinition(ctx context.Context, updates *model.WorkerDefinition) error {
-	if err := s.validateWorkerDefinition(updates); err != nil {
+	if err := updates.Validate(); err != nil {
 		return err
 	}
 
@@ -144,26 +143,13 @@ func (s *WorkerDefinitionServiceImpl) FindWorkerDefinitionByName(ctx context.Con
 }
 
 // ActualizarEstadoWorker actualiza solo el estado de un worker
-func (s *WorkerDefinitionServiceImpl) UpdateWorkerStatus(ctx context.Context, id model.AggregateID, estado model.HealthStatus) error {
+func (s *WorkerDefinitionServiceImpl) UpdateWorkerStatus(ctx context.Context, id model.AggregateID, state model.WorkerState) error {
 	worker, err := s.repo.FindByID(ctx, id)
 	if err != nil {
 		return ErrWorkerNotFound
 	}
 
-	worker.Status.Status = estado
-	worker.Metadata.UpdatedAt = time.Now().UTC()
-
-	return s.repo.Update(ctx, worker)
-}
-
-// AsociarTemplate asocia un worker con un template
-func (s *WorkerDefinitionServiceImpl) AssignTemplate(ctx context.Context, workerID model.AggregateID, templateID string) error {
-	worker, err := s.repo.FindByID(ctx, workerID)
-	if err != nil {
-		return ErrWorkerNotFound
-	}
-
-	worker.Spec.TemplateID = templateID
+	worker.Status.State = state
 	worker.Metadata.UpdatedAt = time.Now().UTC()
 
 	return s.repo.Update(ctx, worker)
@@ -178,13 +164,13 @@ func (s *WorkerDefinitionServiceImpl) CreateWorkersBatch(ctx context.Context, wo
 		}
 		worker.Metadata.CreatedAt = now
 		worker.Metadata.UpdatedAt = now
-		if worker.Status.Status == model.UNKNOWN {
-			worker.Status.Status = model.PENDING
+		if worker.Status.State == model.WorkerStateUnknown {
+			worker.Status.State = model.WorkerStatePending
 		}
 	}
 
 	for _, worker := range workerDefs {
-		if err := s.validateWorkerDefinition(worker); err != nil {
+		if err := worker.Validate(); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrInvalidWorker, err)
 		}
 	}

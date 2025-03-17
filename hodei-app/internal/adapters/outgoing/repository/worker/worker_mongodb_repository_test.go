@@ -125,7 +125,7 @@ func TestWorkerMongoDBRepository(t *testing.T) {
 		workers[0].Metadata.Labels = []string{"prod", "docker"}
 		workers[1].Metadata.Labels = []string{"dev", "k8s"}
 		workers[2].Metadata.Labels = []string{"test", "vm"}
-		workers[2].Status.Status = model.STOPPED
+		workers[2].Status.State = model.WorkerStateStopped
 
 		for _, w := range workers {
 			_, err := repo.Save(ctx, w)
@@ -206,11 +206,11 @@ func TestWorkerMongoDBRepository(t *testing.T) {
 	})
 
 	t.Run("Guardar duplicado", func(t *testing.T) {
-		worker := createTestWorker("Duplicado", model.DockerInstance)
+		worker := createTestWorker("Duplicado", model.KubernetesInstance)
 		saved, err := repo.Save(ctx, worker)
 		require.NoError(t, err)
 
-		duplicate := createTestWorker("Duplicado", model.DockerInstance)
+		duplicate := createTestWorker("Duplicado", model.KubernetesInstance)
 		duplicate.ID = saved.ID
 
 		_, err = repo.Save(ctx, duplicate)
@@ -226,7 +226,7 @@ func TestWorkerMongoDBRepository(t *testing.T) {
 		numWorkers := 5
 		// Crear y guardar los workers de prueba
 		for i := 1; i <= numWorkers; i++ {
-			worker := createTestWorker(fmt.Sprintf("Worker %d", i), model.DockerInstance)
+			worker := createTestWorker(fmt.Sprintf("Worker %d", i), model.KubernetesInstance)
 			_, err := repo.Save(ctx, worker)
 			require.NoError(t, err)
 		}
@@ -305,7 +305,7 @@ func TestWorkerMongoDBRepository(t *testing.T) {
 
 		workers := []*model.WorkerDefinition{
 			createTestWorker("Batch1", model.DockerInstance),
-			createTestWorker("Batch2", model.KubernetesInstance),
+			createTestWorker("Batch2", model.DockerInstance),
 		}
 
 		// BatchSave
@@ -342,52 +342,73 @@ func TestWorkerMongoDBRepository(t *testing.T) {
 }
 
 // Función para crear un WorkerDefinition de prueba
+// Función para crear un WorkerDefinition de prueba
 func createTestWorker(name string, instanceType model.InstanceType) *model.WorkerDefinition {
-	worker := &model.WorkerDefinition{
+	now := time.Now().UTC()
+	return &model.WorkerDefinition{
 		Metadata: model.Metadata{
 			Name:        name,
-			Description: "Test worker description for " + name,
-			Labels:      []string{"test", name},
-			Annotations: map[string]string{"env": "test", "purpose": "testing"},
-			CreatedAt:   time.Now().UTC(),
-			UpdatedAt:   time.Now().UTC(),
+			Description: "Test worker",
+			Labels:      []string{"test"},
+			Annotations: map[string]string{"env": "test"},
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		},
 		Spec: model.WorkerSpec{
-			Type:       instanceType,
-			Image:      "testimage:latest",
-			Env:        map[string]string{"ENV_VAR": "value"},
-			WorkingDir: "/app",
-			Resources: model.ResourceRequirements{
-				CPU:    1.0,
-				Memory: "1Gi",
-			},
-			Volumes: []model.VolumeMount{
+			Type: instanceType,
+			Containers: []model.Container{
 				{
-					HostPath:      "/host/path",
-					ContainerPath: "/container/path",
-					ReadOnly:      true,
+					Name:    "test-container",
+					Image:   "test-image:latest",
+					Command: []string{"/bin/sh"},
+					Args:    []string{"-c", "echo hello"},
+					Env: []model.EnvVar{
+						{
+							Name:  "ENV_VAR",
+							Value: "value",
+						},
+					},
+					Resources: model.ResourceRequirements{
+						CPU:    1.0,
+						Memory: "1Gi",
+					},
+					Ports: []model.PortMapping{
+						{
+							ContainerPort: 8080,
+							Protocol:      "TCP",
+						},
+					},
+					WorkingDir:      "/app",
+					ImagePullPolicy: model.ImagePullIfNotPresent,
 				},
 			},
-			Ports: []model.PortMapping{
-				{
-					HostPort:      8080,
-					ContainerPort: 80,
-					Protocol:      "TCP",
-				},
+			RestartPolicy: model.RestartPolicyAlways,
+			NodeSelector: map[string]string{
+				"env": "test",
 			},
-			Labels: map[string]string{"app": "test"},
-			HealthCheck: &model.HealthCheckConfig{
-				Type:     "http",
-				Endpoint: "/health",
-				Interval: 30 * time.Second,
-				Timeout:  5 * time.Second,
-			},
-			TemplateID: "template-123",
 		},
 		Status: model.WorkerStatus{
-			InstanceID: "instance-123",
-			Status:     model.HEALTHY, // Usar la constante enum en lugar de string
+			State:     model.WorkerStateRunning,
+			Message:   "Test status",
+			HostIP:    "192.168.1.1",
+			WorkerIP:  "10.0.0.1",
+			QOSClass:  "Guaranteed",
+			StartTime: &now,
+			ContainerStatuses: []model.ContainerStatus{
+				{
+					Name:         "test-container",
+					Ready:        true,
+					RestartCount: 0,
+					State: model.ContainerState{
+						Running: &model.ContainerStateRunning{
+							StartedAt: now,
+						},
+					},
+					Image:       "test-image:latest",
+					ImageID:     "sha256:test123",
+					ContainerID: "docker://abc123",
+				},
+			},
 		},
 	}
-	return worker
 }
