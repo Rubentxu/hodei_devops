@@ -2,10 +2,7 @@ package model
 
 import (
 	"dev.rubentxu.hodei-devops/protos/remote_worker"
-	"encoding/json"
-	"fmt"
 	"log"
-	"strconv"
 )
 
 type ProcessOutput struct {

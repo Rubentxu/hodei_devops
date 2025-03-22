@@ -27,11 +27,12 @@ import (
 
 // DockerWorker implementa WorkerInstance para Docker
 type DockerWorker struct {
-	execution  model.TaskExecution
-	endpoint   *model.WorkerEndpoint
-	grpcConfig config.GrpcConnectionsConfig
-	dockerCfg  resource.DockerResourcesPoolConfig
-	client     *dockerclient.Client
+	execution      model.TaskExecution
+	connectionInfo *model.ConnectionInfo
+	config         config.Config
+	dockerCfg      resource.DockerResourcesPoolConfig
+	client         *dockerclient.Client
+	token          string
 }
 
 func (d *DockerWorker) GetID() model.AggregateID {
@@ -47,20 +48,26 @@ func (d *DockerWorker) GetType() string {
 	return "docker"
 }
 
-func NewDockerWorker(task model.TaskExecution, grpcCfg config.GrpcConnectionsConfig, resourceClient ports.ResourceIntanceClient) (ports.WorkerInstance, error) {
+func NewDockerWorker(task model.TaskExecution, config config.Config, resourceClient ports.ResourceIntanceClient) (ports.WorkerInstance, error) {
 
 	cli := resourceClient.GetNativeClient().(*dockerclient.Client)
+	jwtManager := security.NewJWTManager(config.AccessSecret)
+	token, err := jwtManager.GenerateToken("admin")
+	if err != nil {
+		return nil, fmt.Errorf("error generando token JWT: %v", err)
+	}
 
 	return &DockerWorker{
-		execution:  task,
-		grpcConfig: grpcCfg,
-		dockerCfg:  resourceClient.GetConfig().(resource.DockerResourcesPoolConfig),
-		client:     cli,
-		endpoint:   nil,
+		execution:      task,
+		config:         config,
+		dockerCfg:      resourceClient.GetConfig().(resource.DockerResourcesPoolConfig),
+		client:         cli,
+		connectionInfo: nil,
+		token:          token,
 	}, nil
 }
 
-func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputChan chan<- model.ProcessOutput) (*model.WorkerEndpoint, error) {
+func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputChan chan<- model.ProcessOutput) (*model.ConnectionInfo, error) {
 	log.Printf("Iniciando DockerWorker con spec=%v", d.execution.WorkerDef.Spec)
 
 	// Environment variables con rutas dentro del contenedor
@@ -69,29 +76,13 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 		"SERVER_KEY_PATH":  "/certs/remote_worker-key.pem",
 		"CA_CERT_PATH":     "/certs/ca-cert.pem",
 		"APPLICATION_PORT": "50051",
-		"ENV":              d.grpcConfig.Environment,
+		"ENV":              d.config.Environment,
 	}
 
-	// JWT configuration
-	jwtSecret := "test_secret_key_for_development_1234567890"
-	if d.grpcConfig.JWTSecret != "" {
-		jwtSecret = d.grpcConfig.JWTSecret
-	}
-
-	// Crear el manejador JWT y generar un nuevo token
-	jwtManager := security.NewJWTManager(jwtSecret)
-	token, err := jwtManager.GenerateToken("admin")
-	if err != nil {
-		d.sendErrorMessage(outputChan, fmt.Sprintf("Error generando token JWT: %v", err))
-		return nil, fmt.Errorf("error generando token JWT: %v", err)
-	}
-
-	// Configurar las variables de entorno JWT
-	baseEnvs["JWT_SECRET"] = jwtSecret
-	d.grpcConfig.JWTToken = token // Guardar el token generado para uso posterior
+	baseEnvs["JWT_SECRET"] = d.token
 	log.Printf("Token JWT generado y configurado para autenticación")
 
-	workerImage := d.execution.WorkerDef.Spec.Image
+	workerImage := d.execution.WorkerDef.Spec.Containers[0].Image
 	if workerImage == "" {
 		workerImage = "posts_mpv-remote-process:latest"
 	}
@@ -129,12 +120,12 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 	log.Printf("- Configuración de red: %s", hostCfg.NetworkMode)
 
 	// Si hay un working directory en la spec, asegurarse de que sea absoluto
-	if d.execution.WorkerDef.Spec.WorkingDir != "" {
-		absWorkingDir, err := d.toAbsolutePath(d.execution.WorkerDef.Spec.WorkingDir)
+	if d.execution.WorkerDef.Spec.Containers[0].WorkingDir != "" {
+		absWorkingDir, err := d.toAbsolutePath(d.execution.WorkerDef.Spec.Containers[0].WorkingDir)
 		if err != nil {
 			d.sendLogsMessage(outputChan, fmt.Sprintf("Warning: usando working dir relativo: %v", err))
 		} else {
-			d.execution.WorkerDef.Spec.WorkingDir = absWorkingDir
+			d.execution.WorkerDef.Spec.Containers[0].WorkingDir = absWorkingDir
 		}
 	}
 
@@ -149,7 +140,7 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 	}
 
 	// Verificar si la imagen existe localmente antes de intentar pull
-	_, _, err = d.client.ImageInspectWithRaw(ctx, workerImage)
+	_, _, err := d.client.ImageInspectWithRaw(ctx, workerImage)
 	if err != nil {
 		// Si la imagen no existe localmente, intentar pull
 		d.sendLogsMessage(outputChan, fmt.Sprintf("Imagen %s no encontrada localmente, intentando pull...", workerImage))
@@ -217,16 +208,17 @@ func (d *DockerWorker) Start(ctx context.Context, templatePath string, outputCha
 	d.sendLogsMessage(outputChan, fmt.Sprintf("Docker Config: %+v", d.dockerCfg))
 
 	// Guardamos el connectionInfo
-	d.endpoint = &model.ConnectionInfo{
-		WorkerID: d.execution.Metadata.Name,
-		Address:  hostAddress,
-		Port:     hostPort,
+	d.connectionInfo = &model.ConnectionInfo{
+		WorkerName:    d.execution.Metadata.Name,
+		ContainerName: containerName,
+		Address:       hostAddress,
+		Protocol:      "tcp",
 	}
 
-	log.Printf("ConnectionInfo configurado: %+v", d.endpoint)
+	log.Printf("ConnectionInfo configurado: %+v", d.connectionInfo)
 	d.sendLogsMessage(outputChan, fmt.Sprintf("Contenedor accesible en %s:%s", hostAddress, hostPort))
 
-	return d.endpoint, nil
+	return d.connectionInfo, nil
 }
 
 // sendErrorMessage reenvía un mensaje de error al outputChan si está disponible
@@ -292,10 +284,10 @@ func (d *DockerWorker) Run(ctx context.Context, t model.TaskExecution, outputCha
 
 	log.Printf("Ejecutando comando: %v", cmds)
 	d.sendLogsMessage(outputChan, fmt.Sprintf("Ejecutando comando: %v", cmds))
-	log.Printf("Environment: %v", d.execution.WorkerDef.Spec.Env)
-	d.sendLogsMessage(outputChan, fmt.Sprintf("Environment: %v", d.execution.WorkerDef.Spec.Env))
-	log.Printf("WorkingDir: %s", d.execution.WorkerDef.Spec.WorkingDir)
-	d.sendLogsMessage(outputChan, fmt.Sprintf("WorkingDir: %s", d.execution.WorkerDef.Spec.WorkingDir))
+	log.Printf("Environment: %v", d.execution.WorkerDef.Spec.Containers[0].Env)
+	d.sendLogsMessage(outputChan, fmt.Sprintf("Environment: %v", d.execution.WorkerDef.Spec.Containers[0].Env))
+	log.Printf("WorkingDir: %s", d.execution.WorkerDef.Spec.Containers[0].WorkingDir)
+	d.sendLogsMessage(outputChan, fmt.Sprintf("WorkingDir: %s", d.execution.WorkerDef.Spec.Containers[0].WorkingDir))
 
 	// Llamar al proceso remoto con timeout
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -305,8 +297,8 @@ func (d *DockerWorker) Run(ctx context.Context, t model.TaskExecution, outputCha
 		runCtx,
 		t.ID.String(),
 		cmds,
-		d.execution.WorkerDef.Spec.Env,
-		d.execution.WorkerDef.Spec.WorkingDir,
+		d.execution.WorkerDef.Spec.Containers[0].Env,
+		d.execution.WorkerDef.Spec.Containers[0].WorkingDir,
 		outputChan,
 	); err != nil {
 		log.Printf("Error en StartProcess: %v", err)
@@ -318,7 +310,7 @@ func (d *DockerWorker) Run(ctx context.Context, t model.TaskExecution, outputCha
 
 // Stop detiene y limpia el contenedor
 func (d *DockerWorker) Stop(ctx context.Context) (bool, string, error) {
-	if d.endpoint == nil {
+	if d.connectionInfo == nil {
 		return true, "No hay contenedor que detener", nil
 	}
 
@@ -339,7 +331,7 @@ func (d *DockerWorker) StartMonitoring(ctx context.Context, checkInterval int64,
 	if err != nil {
 		return fmt.Errorf("error creating gRPC client for stop: %w", err)
 	}
-	err = grpcClient.MonitorHealth(ctx, d.endpoint.WorkerID, checkInterval, healthChan)
+	err = grpcClient.MonitorHealth(ctx, d.connectionInfo.WorkerName, checkInterval, healthChan)
 	if err != nil {
 		return fmt.Errorf("error abriendo MonitorHealth Docker: %v", err)
 	}
@@ -347,25 +339,25 @@ func (d *DockerWorker) StartMonitoring(ctx context.Context, checkInterval int64,
 }
 
 func (d *DockerWorker) createGRPCClient() (*grpc.RPSClient, error) {
-	if d.endpoint == nil {
+	if d.connectionInfo == nil {
 		return nil, fmt.Errorf("connectionInfo no inicializado")
 	}
 
 	// Configuración que coincide con el servidor remote_worker
 	rpcClientConfig := &grpc.RemoteProcessClientConfig{
-		Address:    fmt.Sprintf("%s:%s", d.endpoint.Address, d.endpoint.Port),
-		ClientCert: d.grpcConfig.ClientCertPath, // Certificado del cliente
-		ClientKey:  d.grpcConfig.ClientKeyPath,  // Llave del cliente
-		CACert:     d.grpcConfig.CACertPath,     // Certificado de CA
-		AuthToken:  d.grpcConfig.JWTToken,
+		Address:    d.connectionInfo.Address,
+		ClientCert: d.config.ClientCertPath, // Certificado del cliente
+		ClientKey:  d.config.ClientKeyPath,  // Llave del cliente
+		CACert:     d.config.CACertPath,     // Certificado de CA
+		AuthToken:  d.token,                 // Token JWT
 	}
 
 	log.Printf("Configuración cliente gRPC: %+v", rpcClientConfig)
 	return grpc.New(rpcClientConfig)
 }
 
-func (w *DockerWorker) GetEndpoint() *model.WorkerEndpoint {
-	return w.endpoint
+func (w *DockerWorker) GetEndpoint() *model.ConnectionInfo {
+	return w.connectionInfo
 }
 
 // cleanupExistingContainer elimina un contenedor si existe

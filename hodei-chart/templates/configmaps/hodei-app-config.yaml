@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hodei-devops.fullname" . }}-app-config
+  labels:
+    {{- include "hodei-devops.labels" . | nindent 4 }}
+data:
+  ENVIRONMENT: {{ .Values.hodeiApp.config.environment | default "production" | quote }}
+  HTTP_PORT: {{ .Values.hodeiApp.config.port | default "8080" | quote }}
+  MAX_CONCURRENT_TASKS: {{ .Values.hodeiApp.config.maxConcurrentTasks | default "3" | quote }}
+  MONGODB_HOST: {{ .Values.mongodb.host | default "localhost" | quote }}
+  MONGODB_PORT: {{ .Values.mongodb.port | default "27017" | quote }}
+  MONGODB_DATABASE: {{ .Values.mongodb.database | default "hodeidb" | quote }}
+  MONGODB_SCRIPTS_PATH: {{ .Values.hodeiApp.config.mongodb.scriptsPath | default "/scripts" | quote }}
+  DEFAULT_DOCKER_POOL: {{ .Values.hodeiApp.config.defaultDockerPool | default "false" | quote }}
+  ID_GENERATOR_TYPE: {{ .Values.hodeiApp.config.idGenerator | default "bson" | quote }}
+  SCHEDULER_TYPE: {{ .Values.hodeiApp.config.schedulerType | default "greedy" | quote }}
+
+  # Rutas de certificados
+  SERVER_CERT_PATH: "/certs/server.crt"
+  SERVER_KEY_PATH: "/certs/server.key"
+  CLIENT_CERT_PATH: "/certs/client.crt"
+  CLIENT_KEY_PATH: "/certs/client.key"
+  CA_CERT_PATH: "/certs/ca.crt"
+
+  # Configuración de seguridad
+  BCRYPT_WORK_FACTOR: {{ .Values.hodeiApp.config.security.bcryptWorkFactor | default "12" | quote }}
+  JWT_ACCESS_EXPIRY: {{ .Values.hodeiApp.config.security.jwtAccessExpiry | default "15m" | quote }}
+  JWT_REFRESH_EXPIRY: {{ .Values.hodeiApp.config.security.jwtRefreshExpiry | default "168h" | quote }}

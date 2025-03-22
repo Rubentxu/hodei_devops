@@ -11,12 +11,15 @@ import (
 	"time"
 )
 
+const (
+	TaskExecutionCollection = "task_executions"
+)
+
 type TaskExecutionDocument struct {
 	ID        string                `bson:"_id"`
 	Metadata  model.Metadata        `bson:"metadata"`
 	Task      model.Task            `bson:"task"`
 	Status    model.ExecutionStatus `bson:"status"`
-	InputArgs []string              `bson:"input_args"`
 	WorkerDef string                `bson:"workerdef_id"`
 	CreatedAt time.Time             `bson:"created_at"`
 	UpdatedAt time.Time             `bson:"updated_at"`
@@ -38,11 +41,10 @@ func (c *TaskExecutionDocumentConverter) GenerateID() model.AggregateID {
 
 func (c *TaskExecutionDocumentConverter) ToModel(doc TaskExecutionDocument) (*model.TaskExecution, error) {
 	return &model.TaskExecution{
-		ID:        model.AggregateID(doc.ID),
-		Metadata:  doc.Metadata,
-		Task:      doc.Task,
-		Status:    doc.Status,
-		InputArgs: doc.InputArgs,
+		ID:       model.AggregateID(doc.ID),
+		Metadata: doc.Metadata,
+		Task:     doc.Task,
+		Status:   doc.Status,
 		WorkerDef: &model.WorkerDefinition{
 			ID: model.AggregateID(doc.WorkerDef),
 		},
@@ -58,7 +60,6 @@ func (c *TaskExecutionDocumentConverter) ToDocument(entity *model.TaskExecution,
 		Metadata:  entity.Metadata,
 		Task:      entity.Task,
 		Status:    entity.Status,
-		InputArgs: entity.InputArgs,
 		WorkerDef: entity.WorkerDef.ID.String(),
 		CreatedAt: entity.Metadata.CreatedAt,
 		UpdatedAt: entity.Metadata.UpdatedAt,

@@ -6,9 +6,9 @@ import (
 )
 
 type TaskExecutionRequest struct {
-	TaskID      AggregateID            `json:"task_id"`
-	Metadata    Metadata               `json:"metadata"`
-	ParamValues map[string]interface{} `json:"param_values"`
+	TaskID      AggregateID            `json:"task_id" validate:"required"`
+	Metadata    Metadata               `json:"metadata" validate:"required"`
+	ParamValues map[string]interface{} `json:"param_values" validate:"required"`
 }
 
 type TaskExecution struct {

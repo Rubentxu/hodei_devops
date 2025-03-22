@@ -1,8 +1,13 @@
 Thank you for installing {{ .Chart.Name }}.
 Your release is named {{ .Release.Name }}.
+
 To get the application URL, run these commands:
 {{- if and .Values.endpoints.enabled (eq .Values.endpoints.type "ingress") }}
-  http{{ if .Values.endpoints.tls.enabled }}s{{ end }}://{{ .Values.endpoints.host }}/
+  echo "Access your application at: http{{ if .Values.endpoints.tls.enabled }}s{{ end }}://{{ .Values.endpoints.host }}{{ .Values.endpoints.paths.api }}"
+{{- else if and .Values.endpoints.enabled (eq .Values.endpoints.type "route") }}
+  echo "Access your application at: http{{ if .Values.endpoints.tls.enabled }}s{{ end }}://{{ .Values.endpoints.host }}{{ .Values.endpoints.paths.api }}"
+{{- else if and .Values.endpoints.enabled (eq .Values.endpoints.type "gateway") }}
+  echo "Access your application at: http{{ if .Values.endpoints.tls.enabled }}s{{ end }}://{{ .Values.endpoints.host }}{{ .Values.endpoints.paths.api }}"
 {{- else }}
   export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "hodei-devops.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -o jsonpath="{.items[0].metadata.name}")
   export CONTAINER_PORT=$(kubectl get pod --namespace {{ .Release.Namespace }} $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
@@ -11,8 +16,11 @@ To get the application URL, run these commands:
 {{- end }}
 
 Services deployed:
-- Orchestrator: {{ include "hodei-devops.fullname" . }}-orchestrator:{{ .Values.orchestrator.service.ports.http }}
-- Remote Process Worker: {{ include "hodei-devops.fullname" . }}-remote-process-worker:{{ .Values.remote_worker_worker.service.port }}
+- Hodei App API: {{ include "hodei-devops.fullname" . }}-orchestrator:{{ .Values.hodeiApp.service.ports.http }}
+{{- if .Values.hodeiApp.service.ports.ws }}
+- Hodei App WebSocket: {{ include "hodei-devops.fullname" . }}-orchestrator:{{ .Values.hodeiApp.service.ports.ws }}
+{{- end }}
+- MongoDB: mongodb:27017
 
 For more information about Hodei DevOps, please visit:
 https://github.com/your-org/hodei-devops

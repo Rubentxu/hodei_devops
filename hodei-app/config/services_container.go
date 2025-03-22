@@ -2,10 +2,11 @@ package config
 
 import (
 	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/resource"
+
 	usecases "dev.rubentxu.hodei-devops/hodei-app/internal/domain/application"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/application/iam"
+
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
-	"time"
 )
 
 // ServicesContainer holds all domain services for dependency injection.
@@ -26,10 +27,10 @@ type ServicesContainer struct {
 
 // InitializeServicesContainer creates and initializes all application services
 // using the provided repositories container for data access.
-func InitializeServicesContainer(repositoriesContainer *RepositoriesContainer) (*ServicesContainer, error) {
+func InitializeServicesContainer(repositoriesContainer *RepositoriesContainer, config Config) (*ServicesContainer, error) {
 	// Initialize factories
 	resourcePoolFactory := createResourcePoolFactory()
-	idGenerator := createIDGenerator()
+	idGenerator := config.IdGenerator
 
 	// Initialize domain services
 	resourcePoolService := createResourcePoolService(repositoriesContainer, resourcePoolFactory)
@@ -38,8 +39,8 @@ func InitializeServicesContainer(repositoriesContainer *RepositoriesContainer) (
 	workerDefinitionService := createWorkerDefinitionService(repositoriesContainer, idGenerator)
 
 	// Initialize IAM services
-	passwordHasher := createPasswordHasher()
-	tokenService := createTokenService()
+	passwordHasher := createPasswordHasher(config)
+	tokenService := createTokenService(config)
 
 	authService := createAuthService(repositoriesContainer, tokenService, passwordHasher)
 	authorizationService := createAuthorizationService(repositoriesContainer)
@@ -125,18 +126,12 @@ func createIdentityService(rc *RepositoriesContainer) *iam.IdentityService {
 }
 
 // createTokenService creates the JWT token generation and validation service
-func createTokenService() ports.TokenService {
-	// Get configuration from environment variables or use default values
-	accessSecret := getEnv("JWT_ACCESS_SECRET", "default_access_secret")
-	refreshSecret := getEnv("JWT_REFRESH_SECRET", "default_refresh_secret")
-	accessExpiry := getDurationFromEnv("JWT_ACCESS_EXPIRY", 15*time.Minute)
-	refreshExpiry := getDurationFromEnv("JWT_REFRESH_EXPIRY", 7*24*time.Hour)
-
-	return iam.NewJWTTokenService(accessSecret, refreshSecret, accessExpiry, refreshExpiry)
+func createTokenService(config Config) ports.TokenService {
+	return iam.NewJWTTokenService(config.AccessSecret, config.RefreshSecret, config.AccessExpiry, config.RefreshExpiry)
 }
 
 // createPasswordHasher creates a password hashing and verification service
-func createPasswordHasher() ports.PasswordHasher {
+func createPasswordHasher(config Config) ports.PasswordHasher {
 	// Create bcrypt-based password hasher with configurable work factor
-	return iam.NewBcryptPasswordHasher(getIntEnv("BCRYPT_WORK_FACTOR", 12))
+	return iam.NewBcryptPasswordHasher(config.PasswordHasherDefaultCost)
 }

@@ -1,0 +1,46 @@
+FROM golang:1.23.4-bullseye AS builder
+
+WORKDIR /build
+
+# Se copian los módulos y el código fuente
+COPY protos/go.mod protos/go.sum ./protos/
+COPY remote_worker/go.mod remote_worker/go.sum ./remote_worker/
+COPY protos/ ./protos/
+COPY remote_worker/ ./remote_worker/
+
+WORKDIR /build/remote_worker
+RUN go mod download
+
+# Compilación de la aplicación sin dependencias de CGO para obtener un binario estático
+RUN CGO_ENABLED=0 GOOS=linux go build -o remote_worker cmd/main.go
+
+# Etapa 2: Imagen de ejecución basada en Ubuntu
+FROM ubuntu:24.04
+
+WORKDIR /app
+
+# Instalación de certificados necesarios y limpieza de caché
+RUN apt-get update && \
+    apt-get install -y ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Se copia el binario compilado desde la etapa builder
+COPY --from=builder /build/remote_worker/remote_worker /app/
+
+RUN groupadd -r hodei-group && \
+    useradd -r -g hodei-group hodei-user
+# Cambiar propietario del directorio /app para dar acceso total a hodei-user
+RUN chown -R hodei-user:hodei-group /app
+# Exponer el puerto donde opera el worker
+EXPOSE 50051
+
+# Definir variables de entorno
+ENV APPLICATION_PORT=50051 \
+    SERVER_CERT_PATH=/certs/remote_worker-cert.pem \
+    SERVER_KEY_PATH=/certs/remote_worker-key.pem \
+    CA_CERT_PATH=/certs/ca-cert.pem
+
+USER hodei-user
+
+# Comando de inicio
+CMD ["/app/remote_worker"]

@@ -2,6 +2,7 @@ package factories
 
 import (
 	"context"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/incoming/security"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/grpc"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/resource"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
@@ -27,21 +28,27 @@ import (
 type K8sWorker struct {
 	execution      model.TaskExecution
 	connectionInfo *model.ConnectionInfo
-	grpcConfig     config.GrpcConnectionsConfig
+	grpcConfig     config.Config
 	k8sCfg         resource.KubernetesResoucesPoolConfig
 	clientset      *kubernetes.Clientset
+	token          string
 }
 
 // NewK8sWorker crea una instancia de K8sWorker con la misma firma que DockerWorker
-func NewK8sWorker(execution model.TaskExecution, grpcConfig config.GrpcConnectionsConfig, client ports.ResourceIntanceClient) (ports.WorkerInstance, error) {
+func NewK8sWorker(execution model.TaskExecution, config config.Config, client ports.ResourceIntanceClient) (ports.WorkerInstance, error) {
 	k8sCfg := client.GetConfig().(resource.KubernetesResoucesPoolConfig)
 	clientset := client.GetNativeClient().(*kubernetes.Clientset)
-
+	jwtManager := security.NewJWTManager(config.AccessSecret)
+	token, err := jwtManager.GenerateToken("admin")
+	if err != nil {
+		return nil, fmt.Errorf("error generando token JWT: %v", err)
+	}
 	return &K8sWorker{
 		execution:  execution,
-		grpcConfig: grpcConfig,
+		grpcConfig: config,
 		k8sCfg:     k8sCfg,
 		clientset:  clientset,
+		token:      token,
 	}, nil
 }
 
@@ -141,7 +148,7 @@ func (k *K8sWorker) Start(ctx context.Context, templatePath string, outputChan c
 		podTemplate.Spec.Containers[0].Image = workerImage
 	}
 
-	// 6. Variables de entorno (append WorkerSpec.Env a las env vars existentes en el template)
+	// 6. Variables de entorno (append WorkerSpec.Environment a las env vars existentes en el template)
 	envVars := buildK8sEnvVars(k.execution.WorkerDef.Spec.Containers[0].Env)
 	if len(podTemplate.Spec.Containers) > 0 {
 		podTemplate.Spec.Containers[0].Env = append(podTemplate.Spec.Containers[0].Env, envVars...) // Append para mergear
@@ -279,7 +286,7 @@ func (k *K8sWorker) createGRPCClient() (*grpc.RPSClient, error) {
 		ClientCert: k.grpcConfig.ClientCertPath,
 		ClientKey:  k.grpcConfig.ClientKeyPath,
 		CACert:     k.grpcConfig.CACertPath,
-		AuthToken:  k.grpcConfig.JWTToken,
+		AuthToken:  k.token,
 	}
 	rpcClient, err := grpc.New(rpcClientConfig)
 	if err != nil {

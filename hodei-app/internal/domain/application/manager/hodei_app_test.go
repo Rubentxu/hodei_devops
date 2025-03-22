@@ -4,7 +4,6 @@ import (
 	"context"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
-	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/service/manager"
 	"errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

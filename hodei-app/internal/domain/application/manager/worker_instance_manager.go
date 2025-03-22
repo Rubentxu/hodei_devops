@@ -1,4 +1,4 @@
-package worker
+package manager
 
 import (
 	"context"
@@ -35,7 +35,6 @@ type workerOperation struct {
 }
 
 type WorkerInstanceManagerImpl struct {
-	name            string
 	taskExecService *ports.TaskExecutionService
 	workerFactory   ports.WorkerFactory
 
@@ -58,9 +57,8 @@ type WorkerInstanceManagerImpl struct {
 	wg       sync.WaitGroup
 }
 
-func NewWorker(name string, initialMaxConcurrent int, workerFactory ports.WorkerFactory, taskExecService *ports.TaskExecutionService) ports.WorkerInstanceManager {
+func NewWorkerInstanceManager(initialMaxConcurrent int, workerFactory ports.WorkerFactory, taskExecService *ports.TaskExecutionService) ports.WorkerInstanceManager {
 	workerInstanceManager := &WorkerInstanceManagerImpl{
-		name:                 name,
 		workerFactory:        workerFactory,
 		taskQueue:            make(chan ports.TaskContext, 100),
 		workerChan:           make(chan workerOperation, 10),
@@ -398,9 +396,6 @@ func (w *WorkerInstanceManagerImpl) SetConcurrencyLimit(newLimit int) {
 //		MaxConcurrentTasks: int(atomic.LoadInt32(&w.maxConcurrent)),
 //	}
 //}
-
-func getCPUUsage() float64    { return 45.0 }
-func getMemoryUsage() float64 { return 60.0 }
 
 // StopTask localiza la tarea, cambia su estado y, de ser necesario, detiene el proceso subyacente.
 func (w *WorkerInstanceManagerImpl) StopTask(taskContext ports.TaskContext) error {

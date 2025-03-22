@@ -1,176 +1,92 @@
-project:
-  name: "hodei"
-  component: "devops"
-  platform: "kubernetes"
+jwt:
+  secret: "a1b2c3d4e5f6g7h8i9j0"
+  accessSecret: "k1l2m3n4o5p6q7r8s9t0"
+  refreshSecret: "u1v2w3x4y5z6a7b8c9d0"
 
-nameOverride: ""
-fullnameOverride: ""
+certs:
+  ca: ""
+  server: ""
+  serverKey: ""
+  client: ""
+  clientKey: ""
 
-# Valores por defecto para la chart de hodei-devops
-replicaCount: 1
-
-# Configuración de los certificados
-certificados:
-  rutaBase: "certs"  # Relativa a la carpeta de la chart
-  ca: "ca-cert.pem"
-  worker:
-    cert: "worker-client-cert.pem"
-    key: "worker-client-key.pem"
-  remoteProcess:
-    cert: "remote_worker-cert.pem"
-    key: "remote_worker-key.pem"
-
-remote_worker_worker:
-  name: remote-process-worker
-  image:
-    repository: hodei/remote-process-worker
-    tag: latest
-    pullPolicy: IfNotPresent
+hodeiApp:
+  name: hodei-app
   replicas: 1
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      cpu: 200m
-      memory: 256Mi
-  service:
-    type: ClusterIP
-    port: 50051
-
-orchestrator:
-  name: orchestrator
   image:
-    repository: hodei/orchestrator
-    tag: latest
-    pullPolicy: IfNotPresent
-  replicas: 1
-  
-  config:
-    env: "development"
-    port: 8080
-    workerName: "default-worker"
-    maxConcurrentTasks: 3
-    storageType: "memory"
-    
-    # Configuración gRPC
-    grpc:
-      certsMountPath: "/certs"
-      serverCertPath: "/certs/remote_worker-cert.pem"
-      serverKeyPath: "/certs/remote_worker-key.pem"
-      clientCertPath: "/certs/worker-client-cert.pem"
-      clientKeyPath: "/certs/worker-key.pem"
-      caCertPath: "/certs/ca-cert.pem"
-      jwtSecret: ""  # Debe ser proporcionado
-      jwtToken: ""   # Debe ser proporcionado
-      environment: "development"
-
-    # Configuración de providers
-    providers:
-      docker:
-        host: "unix:///var/run/docker.sock"
-        defaultImage: "posts_mpv-remote-process:latest"
-        certsVolumePath: "/certs"
-        certsMountPath: "/certs"
-        networkName: "devops-platform_default"
-        stopDelay: "10s"
-        healthCheck:
-          test: ["CMD", "/app/grpc_health_check.sh"]
-          interval: "3s"
-          timeout: "5s"
-          retries: 2
-
-      kubernetes:
-        namespace: "default"
-        kubeConfig: ""
-        inCluster: true
-        labels:
-          app: "grpc-worker"
-        annotations: {}
-        defaultImage: "posts_mpv-remote-process:latest"
-
-      virtualMachine:
-        hypervisorURL: ""
-        defaultNetwork: ""
-
+    repository: rubentxu/hodei-app
+    tag: ''
+    pullPolicy: Always
   service:
     type: ClusterIP
     ports:
       http: 8080
-      websocket: 8080
+      ws: 8081
+  config:
+    environment: production
+    port: 8080
+    maxConcurrentTasks: 3
+    idGenerator: bson
+    schedulerType: greedy
+    defaultDockerPool: false
+    mongodb:
+      uri: mongodb://mongodb:27017/hodei?authSource=admin
+      database: hodeidb
+    security:
+      bcryptWorkFactor: 12
+      jwtAccessExpiry: 15m
+      jwtRefreshExpiry: 168h
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
 
-  # Configuración específica de WebSocket
-  websocket:
-    path: "/ws"
-    pingInterval: 30
-    pongWait: 120
-    writeWait: 30
-    maxMessageSize: 1024
+mongodb:
+  host: mongodb
+  port: 27017
+  database: hodeidb
+  rootUsername: root
+  rootPassword: hodei-root-password
+  username: hodei-user
+  password: hodei-password
+  persistence:
+    enabled: true
+    size: 1Gi
 
 endpoints:
-  enabled: true
-  type: "ingress"  # ingress, route, gateway
-  
-  # Configuración común
-  host: "hodei-orchestrator.example.com"
-  
-  # Configuración de paths
+  enabled: false
+  type: ingress  # Opciones: ingress, route, gateway
+  host: hodei-app.example.com
   paths:
-    api: "/"
-    ws: "/ws"
-  
+    api: /api
+    ws: /ws
   tls:
     enabled: false
-    secretName: "hodei-tls"
-
-  # Ingress configuration
+    secretName: hodei-app-tls
   ingress:
-    className: "nginx"
-    annotations:
-      kubernetes.io/ingress.class: nginx
-      # Anotaciones específicas para WebSocket
-      nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-      nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-      nginx.org/websocket-services: "hodei-orchestrator"
+    className: nginx
     pathType: Prefix
-
-  # OpenShift Route configuration
+    annotations: {}
   route:
-    annotations:
-      haproxy.router.openshift.io/timeout: 3600s
-    targetPort: http
+    annotations: {}
     tls:
       termination: edge
-      insecureEdgeTerminationPolicy: Redirect
-    wildcardPolicy: None
-
-  # Gateway API configuration
   gateway:
-    gatewayClass: "istio"
+    gatewayClass: istio
     gateway:
-      name: "hodei-gateway"
-      namespace: "default"
       create: true
-      annotations:
-        networking.istio.io/v1alpha3: |
-          websocketRoutes:
-          - match:
-            - uri:
-                prefix: /ws
-            route:
-            - destination:
-                host: hodei-orchestrator
-                port:
-                  number: 8080
+      name: hodei-gateway
+      namespace: hodei-devops
 
-tls:
-  mountPath: "/certs"
-  serverCert: "remote-process-cert.pem"
-  serverKey: "remote-process-key.pem"
-  clientCert: "orchestrator-cert.pem"
-  clientKey: "orchestrator-key.pem"
-  caCert: "ca-cert.pem"
-
-jwt:
-  secret: "test_secret_key_for_development_1234567890"
-  token: "" # Se debe proporcionar en tiempo de instalación
+serviceAccount:
+  # Especifica si se debe crear una cuenta de servicio
+  create: true
+  # El nombre de la cuenta de servicio a usar
+  # Si no se establece y create es true, se utilizará el nombre completo
+  name: ""

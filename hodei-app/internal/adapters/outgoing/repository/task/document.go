@@ -2,13 +2,13 @@ package task_repository
 
 import (
 	"context"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/generic"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"regexp"
-	"time"
 )
 
 const (
@@ -17,23 +17,11 @@ const (
 
 // TaskDocument es la estructura del documento en MongoDB
 type TaskDocument struct {
-	ID        string     `bson:"_id"`
-	Metadata  TaskMeta   `bson:"metadata"`
-	Spec      TaskSpecDB `bson:"spec"`
-	Owner     string     `bson:"owner"`
-	TenantID  string     `bson:"tenant_id"`
-	CreatedAt time.Time  `bson:"created_at"`
-	UpdatedAt time.Time  `bson:"updated_at"`
-}
-
-// TaskMeta es la estructura de los metadatos en MongoDB
-type TaskMeta struct {
-	Name        string            `bson:"name"`
-	Description string            `bson:"description,omitempty"`
-	Labels      []string          `bson:"labels,omitempty"`
-	Annotations map[string]string `bson:"annotations,omitempty"`
-	CreatedAt   time.Time         `bson:"createdAt"`
-	UpdatedAt   time.Time         `bson:"updatedAt"`
+	ID       string                 `bson:"_id"`
+	Metadata repository.MetadataDoc `bson:"metadata"`
+	Spec     TaskSpecDB             `bson:"spec"`
+	Owner    string                 `bson:"owner"`
+	TenantID string                 `bson:"tenant_id"`
 }
 
 // TaskSpecDB es la estructura de la especificación en MongoDB
@@ -173,7 +161,6 @@ func (c *TaskDocumentConverter) ToModel(doc TaskDocument) (*model.Task, error) {
 			WorkerDefinitionName: doc.Spec.WorkerDefName,
 			Command:              doc.Spec.Command,
 			Params:               params,
-			ParamValues:          doc.Spec.ParamValues,
 		},
 	}
 
@@ -187,7 +174,7 @@ func (c *TaskDocumentConverter) ToDocument(entity *model.Task, ctx context.Conte
 	}
 	return TaskDocument{
 		ID: entity.ID.String(),
-		Metadata: TaskMeta{
+		Metadata: repository.MetadataDoc{
 			Name:        entity.Metadata.Name,
 			Description: entity.Metadata.Description,
 			Labels:      entity.Metadata.Labels,
@@ -199,10 +186,7 @@ func (c *TaskDocumentConverter) ToDocument(entity *model.Task, ctx context.Conte
 			WorkerDefName: entity.Spec.WorkerDefinitionName,
 			Command:       entity.Spec.Command,
 			Params:        convertParamsToDocuments(entity.Spec.Params),
-			ParamValues:   entity.Spec.ParamValues,
 		},
-		CreatedAt: entity.Metadata.CreatedAt,
-		UpdatedAt: entity.Metadata.UpdatedAt,
 	}
 }
 

@@ -3,7 +3,7 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "hodei-devops.fullname" . }}-orchestrator
+  name: {{ include "hodei-devops.fullname" . }}-hodei-app
   labels:
     {{- include "hodei-devops.labels" . | nindent 4 }}
   annotations:
@@ -29,24 +29,24 @@ spec:
             pathType: {{ .Values.endpoints.ingress.pathType }}
             backend:
               service:
-                name: {{ include "hodei-devops.fullname" . }}-orchestrator
+                name: {{ include "hodei-devops.fullname" . }}-hodei-app
                 port:
-                  number: {{ .Values.orchestrator.service.ports.http }}
+                  number: {{ .Values.hodeiApp.service.ports.http }}
           # Path para WebSocket
           - path: {{ .Values.endpoints.paths.ws }}
             pathType: {{ .Values.endpoints.ingress.pathType }}
             backend:
               service:
-                name: {{ include "hodei-devops.fullname" . }}-orchestrator
+                name: {{ include "hodei-devops.fullname" . }}-hodei-app
                 port:
-                  number: {{ .Values.orchestrator.service.ports.ws }}
+                  number: {{ .Values.hodeiApp.service.ports.ws }}
 
 {{- else if eq .Values.endpoints.type "route" }}
 # Route para API REST
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: {{ include "hodei-devops.fullname" . }}-orchestrator-api
+  name: {{ include "hodei-devops.fullname" . }}-hodei-app-api
   labels:
     {{- include "hodei-devops.labels" . | nindent 4 }}
   annotations:
@@ -58,7 +58,7 @@ spec:
   path: {{ .Values.endpoints.paths.api }}
   to:
     kind: Service
-    name: {{ include "hodei-devops.fullname" . }}-orchestrator
+    name: {{ include "hodei-devops.fullname" . }}-hodei-app
   port:
     targetPort: http
   {{- if .Values.endpoints.tls.enabled }}
@@ -70,7 +70,7 @@ spec:
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: {{ include "hodei-devops.fullname" . }}-orchestrator-ws
+  name: {{ include "hodei-devops.fullname" . }}-hodei-app-ws
   labels:
     {{- include "hodei-devops.labels" . | nindent 4 }}
   annotations:
@@ -82,7 +82,7 @@ spec:
   path: {{ .Values.endpoints.paths.ws }}
   to:
     kind: Service
-    name: {{ include "hodei-devops.fullname" . }}-orchestrator
+    name: {{ include "hodei-devops.fullname" . }}-hodei-app
   port:
     targetPort: ws
   {{- if .Values.endpoints.tls.enabled }}
@@ -126,7 +126,7 @@ spec:
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: HTTPRoute
 metadata:
-  name: {{ include "hodei-devops.fullname" . }}-orchestrator-api
+  name: {{ include "hodei-devops.fullname" . }}-hodei-app-api
   labels:
     {{- include "hodei-devops.labels" . | nindent 4 }}
 spec:
@@ -140,14 +140,14 @@ spec:
             type: PathPrefix
             value: {{ .Values.endpoints.paths.api }}
       backendRefs:
-        - name: {{ include "hodei-devops.fullname" . }}-orchestrator
-          port: {{ .Values.orchestrator.service.ports.http }}
+        - name: {{ include "hodei-devops.fullname" . }}-hodei-app
+          port: {{ .Values.hodeiApp.service.ports.http }}
 ---
 # HTTPRoute para WebSocket
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: HTTPRoute
 metadata:
-  name: {{ include "hodei-devops.fullname" . }}-orchestrator-ws
+  name: {{ include "hodei-devops.fullname" . }}-hodei-app-ws
   labels:
     {{- include "hodei-devops.labels" . | nindent 4 }}
 spec:
@@ -161,7 +161,7 @@ spec:
             type: PathPrefix
             value: {{ .Values.endpoints.paths.ws }}
       backendRefs:
-        - name: {{ include "hodei-devops.fullname" . }}-orchestrator
-          port: {{ .Values.orchestrator.service.ports.ws }}
+        - name: {{ include "hodei-devops.fullname" . }}-hodei-app
+          port: {{ .Values.hodeiApp.service.ports.ws }}
 {{- end }}
 {{- end }}

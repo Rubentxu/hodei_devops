@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	idGenerator "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository"
 	executionRepo "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/execution"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/iam"
 	resourcepoolRepo "dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/resource_pool"
@@ -14,6 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"log"
+	"net/url"
 	"time"
 )
 
@@ -40,15 +40,15 @@ type RepositoriesContainer struct {
 
 // InitializeRepositoriesContainer creates and connects all repositories
 // and returns them organized in a container ready for injection.
-func InitializeRepositoriesContainer() (*RepositoriesContainer, error) {
+func InitializeRepositoriesContainer(config Config) (*RepositoriesContainer, error) {
 	// Initialize MongoDB connection
-	database, err := connectToMongoDB()
+	database, err := connectToMongoDB(config)
 	if err != nil {
 		return nil, err
 	}
 
 	// Initialize ID Generator
-	generator := createIDGenerator()
+	generator := config.IdGenerator
 
 	// Initialize repositories
 	resourcePoolRepo := createResourcePoolMongoDBRepository(database, generator)
@@ -81,42 +81,47 @@ func InitializeRepositoriesContainer() (*RepositoriesContainer, error) {
 	}, nil
 }
 
-// connectToMongoDB establishes a connection to MongoDB using environment configuration
-// and returns a database instance ready for repository creation.
-func connectToMongoDB() (*mongo.Database, error) {
-	// Get MongoDB connection parameters from environment
-	mongoURI := getEnv("MONGODB_URI", "mongodb://localhost:27017")
-	mongoDBName := getEnv("MONGODB_DATABASE", "hodei")
+func connectToMongoDB(config Config) (*mongo.Database, error) {
+	const maxAttempts = 3
+	var client *mongo.Client
+	var err error
 
-	// Create a context with timeout for the connection
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	for i := 1; i <= maxAttempts; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel() // Garantiza cancelación en cualquier retorno
 
-	// Connect to MongoDB
-	clientOptions := options.Client().ApplyURI(mongoURI)
-	client, err := mongo.Connect(ctx, clientOptions)
+		clientOptions := options.Client().ApplyURI(config.MongoDBURI)
+		log.Printf("Conectando a MongoDB en %s...", obfuscateConnectionString(config.MongoDBURI))
+
+		client, err = mongo.Connect(ctx, clientOptions)
+		if err == nil {
+			// Se verifica la conexión con un ping
+			if err = client.Ping(ctx, nil); err == nil {
+				log.Println("Conexión exitosa a MongoDB")
+				return client.Database(config.MongoDBName), nil
+			}
+		}
+
+		log.Printf("Intento %d fallido: %v. Reintentando en 30 segundos...", i, err)
+		time.Sleep(30 * time.Second)
+	}
+
+	return nil, fmt.Errorf("no se pudo conectar a MongoDB tras %d intentos: %w", maxAttempts, err)
+}
+
+func obfuscateConnectionString(connStr string) string {
+	u, err := url.Parse(connStr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to MongoDB: %v", err)
+		log.Printf("Error parseando URI: %v", err)
+		return connStr
 	}
-
-	// Verify connection with ping
-	if err = client.Ping(ctx, nil); err != nil {
-		return nil, fmt.Errorf("failed to ping MongoDB: %v", err)
+	if u.User != nil {
+		username := u.User.Username()
+		// Se reemplaza la contraseña por asteriscos
+		u.User = url.UserPassword(username, "****")
 	}
-
-	log.Println("Connected to MongoDB successfully")
-
-	// Return the database instance
-	return client.Database(mongoDBName), nil
+	return u.String()
 }
-
-// createIDGenerator initializes an ID generator based on configuration
-func createIDGenerator() ports.IDGenerator {
-	generatorType := getEnv("ID_GENERATOR", "bson") // Options: "uuid" or "bson"
-	return idGenerator.NewIDGenerator(generatorType)
-}
-
-// Repository creation functions
 
 // createResourcePoolMongoDBRepository initializes a repository for resource pool definitions
 func createResourcePoolMongoDBRepository(db *mongo.Database, generator ports.IDGenerator) ports.Repository[*model.ResourcePoolDef, model.AggregateID] {

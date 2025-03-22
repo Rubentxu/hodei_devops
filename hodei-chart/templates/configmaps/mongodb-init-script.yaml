@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hodei-devops.fullname" . }}-init-script
+data:
+  init-user.js: |-
+    db = db.getSiblingDB('admin');
+    db.auth('{{ .Values.mongodb.rootUsername }}', '{{ .Values.mongodb.rootPassword }}');
+    db = db.getSiblingDB('{{ .Values.mongodb.database }}');
+    if (!db.getUser('{{ .Values.mongodb.username }}')) {
+        db.createUser({
+            user: "{{ .Values.mongodb.username }}",
+            pwd: "{{ .Values.mongodb.password }}",
+            roles: [{role: "dbOwner", db: "{{ .Values.mongodb.database }}"}]
+        });
+    }
+    // Crear colecciones iniciales
+    db.createCollection('task_definitions');
+    db.createCollection('users');
+    db.createCollection('groups');
+    db.createCollection('roles');
+    db.createCollection('worker_definitions');
+    db.createCollection('resource_pools');
+    db.createCollection('task_executions');

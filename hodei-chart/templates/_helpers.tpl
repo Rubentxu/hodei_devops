@@ -39,3 +39,35 @@ Selector labels
 app.kubernetes.io/name: {{ include "hodei-devops.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Nombre de la cuenta de servicio a utilizar
+*/}}
+{{- define "hodei-devops.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- default (include "hodei-devops.fullname" .) .Values.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Check if a file exists at the given path
+*/}}
+{{- define "hodei-devops.fileExists" -}}
+  {{- $ctx := . -}}
+  {{- $path := $ctx.Path -}}
+  {{- if gt (len ($ctx.Files.Get $path)) 0 -}}
+    true
+  {{- else -}}
+    false
+  {{- end -}}
+{{- end -}}
+
+{{- define "hodei-devops.mongodb.rootPassword" -}}
+{{- if .Values.mongodb.rootPassword -}}
+{{- .Values.mongodb.rootPassword -}}
+{{- else -}}
+{{- randAlphaNum 16 -}}
+{{- end -}}
+{{- end -}}

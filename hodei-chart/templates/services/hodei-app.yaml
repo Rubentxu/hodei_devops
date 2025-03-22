@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hodei-devops.fullname" . }}-orchestrator
+  labels:
+    {{- include "hodei-devops.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.hodeiApp.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.hodeiApp.service.ports.http }}
+      targetPort: {{ .Values.hodeiApp.service.ports.http }}
+      protocol: TCP
+    {{- if .Values.hodeiApp.service.ports.ws }}
+    - name: ws
+      port: {{ .Values.hodeiApp.service.ports.ws }}
+      targetPort: {{ .Values.hodeiApp.service.ports.ws }}
+      protocol: TCP
+    {{- end }}
+  selector:
+    app: {{ .Values.hodeiApp.name | default "hodei-app" }}

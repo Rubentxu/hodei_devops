@@ -93,7 +93,7 @@ func createTestTask(name string) *model.Task {
 		Metadata: model.Metadata{
 			Name:        name,
 			Description: "Descripción de " + name,
-			Labels:      []string{"test", name},
+			Labels:      map[string]string{"test": "true", "name": name},
 			Annotations: map[string]string{"env": "test"},
 			CreatedAt:   time.Now().UTC(),
 			UpdatedAt:   time.Now().UTC(),
@@ -103,7 +103,6 @@ func createTestTask(name string) *model.Task {
 			WorkerDefinitionName: "defaultWorkerDefinition",
 			Command:              []string{"echo", name},
 			Params:               []model.ParamDefinition{},
-			ParamValues:          make(map[string]interface{}),
 		},
 	}
 }

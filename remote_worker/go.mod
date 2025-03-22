@@ -3,7 +3,7 @@ module dev.rubentxu.hodei-devops/remote_worker
 go 1.23.4
 
 require (
-	dev.rubentxu.hodei-devops/protos v0.0.0
+	dev.rubentxu.hodei-devops/protos v0.0.0-00010101000000-000000000000
 	github.com/golang-jwt/jwt v3.2.2+incompatible
 	github.com/shirou/gopsutil/v3 v3.24.5
 	google.golang.org/grpc v1.70.0

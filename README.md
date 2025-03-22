@@ -151,3 +151,60 @@ Todos los recursos desplegados tendrán el prefijo "hodei-devops" y
 las etiquetas apropiadas para identificarlos como parte de la aplicación Hodei DevOps.
 
 helm install hodei-prod ./hodei-devops-chart -f custom-values.yaml
+
+--- 
+### Desarrollo con DevSpace
+
+```bash
+# Generar certificados antes de desplegar
+make certs-dev
+
+# Configura DevSpace para usar OpenShift
+devspace use namespace hodei-devops
+
+# Iniciar desarrollo en OpenShift CRC
+devspace dev -n hodei-devops
+
+
+# Para usar el registro interno de OpenShift
+oc whoami -t | docker login -u developer --password-stdin $(oc get route default-route -n openshift-image-registry -o jsonpath='{.spec.host}')
+
+
+# Solo desplegar sin modo desarrollo
+devspace deploy -n hodei-devops
+
+# Ejecutar pruebas
+devspace run hooks/run-tests -n hodei-devops
+
+# Limpiar recursos
+devspace purge -n hodei-devops
+```
+
+Adaptaciones específicas para OpenShift
+
+```bash   
+# Otorgar permisos privilegiados para la aplicación
+oc adm policy add-scc-to-user privileged -z default -n hodei-devops
+
+# Verificar conexión a OpenShift
+devspace use context
+
+# Crear imagen dentro del registro interno de OpenShift
+devspace build --tag=latest
+
+# Desplegar en OpenShift
+devspace deploy -n hodei-devops
+  
+# Ejecutar pruebas
+devspace run hooks/run-tests -n hodei-devops
+minikube start --driver=kvm2 --kvm-network=default --dns-resolver
+```
+
+Resolución de problemas:
+
+```bash
+devspace logs -f
+oc get events -w
+```
+
+mongodb://root:hodei-root-password@localhost:37175/?authMechanism=DEFAULT

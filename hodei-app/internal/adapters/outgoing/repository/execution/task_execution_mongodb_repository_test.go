@@ -91,7 +91,6 @@ func createTestTaskExecution(name string) *model.TaskExecution {
 			EndTime:   now,
 			Message:   "Test execution",
 		},
-		InputArgs: []string{"arg1", "arg2"},
 		WorkerDef: model.WorkerDefinition{
 			ID: generator_id.NewIDGenerator("").NewID(),
 			Metadata: model.NewMetadata(

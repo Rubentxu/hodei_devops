@@ -1,10 +1,11 @@
-package generator_id
+package repository
 
 import (
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
 	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"time"
 )
 
 var _ ports.IDGenerator = (*ObjectIDGenerator)(nil)
@@ -31,4 +32,13 @@ func NewIDGenerator(genType string) ports.IDGenerator {
 	default:
 		return &ObjectIDGenerator{}
 	}
+}
+
+type MetadataDoc struct {
+	Name        string            `bson:"name"`
+	Description string            `bson:"description,omitempty"`
+	Labels      map[string]string `bson:"labels,omitempty"`
+	Annotations map[string]string `bson:"annotations,omitempty"`
+	CreatedAt   time.Time         `bson:"created_at"`
+	UpdatedAt   time.Time         `bson:"updated_at"`
 }

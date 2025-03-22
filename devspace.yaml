@@ -1,0 +1,155 @@
+version: v2beta1
+name: hodei-devops
+
+# Variables globales
+vars:
+  JWT_SECRET:
+    default: test_secret_key_for_development_1234567890
+    source: env
+  JWT_TOKEN:
+    default: ""
+    source: env
+  NAMESPACE:
+    default: hodei-devops
+    source: env
+  IMAGE_TAG:
+    command: git rev-parse --short HEAD
+    default: 'latest'
+    source: env
+
+# Imágenes Docker
+images:
+  hodei-app:
+    image: rubentxu/hodei-app
+    dockerfile: ./hodei-app/deploy/docker/Dockerfile.hodei-app
+    context: ./
+    buildArgs:
+      ENV: development
+    skipPush: false
+
+  remote-worker:
+    image: rubentxu/hodei-worker
+    dockerfile: ./hodei-app/deploy/docker/Dockerfile.remote-worker
+    context: ./
+    skipPush: false
+
+
+# This is a list of `pipelines` that DevSpace can execute (you can define your own)
+pipelines:
+  build:
+    run: |-
+      build_images --all -t ${IMAGE_TAG}  # 1. Build, tag (git commit hash) and push all images (see "images")
+  # You can run this pipeline via `devspace deploy` (or `devspace run-pipeline deploy`)
+  deploy:
+    run: |-
+      run_dependencies --all                            # 1. Deploy any projects this project needs (see "dependencies")
+      ensure_pull_secrets --all                         # 2. Ensure pull secrets
+      build_images --all -t $(git describe --always)    # 3. Build, tag (git commit hash) and push all images (see "images")
+      create_deployments --all                          # 4. Deploy Helm charts and manifests specfied as "deployments"
+  # This is the pipeline for the main command: `devspace dev` (or `devspace run-pipeline dev`)
+  dev:
+    run: |-
+      run_dependencies --all       # 1. Deploy any projects this project needs (see "dependencies")
+      ensure_pull_secrets --all    # 2. Ensure pull secrets
+      create_deployments --all     # 3. Deploy Helm charts and manifests specfied as "deployments"
+      start_dev hodei-app                # 4. Start dev mode "app" (see "dev" section)
+
+# This is a list of `deployments` that DevSpace can create for this project
+deployments:
+  hodei-app:
+    updateImageTags: true
+    # This deployment uses `helm` but you can also define `kubectl` deployments or kustomizations
+    helm:
+      # We are deploying this project with the Helm chart you provided
+      chart:
+        name: ./hodei-chart
+      # Under `values` we can define the values for this Helm chart used during `helm install/upgrade`
+      # You may also use `valuesFiles` to load values from files, e.g. valuesFiles: ["values.yaml"]
+      values:
+        hodeiApp:
+          image:
+            repository: rubentxu/hodei-app
+            tag: ''
+            pullPolicy: IfNotPresent
+          config:
+            defaultDockerPool: "false"
+            environment: production
+            idGenerator: bson
+            maxConcurrentTasks: "3"
+            mongodb:
+              database: hodei
+              uri: mongodb://mongodb:27017
+            port: "8080"
+            schedulerType: greedy
+            security:
+              bcryptWorkFactor: "12"
+              jwtAccessExpiry: 15m
+              jwtRefreshExpiry: 168h
+          jwt:
+            accessSecret: test_secret_key_for_development_1234567890
+            refreshSecret: test_secret_key_for_development_1234567890
+        certs:
+          ca: certs/dev/ca-cert.pem
+          server: certs/dev/remote_worker-cert.pem
+          serverKey: certs/dev/remote_worker-key.pem
+          client: certs/dev/worker-client-cert.pem
+          clientKey: certs/dev/worker-client-key.pem
+# This is a list of `dev` containers that are based on the containers created by your deployments
+dev:
+  hodei-app:
+    imageSelector: rubentxu/hodei-app
+#    labelSelector:
+#        app: hodei-app
+    devImage: golang:1.23.4-bullseye
+    sync:
+      - path: ./
+    # Open a terminal and use the following command to start it
+    terminal:
+      command: ./devspace_start.sh
+    # Inject a lightweight SSH server into the container (so your IDE can connect to the remote dev env)
+    ssh:
+      enabled: true
+    # Make the following commands from my local machine available inside the dev container
+    proxyCommands:
+      - command: devspace
+      - command: kubectl
+      - command: helm
+      - command: go
+      - gitCredentials: true
+    # Forward the following ports to be able access your application via localhost
+    ports:
+      - port: "2345"
+      - port: "8080"
+    # Open the following URLs once they return an HTTP status code other than 502 or 503
+    open:
+      - url: http://localhost:8080
+
+
+# Hooks
+#hooks:
+#  - name: generate-certs
+#    command: make certs-dev
+#    events:
+#      - before:deploy
+#  - name: run-tests
+#    command: |
+#      export JWT_SECRET="${JWT_SECRET}"
+#      export JWT_TOKEN="${JWT_TOKEN}"
+#      go test -v ./tests/...
+#    events:
+#      - after:deploy
+#      -
+# Use the `commands` section to define repeatable dev workflows for this project
+commands:
+  migrate-db:
+    command: |-
+      echo 'This is a cross-platform, shared command that can be used to codify any kind of dev task.'
+      echo 'Anyone using this project can invoke it via "devspace run migrate-db"'
+
+# Define dependencies to other projects with a devspace.yaml
+# dependencies:
+#   api:
+#     git: https://...  # Git-based dependencies
+#     tag: v1.0.0
+#   ui:
+#     path: ./ui        # Path-based dependencies (for monorepos)

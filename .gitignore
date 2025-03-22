@@ -135,3 +135,8 @@ test_pb_data/
 hodei-chart/certs/
 
 Tareas.md
+
+
+# Ignore DevSpace cache and log folder
+.devspace/
+pkg/

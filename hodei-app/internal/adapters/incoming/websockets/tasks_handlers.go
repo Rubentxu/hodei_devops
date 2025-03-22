@@ -1,471 +1,303 @@
 package websockets
 
-//
-//import (
-//	"context"
-//	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
-//	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/service/manager"
-//	"encoding/json"
-//	"fmt"
-//	"log"
-//	"net/http"
-//	"os"
-//	"os/signal"
-//	"syscall"
-//	"time"
-//
-//
-//	"github.com/gorilla/websocket"
-//)
-//
-//const (
-//	writeWait      = 30 * time.Second
-//	pongWait       = 120 * time.Second
-//	pingPeriod     = (pongWait * 9) / 10
-//	maxMessageSize = 1024
-//)
-//
-//var upgrader = websocket.Upgrader{
-//	ReadBufferSize:  1024,
-//	WriteBufferSize: 1024,
-//	CheckOrigin: func(r *http.Request) bool {
-//		return true // En producción, restringir a orígenes válidos
-//	},
-//}
-//
-//type WSHandler struct {
-//	manager *manager.Manager
-//}
-//
-//func NewWSHandler(w *manager.Manager) *WSHandler {
-//	return &WSHandler{manager: w}
-//}
-//
-//// @title Worker WebSocket API
-//// @version 1.0
-//// @description API WebSocket para gestionar tareas
-//// @BasePath /
-//
-//// HandleConnection godoc
-//// @Summary Gestiona conexiones WebSocket para tareas
-//// @Description ConnectionInfo WebSocket para gestionar tareas en tiempo real. Soporta las siguientes acciones:
-//// @Description - create_task: Crear una nueva tarea
-//// @Description - stop_task: Detener una tarea en ejecución
-//// @Description - list_tasks: Listar todas las tareas
-//// @Tags WebSocket
-//// @Accept json
-//// @Produce json
-//// @Param client_id query string false "ID del cliente para tracking"
-//// @Success 101 {string} string "Switching Protocols"
-//// @Failure 400 {object} ErrorResponse
-//// @Router /ws [get]
-//func (h *WSHandler) HandleConnection(w http.ResponseWriter, r *http.Request) {
-//	conn, err := upgrader.Upgrade(w, r, nil)
-//	if err != nil {
-//		log.Printf("WebSocket upgrade error: %v", err)
-//		return
-//	}
-//
-//	ctx, cancel := context.WithCancelCause(r.Context())
-//	defer cancel(nil)
-//
-//	conn.SetReadLimit(maxMessageSize)
-//	conn.SetReadDeadline(time.Now().Add(pongWait))
-//	conn.SetPongHandler(func(string) error {
-//		conn.SetReadDeadline(time.Now().Add(pongWait))
-//		return nil
-//	})
-//
-//	// Enviar mensaje de bienvenida
-//	h.sendJSON(conn, "connection_established", map[string]string{"message": "Connection established"})
-//
-//	go h.sendPing(ctx, conn)
-//
-//	for {
-//		var msg WSMessage
-//		if err := conn.ReadJSON(&msg); err != nil {
-//			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway) {
-//				log.Printf("WebSocket error: %v", err)
-//			}
-//			break
-//		}
-//		// Enviar notificación de procesamiento
-//		h.sendJSON(conn, "processing_request", map[string]string{"action": msg.Action, "payload": string(msg.Payload)})
-//
-//		switch msg.Action {
-//		case "create_task":
-//			h.handleCreateTask(ctx, conn, msg.Payload)
-//		case "stop_task":
-//			h.handleStopTask(ctx, conn, msg.Payload)
-//		case "list_tasks":
-//			h.handleListTasks(ctx, conn)
-//		default:
-//			h.sendError(conn, "unknown_action", "Unsupported action type")
-//		}
-//	}
-//}
-//
-//func (h *WSHandler) handleCreateTask(ctx context.Context, conn *websocket.Conn, payload json.RawMessage) {
-//	var req TaskRequest
-//	if err := json.Unmarshal(payload, &req); err != nil {
-//		h.sendError(conn, "invalid_request", "Error decoding task request")
-//		return
-//	}
-//
-//	if req.Name == "" || req.Image == "" {
-//		h.sendError(conn, "validation_error", "Name and Image are required fields")
-//		return
-//	}
-//
-//	task, taskCtx := h.createTaskFromRequest(ctx, req)
-//	// TODO: Validar si la tarea es válida
-//
-//	log.Printf("Creating task in task.handlers %s", task.ID)
-//	outputChan, err := h.manager.AddTask(task, taskCtx)
-//	if err != nil {
-//		h.sendError(conn, "create_error", fmt.Sprintf("Error creating task: %v", err))
-//		return
-//	}
-//
-//	// Leer del canal y enviar por WebSocket
-//	for {
-//		select {
-//		case output, ok := <-outputChan.OutputChan:
-//			if !ok {
-//				log.Printf("Canal cerrado para la tarea %s", task.ID)
-//				// Cierre limpio al final de la tarea
-//				h.closeConnection(conn, websocket.CloseNormalClosure, "task completed")
-//				return
-//			}
-//
-//			// Verificar conexión activa
-//			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait)); err != nil {
-//				log.Printf("[DEBUG] Ping fallido para %s: %v", task.ID, err)
-//				// Cierre limpio si el ping falla
-//				h.closeConnection(conn, websocket.CloseAbnormalClosure, "Ping failed")
-//				return // Salir inmediatamente
-//			}
-//
-//			resp := TaskResponse{
-//				TaskID:  task.ID.String(),
-//				Output:  output.Output,
-//				IsError: output.IsError,
-//				Status:  output.Status.String(),
-//			}
-//			payloadRes, _ := json.Marshal(resp)
-//
-//			if err := conn.WriteJSON(WSMessage{
-//				Action:  "task_output",
-//				Payload: json.RawMessage(payloadRes),
-//			}); err != nil {
-//				log.Printf("Error enviando output: %v", err)
-//				// Cierre limpio si falla la escritura
-//				h.closeConnection(conn, websocket.CloseAbnormalClosure, "Write failed")
-//				return
-//			}
-//
-//		case <-taskCtx.Done():
-//			log.Printf("Contexto cancelado para la tarea %s", task.ID)
-//			// Cierre limpio si el contexto de la tarea se cancela
-//			h.closeConnection(conn, websocket.CloseNormalClosure, "Execution context cancelled")
-//			return
-//
-//		case <-ctx.Done():
-//			log.Printf("Conexión WebSocket cerrada durante la tarea %s", task.ID)
-//			// Cierre limpio si la conexión principal se cierra
-//			h.closeConnection(conn, websocket.CloseNormalClosure, "WebSocket connection closed")
-//			return
-//		}
-//	}
-//
-//	// Enviar mensaje de finalización (redundante, pero por seguridad)
-//	doneResp := TaskResponse{
-//		TaskID:  task.ID.String(),
-//		Status:  model.STOPPED.String(),
-//		Output:  "[WORKER CLIENT] Process completed successfully",
-//		IsError: false,
-//	}
-//
-//	payload2, err := json.Marshal(doneResp)
-//	if err != nil {
-//		log.Printf("Error serializando mensaje de finalización: %v", err)
-//		// Cierre limpio si falla la serialización
-//		h.closeConnection(conn, websocket.CloseAbnormalClosure, "Serialization failed")
-//		return
-//	}
-//
-//	doneMsg := WSMessage{
-//		Action:  "task_output",
-//		Payload: json.RawMessage(payload2),
-//	}
-//
-//	conn.SetWriteDeadline(time.Now().Add(writeWait))
-//	if err := conn.WriteJSON(doneMsg); err != nil {
-//		log.Printf("Error sending done message: %v", err)
-//		// Cierre limpio si falla el envío
-//		h.closeConnection(conn, websocket.CloseAbnormalClosure, "Sending done message failed")
-//		return
-//	}
-//	conn.SetWriteDeadline(time.Time{}) // Reset deadline
-//
-//	// Esperar un momento antes de cerrar
-//	time.Sleep(100 * time.Millisecond)
-//
-//	// Cierre controlado al final (redundante, pero por seguridad)
-//	h.closeConnection(conn, websocket.CloseNormalClosure, "Execution completed successfully")
-//}
-//
-//func (h *WSHandler) closeConnection(conn *websocket.Conn, closeCode int, message string) {
-//	defer conn.Close()
-//
-//	msg := websocket.FormatCloseMessage(closeCode, message)
-//	conn.SetWriteDeadline(time.Now().Add(writeWait))
-//	if err := conn.WriteMessage(websocket.CloseMessage, msg); err != nil {
-//		log.Printf("Error sending CloseMessage: %v", err)
-//		return // No hay nada más que podamos hacer
-//	}
-//
-//	// Esperar un poco para que el mensaje de cierre se envíe
-//	time.Sleep(100 * time.Millisecond)
-//}
-//
-////func (h *WSHandler) createTaskFromRequest(parent context.Context, req TaskRequest) (model.Task, context.Context) {
-////	taskCtx, cancel := context.WithCancel(parent)
-////	if req.Timeout > 0 {
-////		taskCtx, cancel = context.WithTimeout(taskCtx, time.Duration(req.Timeout)*time.Second)
-////	}
-////
-////	go func() {
-////		<-taskCtx.Done()
-////		cancel()
-////	}()
-////
-////	// Validate task request
-////	if req.Name == "" {
-////		log.Println("Execution name is required")
-////		return model.Task{}, nil // Return an empty task and nil context
-////	}
-////	if req.Image == "" {
-////		log.Println("Execution image is required")
-////		return model.Task{}, nil // Return an empty task and nil context
-////	}
-////
-////	task := model.NewTask(
-////		)
-////
-////
-////	return task, taskCtx
-////}
-//
-//func (h *WSHandler) handleStopTask(ctx context.Context, conn *websocket.Conn, payload json.RawMessage) {
-//	var req struct {
-//		TaskID string `json:"task_id"`
-//	}
-//	if err := json.Unmarshal(payload, &req); err != nil {
-//		h.sendError(conn, "invalid_request", "Invalid task ID format")
-//		return
-//	}
-//
-//	if err := h.manager.StopTask(req.TaskID); err != nil {
-//		h.sendError(conn, "stop_error", err.Error())
-//		return
-//	}
-//
-//	h.sendJSON(conn, "task_stopped", TaskResponse{
-//		TaskID: req.TaskID,
-//		Status: "stopped",
-//	})
-//}
-//
-//func (h *WSHandler) handleListTasks(ctx context.Context, conn *websocket.Conn) {
-//	tasks, err := h.manager.GetTasks()
-//	if err != nil {
-//		h.sendError(conn, "list_error", "Error retrieving tasks")
-//		return
-//	}
-//
-//	h.sendJSON(conn, "task_list", tasks)
-//}
-//
-//func (h *WSHandler) sendPing(ctx context.Context, conn *websocket.Conn) {
-//	ticker := time.NewTicker(pingPeriod)
-//	defer ticker.Stop()
-//
-//	for {
-//		select {
-//		case <-ticker.C:
-//			conn.SetWriteDeadline(time.Now().Add(writeWait))
-//			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-//				return
-//			}
-//		case <-ctx.Done():
-//			return
-//		}
-//	}
-//}
-//
-//func (h *WSHandler) sendJSON(conn *websocket.Conn, action string, data interface{}) bool {
-//	raw, err := json.Marshal(data)
-//	if err != nil {
-//		log.Printf("Error serializando payload: %v", err)
-//		return false
-//	}
-//
-//	msg := WSMessage{
-//		Action:  action,
-//		Payload: json.RawMessage(raw),
-//	}
-//
-//	conn.SetWriteDeadline(time.Now().Add(writeWait))
-//	if err := conn.WriteJSON(msg); err != nil {
-//		log.Printf("WebSocket write error: %v", err)
-//		return false
-//	}
-//	return true
-//}
-//
-//func (h *WSHandler) sendError(conn *websocket.Conn, code string, message string) {
-//	h.sendJSON(conn, "task_error", TaskResponse{
-//		IsError:  true,
-//		ExitCode: code,
-//		Error:    message,
-//	})
-//}
-//
-//// @Summary ConnectionInfo de health check
-//// @Description Retorna el estado de salud del servicio
-//// @Tags health
-//// @Accept json
-//// @Produce json
-//// @Success 200 {object} HealthResponse
-//// @Router /health [get]
-//func HealthHandler(w http.ResponseWriter, r *http.Request) {
-//	w.Header().Set("Content-Type", "application/json")
-//
-//	status := map[string]interface{}{
-//		"timestamp": time.Now(),
-//		"status":    "up",
-//		"service":   "orchestrator",
-//	}
-//	w.WriteHeader(http.StatusOK)
-//
-//	json.NewEncoder(w).Encode(status)
-//}
-//
-//func HandleSignals() {
-//	sigCh := make(chan os.Signal, 1)
-//	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-//
-//	select {
-//	case <-sigCh:
-//		log.Println("Signal received, shutting down...")
-//		os.Exit(0)
-//	}
-//}
-//
-//// WSMessage representa un mensaje WebSocket
-//// swagger:model
-//type WSMessage struct {
-//	// Acción a realizar (create_task, stop_task, list_tasks)
-//	// Required: true
-//	// Enum: create_task,stop_task,list_tasks
-//	// Example: create_task
-//	Action string `json:"action" example:"create_task"`
-//
-//	// Payload de la acción
-//	// Example: {"name":"hello-world","image":"posts_mpv-remote-process","command":["echo","Hello, World!"],"env":{"GREETING":"Hello"},"working_dir":"/tmp","instance_type":"docker"}
-//	Payload json.RawMessage `json:"payload"`
-//}
-//
-//// TaskRequest representa una solicitud de tarea
-//// swagger:model
-//type TaskRequest struct {
-//	// Nombre de la tarea
-//	// Required: true
-//	// Example: hello-world
-//	Name string `json:"name" example:"hello-world"`
-//
-//	// Imagen Docker a usar
-//	// Required: true
-//	// Example: posts_mpv-remote-process
-//	Image string `json:"image" example:"posts_mpv-remote-process"`
-//
-//	// Comando a ejecutar
-//	// Example: ["echo","Hello, World!"]
-//	Command []string `json:"command,omitempty" example:"[\"echo\",\"Hello, World!\"]"`
-//
-//	// Variables de entorno
-//	// Example: {"GREETING":"Hello"}
-//	Env map[string]string `json:"env,omitempty" example:"{\"GREETING\":\"Hello\"}"`
-//
-//	// Directorio de trabajo
-//	// Example: /tmp
-//	WorkingDir string `json:"working_dir,omitempty" example:"/tmp"`
-//
-//	// Tipo de instancia (docker, kubernetes)
-//	// Example: docker
-//	InstanceType string `json:"instance_type,omitempty" example:"docker"`
-//
-//	// Timeout en segundos
-//	// Example: 60
-//	Timeout int `json:"timeout,omitempty" example:"60"`
-//}
-//
-//// TaskResponse representa la respuesta de una tarea
-//// swagger:model
-//type TaskResponse struct {
-//	// ID único de la tarea
-//	// Example: task-123
-//	TaskID string `json:"task_id" example:"task-123"`
-//
-//	// Estado actual de la tarea (pending, running, completed, failed, stopped)
-//	// Example: completed
-//	Status string `json:"status" example:"completed"`
-//
-//	// Salida de la tarea
-//	// Example: Hello, World!
-//	Output string `json:"output,omitempty" example:"Hello, World!"`
-//
-//	// Error si ocurrió alguno
-//	// Example:
-//	Error string `json:"error,omitempty"`
-//
-//	// Indica si hubo error
-//	// Example: false
-//	IsError bool `json:"is_error" example:"false"`
-//
-//	// Código de salida
-//	// Example: 0
-//	ExitCode string `json:"exit_code,omitempty" example:"0"`
-//
-//	// Fecha de finalización
-//	// Example: 2025-01-24T19:06:51Z
-//	CompletedAt string `json:"completed_at,omitempty" example:"2025-01-24T19:06:51Z"`
-//}
-//
-//// TaskListResponse representa la lista de tareas
-//// swagger:model
-//type TaskListResponse struct {
-//	// Lista de tareas
-//	Tasks []TaskResponse `json:"tasks"`
-//}
-//
-//// HealthResponse representa la respuesta del health check
-//// swagger:model
-//type HealthResponse struct {
-//	// Estado del servicio
-//	// Example: healthy
-//	Status string `json:"status"`
-//}
-//
-//// ErrorResponse representa un error en la API
-//// swagger:model
-//type ErrorResponse struct {
-//	// Código de error
-//	// Example: invalid_request
-//	Code string `json:"code"`
-//
-//	// Mensaje de error
-//	// Example: Invalid request parameters
-//	Message string `json:"message"`
-//}
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/go-playground/validator"
+	"log"
+	"net/http"
+	"time"
+
+	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
+	"github.com/gorilla/websocket"
+)
+
+const (
+	writeWait      = 30 * time.Second
+	pongWait       = 120 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
+	maxMessageSize = 1024
+)
+
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true // En producción, restringir a orígenes válidos
+	},
+}
+
+type WSHandler struct {
+	HodeiApp  ports.HodeiAppManager
+	validator *validator.Validate
+}
+
+func NewWSHandler(hodeiApp ports.HodeiAppManager, validator *validator.Validate) *WSHandler {
+	return &WSHandler{
+		HodeiApp:  hodeiApp,
+		validator: validator,
+	}
+}
+
+// @title Worker WebSocket API
+// @version 1.0
+// @description API WebSocket para gestionar tareas
+// @BasePath /
+
+// HandleConnection godoc
+// @Summary Gestiona conexiones WebSocket para tareas
+// @Description ConnectionInfo WebSocket para gestionar tareas en tiempo real. Soporta las siguientes acciones:
+// @Description - create_task: Crear una nueva tarea
+// @Description - stop_task: Detener una tarea en ejecución
+// @Description - list_tasks: Listar todas las tareas
+// @Tags WebSocket
+// @Accept json
+// @Produce json
+// @Param client_id query string false "ID del cliente para tracking"
+// @Success 101 {string} string "Switching Protocols"
+// @Failure 400 {object} ErrorResponse
+// @Router /ws [get]
+func (h *WSHandler) HandleConnection(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket upgrade error: %v", err)
+		return
+	}
+
+	ctx, cancel := context.WithCancelCause(r.Context())
+	defer cancel(nil)
+
+	conn.SetReadLimit(maxMessageSize)
+	conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+
+	// Enviar mensaje de bienvenida
+	h.sendJSON(conn, "connection_established", map[string]string{"message": "Connection established"})
+
+	go h.sendPing(ctx, conn)
+
+	for {
+		var msg WSMessage
+		if err := conn.ReadJSON(&msg); err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway) {
+				log.Printf("WebSocket error: %v", err)
+			}
+			break
+		}
+		// Enviar notificación de procesamiento
+		h.sendJSON(conn, "processing_request", map[string]string{"action": msg.Action, "payload": string(msg.Payload)})
+
+		switch msg.Action {
+		case "execute_task":
+			h.handleExecuteTask(ctx, conn, msg.Payload)
+		case "stop_task":
+			h.handleStopTask(ctx, conn, msg.Payload)
+		default:
+			h.sendError(conn, "unknown_action", "Unsupported action type")
+		}
+	}
+}
+
+func (h *WSHandler) handleExecuteTask(ctx context.Context, conn *websocket.Conn, payload json.RawMessage) {
+	var taskExecRequest model.TaskExecutionRequest
+	if err := json.Unmarshal(payload, &taskExecRequest); err != nil {
+		h.sendError(conn, "invalid_request", "Error decoding task request")
+		return
+	}
+
+	// Validate required fields
+	if taskExecRequest.TaskID == "" {
+		h.sendError(conn, "validation_error", "Task ID is required")
+		return
+	}
+
+	log.Printf("Creating task with ID %s", taskExecRequest.TaskID)
+	err := h.validator.Struct(taskExecRequest)
+	if err != nil {
+		h.sendError(conn, "validation_error", fmt.Sprintf("Validation error: %v", err))
+		return
+	}
+	// Call HodeiApp to execute the task
+	taskContextResult, err := h.HodeiApp.AddTask(taskExecRequest, ctx)
+	if err != nil {
+		h.sendError(conn, "task_creation_error", fmt.Sprintf("Error creating task: %v", err))
+		return
+	}
+
+	// Send task creation confirmation
+	h.sendJSON(conn, "task_created", map[string]string{
+		"task_id": taskExecRequest.TaskID.String(),
+		"status":  "running",
+	})
+
+	// Process task output in a goroutine
+	go h.processTaskOutput(conn, taskContextResult, taskExecRequest.TaskID)
+}
+
+func (h *WSHandler) processTaskOutput(conn *websocket.Conn, taskContext ports.TaskContext, taskID model.AggregateID) {
+	// Leer del canal de salida y enviar por WebSocket
+	for {
+		select {
+		case output, ok := <-taskContext.OutputChan:
+			if !ok {
+				// Canal cerrado, la tarea ha terminado
+				h.sendJSON(conn, "task_completed", map[string]string{
+					"task_id": taskID.String(),
+					"status":  "completed",
+				})
+				return
+			}
+
+			// Enviar output al cliente
+			resp := TaskResponse{
+				TaskID:  taskID.String(),
+				Output:  output.Output,
+				IsError: output.IsError,
+				Status:  output.Status.String(),
+			}
+			h.sendJSON(conn, "task_output", resp)
+
+		case <-taskContext.Ctx.Done():
+			// Contexto cancelado, la tarea ha sido detenida
+			h.sendJSON(conn, "task_stopped", map[string]string{
+				"task_id": taskID.String(),
+				"status":  "stopped",
+			})
+			return
+		}
+	}
+}
+
+type WSMessage struct {
+	Action  string          `json:"action"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+type TaskResponse struct {
+	TaskID  string `json:"task_id"`
+	Output  string `json:"output"`
+	IsError bool   `json:"is_error"`
+	Status  string `json:"status"`
+}
+
+func (h *WSHandler) sendJSON(conn *websocket.Conn, action string, payload interface{}) {
+	message, err := json.Marshal(map[string]interface{}{
+		"action":  action,
+		"payload": payload,
+	})
+	if err != nil {
+		log.Printf("Error serializando mensaje: %v", err)
+		return
+	}
+
+	if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		log.Printf("Error enviando mensaje: %v", err)
+	}
+}
+
+func (h *WSHandler) sendPing(ctx context.Context, conn *websocket.Conn) {
+	ticker := time.NewTicker(pingPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(writeWait))
+			if err != nil {
+				log.Println("Ping:", err)
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (h *WSHandler) handleStopTask(ctx context.Context, conn *websocket.Conn, payload json.RawMessage) {
+	var req TaskStopRequest
+	if err := json.Unmarshal(payload, &req); err != nil {
+		h.sendError(conn, "invalid_request", "Error decoding stop task request")
+		return
+	}
+
+	// Validar ID de tarea
+	if req.TaskID == "" {
+		h.sendError(conn, "validation_error", "Task ID is required")
+		return
+	}
+
+	// Crear el contexto y canales necesarios para la tarea
+	taskID := model.AggregateID(req.TaskID) // Convertir el string ID a AggregateID
+
+	outputChan := make(chan model.ProcessOutput)
+	stateChan := make(chan model.TaskState)
+	errChan := make(chan error)
+	ctxWithCancel, cancel := context.WithCancel(ctx)
+
+	// Crear el TaskContext para la detención
+	taskCtx := ports.TaskContext{
+		Execution: model.TaskExecution{
+			ID: taskID,
+		},
+		OutputChan: outputChan,
+		StateChan:  stateChan,
+		ErrChan:    errChan,
+		Ctx:        ctxWithCancel,
+	}
+
+	// Llamar a HodeiApp para detener la tarea
+	if err := h.HodeiApp.StopTask(taskCtx); err != nil {
+		h.sendError(conn, "stop_error", fmt.Sprintf("Error stopping task: %v", err))
+		cancel() // Cancelar el contexto
+		close(outputChan)
+		return
+	}
+
+	// Enviar confirmación de detención
+	h.sendJSON(conn, "task_stopped", map[string]string{
+		"task_id": req.TaskID,
+		"status":  "stopped",
+	})
+
+	// Limpiar recursos
+	cancel()
+	close(outputChan)
+}
+
+type TaskStopRequest struct {
+	TaskID string `json:"task_id"`
+}
+
+func (h *WSHandler) handleListTasks(ctx context.Context, conn *websocket.Conn) {
+	//TODO implementar
+	h.sendError(conn, "not_implemented", "Not implemented")
+}
+
+func (h *WSHandler) closeConnection(conn *websocket.Conn, closeCode int, message string) {
+	err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(closeCode, message), time.Now().Add(writeWait))
+	if err != nil {
+		log.Printf("Error al enviar mensaje de cierre: %v", err)
+		conn.Close()
+		return
+	}
+
+	time.Sleep(time.Second) // Esperar a que el cliente reciba el mensaje
+	conn.Close()
+}
+
+type ErrorResponse struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func (h *WSHandler) sendError(conn *websocket.Conn, code string, message string) {
+	h.sendJSON(conn, "task_error", ErrorResponse{
+		Code:    code,
+		Message: message,
+	})
+}

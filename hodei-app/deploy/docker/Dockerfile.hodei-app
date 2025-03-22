@@ -1,0 +1,57 @@
+# Etapa 1: Builder (usando Alpine para mantener la imagen pequeña)
+FROM golang:1.23.4-bullseye AS builder
+
+WORKDIR /build
+
+RUN apt-get update && \
+        apt-get install -y git make && \
+        rm -rf /var/lib/apt/lists/*
+
+# Resto de pasos de tu Dockerfile
+
+# Se copian archivos de módulos y código fuente
+COPY protos/go.mod protos/go.sum ./protos/
+COPY hodei-app/go.mod hodei-app/go.sum ./hodei-app/
+COPY protos/ ./protos/
+COPY hodei-app/ ./hodei-app/
+
+WORKDIR /build/hodei-app
+RUN go mod download
+
+# Compilación de la aplicación sin dependencias de CGO para obtener un binario estático
+RUN CGO_ENABLED=0 GOOS=linux go build -o hodei-app cmd/main.go
+
+# Etapa 2: Imagen de ejecución en Ubuntu
+FROM ubuntu:24.04
+
+WORKDIR /app
+
+# Instalar certificados necesarios y limpiar la caché
+RUN apt-get update && \
+    apt-get install -y ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Se copia el binario compilado desde la etapa builder
+COPY --from=builder /build/hodei-app/hodei-app /app/
+
+RUN groupadd -r hodei-group && \
+    useradd -r -g hodei-group hodei-user
+# Cambiar propietario del directorio /app para dar acceso total a hodei-user
+RUN chown -R hodei-user:hodei-group /app
+
+# Exponer el puerto donde opera la aplicación
+EXPOSE 8080
+
+# Definir variables de entorno
+ENV MONGODB_URI=mongodb://mongodb:27017 \
+    MONGODB_DATABASE=hodei \
+    DEFAULT_DOCKER_POOL=true \
+    PORT=8080
+
+# Se crea un usuario y grupo no privilegiados
+
+
+USER hodei-user
+
+# Comando de inicio
+CMD ["/app/hodei-app"]

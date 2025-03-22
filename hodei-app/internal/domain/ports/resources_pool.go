@@ -12,13 +12,6 @@ type ResourcePool interface {
 	GetResourceInstanceClient() ResourceIntanceClient
 }
 
-// TemplateStoreAccessor proporciona acceso directo al store de templates
-// Esto permite operaciones avanzadas como listar o eliminar templates sin tener que
-// añadir estos métodos a la interfaz ResourcePool
-type TemplateStoreAccessor interface {
-	GetTemplateStore() Store[WorkerTemplate]
-}
-
 type WorkerTemplate struct {
 	ID         string
 	Template   string

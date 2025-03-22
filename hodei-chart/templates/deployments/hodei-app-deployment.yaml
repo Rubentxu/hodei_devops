@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hodei-devops.fullname" . }}
+  labels:
+    {{- include "hodei-devops.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.hodeiApp.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "hodei-devops.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hodei-devops.selectorLabels" . | nindent 8 }}
+        app: {{ .Values.hodeiApp.name | default "hodei-app" }}
+    spec:
+      serviceAccountName: {{ include "hodei-devops.serviceAccountName" . }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.hodeiApp.image.repository }}{{ if .Values.hodeiApp.image.tag }}:{{ .Values.hodeiApp.image.tag }}{{ end }}"
+          imagePullPolicy: {{ .Values.hodeiApp.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.hodeiApp.config.port | default 8080 }}
+              protocol: TCP
+          env:
+            - name: JWT_ACCESS_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hodei-devops.fullname" . }}-jwt
+                  key: jwt-access-secret
+            - name: JWT_REFRESH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hodei-devops.fullname" . }}-jwt
+                  key: jwt-refresh-secret
+            - name: MONGODB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: hodei-mongodb
+                  key: mongodb-user
+            - name: MONGODB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: hodei-mongodb
+                  key: mongodb-password
+            - name: MONGODB_HOST
+              value: {{ .Values.mongodb.host | default "localhost" | quote }}
+            - name: MONGODB_PORT
+              value: {{ .Values.mongodb.port | default "27017" | quote }}
+            {{- range .Values.hodeiApp.extraEnv }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "hodei-devops.fullname" . }}-app-config
+          volumeMounts:
+            - name: tls-certs
+              mountPath: /certs
+              readOnly: true
+            {{- if .Values.hodeiApp.extraVolumeMounts }}
+            {{- toYaml .Values.hodeiApp.extraVolumeMounts | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.hodeiApp.resources | nindent 12 }}
+      volumes:
+        - name: tls-certs
+          secret:
+            secretName: {{ include "hodei-devops.fullname" . }}-tls
+        {{- if .Values.hodeiApp.extraVolumes }}
+        {{- toYaml .Values.hodeiApp.extraVolumes | nindent 8 }}
+        {{- end }}

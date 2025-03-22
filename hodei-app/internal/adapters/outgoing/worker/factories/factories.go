@@ -10,12 +10,11 @@ import (
 )
 
 type WorkerInstanceFactoryImpl struct {
-	grpcConfig   config.GrpcConnectionsConfig
+	grpcConfig   config.Config
 	workerConfig interface{}
 }
 
-// NewWorkerInstanceFactory recibe la config global (en vez de solo gRPCConfig)
-func NewWorkerInstanceFactory(grpcConfig config.GrpcConnectionsConfig) ports.WorkerFactory {
+func NewWorkerInstanceFactory(grpcConfig config.Config) ports.WorkerFactory {
 	return &WorkerInstanceFactoryImpl{
 		grpcConfig: grpcConfig,
 	}

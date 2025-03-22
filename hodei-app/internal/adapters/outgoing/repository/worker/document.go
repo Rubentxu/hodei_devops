@@ -2,6 +2,7 @@ package workerdef_repository
 
 import (
 	"context"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/generic"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
@@ -16,19 +17,10 @@ const (
 )
 
 type WorkerDocument struct {
-	ID       string         `bson:"_id"`
-	Metadata WorkerMeta     `bson:"metadata"`
-	Spec     WorkerSpecDB   `bson:"spec"`
-	Status   WorkerStatusDB `bson:"status"`
-}
-
-type WorkerMeta struct {
-	Name        string            `bson:"name"`
-	Description string            `bson:"description,omitempty"`
-	Labels      []string          `bson:"labels,omitempty"`
-	Annotations map[string]string `bson:"annotations,omitempty"`
-	CreatedAt   time.Time         `bson:"created_at"`
-	UpdatedAt   time.Time         `bson:"updated_at"`
+	ID       string                 `bson:"_id"`
+	Metadata repository.MetadataDoc `bson:"metadata"`
+	Spec     WorkerSpecDB           `bson:"spec"`
+	Status   WorkerStatusDB         `bson:"status"`
 }
 
 type WorkerSpecDB struct {
@@ -489,7 +481,7 @@ func (c *WorkerDocumentConverter) ToDocument(entity *model.WorkerDefinition, ctx
 
 	return WorkerDocument{
 		ID: entity.ID.String(),
-		Metadata: WorkerMeta{
+		Metadata: repository.MetadataDoc{
 			Name:        entity.Metadata.Name,
 			Description: entity.Metadata.Description,
 			Labels:      entity.Metadata.Labels,

@@ -1,0 +1,11 @@
+tests
+.gitignore
+.git
+docs
+data
+build
+bin
+.devspace
+.nx
+hodei-chart
+pkg

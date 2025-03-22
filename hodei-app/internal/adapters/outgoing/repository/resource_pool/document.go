@@ -2,13 +2,13 @@ package rp_repository
 
 import (
 	"context"
+	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/adapters/outgoing/repository/generic"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/model"
 	"dev.rubentxu.hodei-devops/hodei-app/internal/domain/ports"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"regexp"
-	"time"
 )
 
 const (
@@ -16,21 +16,12 @@ const (
 )
 
 type ResourcePoolDocument struct {
-	ID       string             `bson:"_id"`
-	Metadata ResourcePoolMeta   `bson:"metadata"`
-	Spec     ResourcePoolSpec   `bson:"spec"`
-	Status   ResourcePoolStatus `bson:"status"`
-	Owner    string             `bson:"owner"`
-	TenantID string             `bson:"tenant_id"`
-}
-
-type ResourcePoolMeta struct {
-	Name        string            `bson:"name"`
-	Description string            `bson:"description"`
-	Labels      map[string]string `bson:"labels"`
-	Annotations map[string]string `bson:"annotations"`
-	CreatedAt   time.Time         `bson:"created_at"`
-	UpdatedAt   time.Time         `bson:"updated_at"`
+	ID       string                 `bson:"_id"`
+	Metadata repository.MetadataDoc `bson:"metadata"`
+	Spec     ResourcePoolSpec       `bson:"spec"`
+	Status   ResourcePoolStatus     `bson:"status"`
+	Owner    string                 `bson:"owner"`
+	TenantID string                 `bson:"tenant_id"`
 }
 
 type ResourcePoolSpec struct {
@@ -90,7 +81,7 @@ func (c *ResourcePoolDocumentConverter) ToDocument(entity *model.ResourcePoolDef
 	}
 	return ResourcePoolDocument{
 		ID: entity.ID.String(),
-		Metadata: ResourcePoolMeta{
+		Metadata: repository.MetadataDoc{
 			Name:        entity.Metadata.Name,
 			Description: entity.Metadata.Description,
 			Labels:      entity.Metadata.Labels,

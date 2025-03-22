@@ -21,7 +21,7 @@ CLIENT_CERT := worker-client-cert.pem
 JWT_SECRET ?= "test_secret_key_for_development_1234567890"
 
 # Generar el token JWT (formato: header.payload.signature)
-JWT_HEADER_B64 = $(shell echo -n '{"alg":"HS256","typ":"JWT"}' | base64 | tr -d '\n' | tr '/+' '_-' | tr -d '=')
+JWT_HEDADER_B64 = $(shell echo -n '{"alg":"HS256","typ":"JWT"}' | base64 | tr -d '\n' | tr '/+' '_-' | tr -d '=')
 JWT_PAYLOAD_B64 = $(shell echo -n '{"sub":"test-user","role":"admin","exp":4683864000}' | base64 | tr -d '\n' | tr '/+' '_-' | tr -d '=')
 JWT_SIGNATURE = $(shell echo -n "$(JWT_HEADER_B64).$(JWT_PAYLOAD_B64)" | openssl dgst -binary -sha256 -hmac "$(JWT_SECRET)" | base64 | tr -d '\n' | tr '/+' '_-' | tr -d '=')
 JWT_TOKEN = $(JWT_HEADER_B64).$(JWT_PAYLOAD_B64).$(JWT_SIGNATURE)
