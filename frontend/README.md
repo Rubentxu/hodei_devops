@@ -19,31 +19,38 @@ This directory contains a React-based frontend application for interacting with 
     npm install
     ```
 
-## Available Scripts
+## Running the Application and Available Scripts
 
-In the `frontend` directory, you can run the following scripts:
+Once the setup is complete, you can use the following scripts:
 
-### `npm run dev`
+### To Run in Development Mode:
 
-Runs the app in development mode.
-Open [http://localhost:5173](http://localhost:5173) (or the port shown in your terminal) to view it in your browser.
+1.  Execute the following command in the `frontend` directory:
+    ```bash
+    npm run dev
+    ```
+2.  Open your web browser and go to [http://localhost:5173](http://localhost:5173) (or the port specified in your terminal output).
 
-The page will reload when you make changes.
-You may also see any lint errors in the console.
+    This mode is recommended for development as it provides hot reloading and detailed error messages.
 
-### `npm run build`
+### To Build for Production:
 
-Builds the app for production to the `dist` folder.
-It correctly bundles React in production mode and optimizes the build for the best performance.
+1.  Execute the following command in the `frontend` directory:
+    ```bash
+    npm run build
+    ```
+    This will create an optimized build of the application in the `frontend/dist` directory.
 
-The build is minified and the filenames include the hashes.
-Your app is ready to be deployed!
+### To Preview the Production Build Locally:
 
-### `npm run preview`
+1.  First, ensure you have built the application (see "To Build for Production").
+2.  Then, execute the following command in the `frontend` directory:
+    ```bash
+    npm run preview
+    ```
+3.  Open your web browser and go to the URL provided in your terminal output (usually [http://localhost:4173](http://localhost:4173)).
 
-Serves the production build from the `dist` folder locally.
-This is a good way to test the production build before deploying.
-Open the URL shown in your terminal (usually http://localhost:4173) to view it.
+    This is useful for testing the production build before deployment.
 
 ## Project Structure
 
