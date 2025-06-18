@@ -1,0 +1,92 @@
+/* frontend/src/App.css */
+.App {
+  text-align: center;
+}
+
+.App-header {
+  background-color: #282c34;
+  padding: 20px;
+  color: white;
+  margin-bottom: 30px;
+}
+
+.App-header h1 {
+  margin: 0;
+  font-size: 2em;
+}
+
+main {
+  text-align: left;
+}
+
+/* TaskForm Styles */
+form {
+  margin-bottom: 20px;
+  padding: 15px;
+  background-color: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+form h3 {
+  margin-top: 0;
+  color: #333;
+}
+
+form input[type="text"] {
+  padding: 10px;
+  margin-right: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 1em;
+  width: calc(100% - 120px); /* Adjust width considering button */
+}
+
+form button {
+  padding: 10px 15px;
+  background-color: #5cb85c;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1em;
+}
+
+form button:hover {
+  background-color: #4cae4c;
+}
+
+/* TaskList Styles */
+div > h2 { /* Targeting h2 directly under a div, common for TaskList */
+  color: #333;
+  border-bottom: 2px solid #eee;
+  padding-bottom: 10px;
+  margin-top: 0; /* If it's the first element in a section */
+}
+
+/* TaskItem Styles (already has inline styles, but can add more here or override) */
+/* Example: Add a container for TaskItems for better spacing if needed */
+.task-item-container {
+  /* Styles for the container div in TaskItem, if we refactor TaskItem to use it */
+  /* For now, TaskItem uses inline styles primarily */
+}
+
+/* General utility for messages */
+p {
+  line-height: 1.6;
+}
+
+p.error-message { /* For error messages in App.jsx or components */
+  color: #d9534f;
+  background-color: #f2dede;
+  border: 1px solid #ebccd1;
+  padding: 10px;
+  border-radius: 4px;
+}
+
+p.loading-message { /* For loading messages */
+  color: #5bc0de;
+}
+
+/* Ensure these files are updated. If they don't exist, create them. */
+/* Vite typically creates App.css and index.css. */
